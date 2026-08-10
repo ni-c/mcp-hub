@@ -1,0 +1,41 @@
+services:
+  mcp-hub:
+    build: .
+    image: mcp-hub:latest
+    container_name: mcp-hub
+    mem_limit: 1g
+    restart: unless-stopped
+
+    ports:
+      - "192.168.1.1:7690:80"
+
+    environment:
+      # Public URL as seen by clients (TLS terminated by the reverse proxy).
+      EXTERNAL_URL: "https://mcp-xxxxxxxx.internal.example.net"
+
+      # Networks allowed to set X-Forwarded-* (your reverse proxy).
+      TRUSTED_PROXIES: "192.168.1.0/24"
+
+      # bcrypt hash of the OAuth login password. Generate with:
+      #   htpasswd -bnBC 10 "" 'yourpassword' | tr -d ':\n'
+      # (PASSWORD with a plain-text value works too, PASSWORD_HASH wins.)
+      PASSWORD_HASH: "${PASSWORD_HASH}"
+
+      # Secrets referenced as ${VAR} in mcp.json, provided via .env:
+      PAPERLESS_API_TOKEN: "${PAPERLESS_API_TOKEN}"
+
+    volumes:
+      - "./mcp.json:/config/mcp.json:ro"
+      # JWT key + OAuth client registrations + refresh tokens. Must survive
+      # container recreates, otherwise every connector must re-authorize.
+      - "./data:/data"
+
+    pids_limit: 300
+
+    security_opt:
+      - no-new-privileges:true
+
+networks:
+  default:
+    name: mcp-net
+    external: true

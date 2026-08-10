@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "paperless": {
+      "command": "npx",
+      "args": ["-y", "paperless-mcp"],
+      "env": {
+        "PAPERLESS_BASE_URL": "http://192.168.1.1:8000",
+        "PAPERLESS_API_TOKEN": "${PAPERLESS_API_TOKEN}"
+      }
+    },
+    "internal-only": {
+      "command": "uvx",
+      "args": ["some-python-mcp"],
+      "hub": false
+    }
+  }
+}
