@@ -5,10 +5,14 @@ import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import express from 'express';
+import { z } from 'zod';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { createHub } from '../src/index.js';
+import { handleMcpRequest } from '../src/proxy.js';
 
 const EVERYTHING = path.resolve('node_modules/@modelcontextprotocol/server-everything/dist/index.js');
 const PASSWORD = 'test-password';
@@ -71,8 +75,37 @@ async function mcpClient(pathname: string, token: string): Promise<Client> {
   return client;
 }
 
+let upstreamServer: ReturnType<express.Express['listen']>;
+
+/** Remote upstream fixture: rejects requests without the configured bearer,
+ * proving that mcp-hub injects headers on every request. */
+function startRemoteUpstream(): Promise<number> {
+  const app = express();
+  app.use(express.json({ limit: '4mb' }));
+  app.all('/mcp', (req, res) => {
+    if (req.headers.authorization !== 'Bearer remote-secret') {
+      res.status(401).json({ error: 'missing upstream auth' });
+      return;
+    }
+    void handleMcpRequest(() => {
+      const server = new McpServer({ name: 'remote-fixture', version: '1.0.0' });
+      server.registerTool(
+        'remote_echo',
+        { description: 'echo back', inputSchema: { msg: z.string() } },
+        async ({ msg }) => ({ content: [{ type: 'text', text: `remote:${msg}` }] })
+      );
+      return server.server;
+    }, req, res);
+  });
+  return new Promise(resolve => {
+    upstreamServer = app.listen(0, () => resolve((upstreamServer.address() as AddressInfo).port));
+  });
+}
+
 beforeAll(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-hub-test-'));
+  const upstreamPort = await startRemoteUpstream();
+  process.env.REMOTE_SECRET = 'remote-secret';
   const configPath = path.join(tmpDir, 'mcp.json');
   fs.writeFileSync(
     configPath,
@@ -80,7 +113,12 @@ beforeAll(async () => {
       mcpServers: {
         everything: { command: process.execPath, args: [EVERYTHING] },
         hidden: { command: process.execPath, args: [EVERYTHING], hub: false },
-        broken: { command: '/bin/false' }
+        broken: { command: '/bin/false' },
+        remote: {
+          type: 'http',
+          url: `http://127.0.0.1:${upstreamPort}/mcp`,
+          headers: { Authorization: 'Bearer ${REMOTE_SECRET}' }
+        }
       }
     })
   );
@@ -100,6 +138,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   httpServer?.close();
+  upstreamServer?.close();
   hub?.watcher.stop();
   await hub?.supervisor.stop();
   fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -215,6 +254,25 @@ describe('per-server proxy', () => {
       .set('Accept', 'application/json, text/event-stream')
       .send({ jsonrpc: '2.0', method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'x', version: '0' } }, id: 1 })
       .expect(503);
+  });
+
+  it('proxies a remote http upstream with injected auth headers', async () => {
+    const client = await mcpClient('/remote/mcp', accessToken);
+    const tools = await client.listTools();
+    expect(tools.tools.map(t => t.name)).toEqual(['remote_echo']);
+    const result = (await client.callTool({ name: 'remote_echo', arguments: { msg: 'hi' } })) as CallToolResult;
+    expect(result.content[0]).toMatchObject({ type: 'text', text: 'remote:hi' });
+    await client.close();
+  });
+
+  it('exposes the remote upstream through /hub like any other server', async () => {
+    const client = await mcpClient('/hub', accessToken);
+    const result = (await client.callTool({
+      name: 'call_tool',
+      arguments: { server: 'remote', tool: 'remote_echo', arguments: { msg: 'via hub' } }
+    })) as CallToolResult;
+    expect((result.content[0] as { text: string }).text).toBe('remote:via hub');
+    await client.close();
   });
 
   it('returns 404 for unknown servers', async () => {

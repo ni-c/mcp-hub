@@ -46,12 +46,24 @@ stays interchangeable):
       "args": ["-y", "paperless-mcp"],
       "env": { "PAPERLESS_API_TOKEN": "${PAPERLESS_API_TOKEN}" }
     },
+    "homeassistant": {
+      "type": "http",
+      "url": "http://homeassistant:8123/api/mcp",
+      "headers": { "Authorization": "Bearer ${HA_TOKEN}" }
+    },
     "private-thing": { "command": "uvx", "args": ["some-mcp"], "hub": false }
   }
 }
 ```
 
-Only stdio servers are supported (`type: "http"`/`"sse"` entries are rejected).
+Stdio servers (`command`/`args`/`env`) are spawned as supervised child
+processes. Remote servers (`type: "http"` or `"sse"` with `url` and optional
+`headers`) are connected as MCP clients with the configured headers injected
+on every request — the same supervision (ping, backoff reconnect, hot reload)
+applies. Upstreams that require their own *interactive* OAuth cannot be
+configured with static headers; bridge those with an
+[`mcp-remote`](https://github.com/geelen/mcp-remote) stdio entry and persist
+its token cache (`MCP_REMOTE_CONFIG_DIR`) under `/data`.
 `"hub": false` hides a server from the `/hub` aggregate; its own path keeps
 working. Reserved names: `mcp`, `hub`, `authorize`, `token`, `register`,
 `login`, `health`, `revoke`.
@@ -106,6 +118,9 @@ once with the password. Claude Code: `claude mcp add -t http name https://<host>
   `tools/list_changed` internally.
 - Access tokens are self-contained 24 h JWTs and cannot be revoked
   individually; refresh tokens rotate and can be revoked.
+- Upstream auth is fully decoupled from the hub's own OAuth: an expired
+  upstream token just marks that one server `down` (503 on its path, visible
+  in `/health`) — clients never see the upstream's 401.
 - One login secures everything: any valid token may call every server.
 - Failed logins are rate-limited (10/15 min per IP) and logged as
   `mcp-hub: authentication failure from <ip>` for fail2ban.

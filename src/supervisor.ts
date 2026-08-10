@@ -1,10 +1,33 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport, getDefaultEnvironment } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
 import type { ServerCapabilities, Implementation, Tool } from '@modelcontextprotocol/sdk/types.js';
-import type { HubConfig, ServerConfig, ConfigDiff } from './config.js';
+import type { HubConfig, ServerConfig, RemoteServerConfig, ConfigDiff } from './config.js';
 
 export type ServerState = 'starting' | 'up' | 'down' | 'stopped';
+
+/**
+ * Remote upstreams get their configured headers on EVERY request via a fetch
+ * wrapper — requestInit alone does not cover the SSE stream GET.
+ */
+function buildRemoteTransport(config: RemoteServerConfig): Transport {
+  const url = new URL(config.url);
+  const headers = config.headers;
+  const fetchWithHeaders: typeof fetch = (input, init) => {
+    const merged = new Headers(init?.headers);
+    for (const [key, value] of Object.entries(headers)) {
+      if (!merged.has(key)) merged.set(key, value);
+    }
+    return fetch(input, { ...init, headers: merged });
+  };
+  if (config.transport === 'sse') {
+    return new SSEClientTransport(url, { requestInit: { headers }, fetch: fetchWithHeaders });
+  }
+  return new StreamableHTTPClientTransport(url, { requestInit: { headers }, fetch: fetchWithHeaders });
+}
 
 const BACKOFF_INITIAL_MS = 1_000;
 const BACKOFF_MAX_MS = 5 * 60_000;
@@ -32,17 +55,24 @@ export class ManagedServer {
     public config: ServerConfig
   ) {}
 
-  async start(): Promise<void> {
-    this.stopping = false;
-    this.state = 'starting';
-    const transport = new StdioClientTransport({
+  private buildTransport(): Transport {
+    if (this.config.kind === 'remote') {
+      return buildRemoteTransport(this.config);
+    }
+    return new StdioClientTransport({
       command: this.config.command,
       args: this.config.args,
       env: { ...getDefaultEnvironment(), ...this.config.env },
       stderr: 'inherit'
     });
+  }
+
+  async start(): Promise<void> {
+    this.stopping = false;
+    this.state = 'starting';
+    const transport = this.buildTransport();
     const client = new Client({ name: 'mcp-hub', version: '0.1.0' }, { capabilities: {} });
-    transport.onclose = () => this.onExit('child process exited');
+    transport.onclose = () => this.onExit(this.config.kind === 'remote' ? 'connection closed' : 'child process exited');
     try {
       await client.connect(transport);
     } catch (error) {

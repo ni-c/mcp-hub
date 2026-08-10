@@ -3,22 +3,37 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 /**
- * One entry of the Claude-Code-style `mcpServers` map. `command`/`args`/`env`
- * are passed to the child process verbatim (after ${VAR} expansion), so
- * arbitrary `sh -c` bootstrap scripts work. `hub` is the only mcp-hub
- * extension: `false` removes the server from the /hub aggregate endpoint.
+ * One entry of the Claude-Code-style `mcpServers` map.
+ *
+ * Stdio servers (`command`/`args`/`env`) are spawned verbatim (after ${VAR}
+ * expansion), so arbitrary `sh -c` bootstrap scripts work. Remote servers
+ * (`type: "http"` or `"sse"` with `url`/`headers`) are connected via the SDK's
+ * client transports. `hub` is the only mcp-hub extension: `false` removes the
+ * server from the /hub aggregate endpoint.
  */
-export interface ServerConfig {
+export interface StdioServerConfig {
+  kind: 'stdio';
   command: string;
   args: string[];
   env: Record<string, string>;
   hub: boolean;
 }
 
+export interface RemoteServerConfig {
+  kind: 'remote';
+  transport: 'http' | 'sse';
+  url: string;
+  headers: Record<string, string>;
+  hub: boolean;
+}
+
+export type ServerConfig = StdioServerConfig | RemoteServerConfig;
+
 export type HubConfig = Map<string, ServerConfig>;
 
 const NAME_PATTERN = /^[a-zA-Z0-9_-]+$/;
 const RESERVED_NAMES = new Set(['mcp', 'hub', 'authorize', 'token', 'register', 'login', 'health', 'revoke', '.well-known']);
+const REMOTE_TYPES = new Set(['http', 'sse', 'streamable-http', 'streamable_http']);
 
 export class ConfigError extends Error {}
 
@@ -31,6 +46,71 @@ export function expandEnvVars(value: string, env: NodeJS.ProcessEnv = process.en
     }
     return replacement;
   });
+}
+
+function expandRecord(record: Record<string, string>, env: NodeJS.ProcessEnv): Record<string, string> {
+  return Object.fromEntries(Object.entries(record).map(([k, v]) => [k, expandEnvVars(v, env)]));
+}
+
+function parseServer(name: string, entry: Record<string, unknown>, env: NodeJS.ProcessEnv): ServerConfig {
+  const hub = entry.hub !== false;
+  if (entry.hub !== undefined && typeof entry.hub !== 'boolean') {
+    throw new ConfigError(`Server "${name}": "hub" must be a boolean`);
+  }
+
+  const type = entry.type;
+  if (type !== undefined && typeof type !== 'string') {
+    throw new ConfigError(`Server "${name}": "type" must be a string`);
+  }
+  const isRemote = (typeof type === 'string' && type !== 'stdio') || entry.url !== undefined;
+
+  if (isRemote) {
+    if (typeof type === 'string' && type !== 'stdio' && !REMOTE_TYPES.has(type)) {
+      throw new ConfigError(`Server "${name}": unknown type "${type}" (supported: stdio, http, sse)`);
+    }
+    if (typeof entry.url !== 'string' || entry.url.length === 0) {
+      throw new ConfigError(`Server "${name}": remote servers need a "url" string`);
+    }
+    if (entry.command !== undefined) {
+      throw new ConfigError(`Server "${name}": "command" and "url" are mutually exclusive`);
+    }
+    const headers = entry.headers ?? {};
+    if (typeof headers !== 'object' || headers === null || Array.isArray(headers) || !Object.values(headers).every(v => typeof v === 'string')) {
+      throw new ConfigError(`Server "${name}": "headers" must be an object of string values`);
+    }
+    const url = expandEnvVars(entry.url, env);
+    try {
+      new URL(url);
+    } catch {
+      throw new ConfigError(`Server "${name}": "url" is not a valid URL`);
+    }
+    return {
+      kind: 'remote',
+      transport: type === 'sse' ? 'sse' : 'http',
+      url,
+      headers: expandRecord(headers as Record<string, string>, env),
+      hub
+    };
+  }
+
+  if (typeof entry.command !== 'string' || entry.command.length === 0) {
+    throw new ConfigError(`Server "${name}" is missing a "command" string`);
+  }
+  const args = entry.args ?? [];
+  if (!Array.isArray(args) || !args.every(a => typeof a === 'string')) {
+    throw new ConfigError(`Server "${name}": "args" must be an array of strings`);
+  }
+  const envEntry = entry.env ?? {};
+  if (typeof envEntry !== 'object' || envEntry === null || Array.isArray(envEntry) || !Object.values(envEntry).every(v => typeof v === 'string')) {
+    throw new ConfigError(`Server "${name}": "env" must be an object of string values`);
+  }
+  return {
+    kind: 'stdio',
+    command: expandEnvVars(entry.command, env),
+    args: (args as string[]).map(a => expandEnvVars(a, env)),
+    env: expandRecord(envEntry as Record<string, string>, env),
+    hub
+  };
 }
 
 export function parseConfig(json: string, env: NodeJS.ProcessEnv = process.env): HubConfig {
@@ -55,29 +135,7 @@ export function parseConfig(json: string, env: NodeJS.ProcessEnv = process.env):
     if (typeof entry !== 'object' || entry === null) {
       throw new ConfigError(`Server "${name}" must be an object`);
     }
-    if (entry.url !== undefined || (typeof entry.type === 'string' && entry.type !== 'stdio')) {
-      throw new ConfigError(`Server "${name}": only stdio servers are supported (found ${entry.url !== undefined ? '"url"' : `type "${entry.type}"`})`);
-    }
-    if (typeof entry.command !== 'string' || entry.command.length === 0) {
-      throw new ConfigError(`Server "${name}" is missing a "command" string`);
-    }
-    const args = entry.args ?? [];
-    if (!Array.isArray(args) || !args.every(a => typeof a === 'string')) {
-      throw new ConfigError(`Server "${name}": "args" must be an array of strings`);
-    }
-    const envEntry = entry.env ?? {};
-    if (typeof envEntry !== 'object' || envEntry === null || Array.isArray(envEntry) || !Object.values(envEntry).every(v => typeof v === 'string')) {
-      throw new ConfigError(`Server "${name}": "env" must be an object of string values`);
-    }
-    if (entry.hub !== undefined && typeof entry.hub !== 'boolean') {
-      throw new ConfigError(`Server "${name}": "hub" must be a boolean`);
-    }
-    result.set(name, {
-      command: expandEnvVars(entry.command, env),
-      args: (args as string[]).map(a => expandEnvVars(a, env)),
-      env: Object.fromEntries(Object.entries(envEntry as Record<string, string>).map(([k, v]) => [k, expandEnvVars(v, env)])),
-      hub: entry.hub !== false
-    });
+    result.set(name, parseServer(name, entry, env));
   }
   return result;
 }
