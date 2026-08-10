@@ -172,7 +172,8 @@ export class ConfigWatcher extends EventEmitter {
   constructor(
     private readonly filePath: string,
     public current: HubConfig,
-    private readonly env: NodeJS.ProcessEnv = process.env
+    private readonly env: NodeJS.ProcessEnv = process.env,
+    private readonly pollIntervalMs = 3_000
   ) {
     super();
   }
@@ -182,6 +183,16 @@ export class ConfigWatcher extends EventEmitter {
     const base = path.basename(this.filePath);
     this.watcher = fs.watch(dir, (_event, filename) => {
       if (filename !== null && filename !== base) return;
+      clearTimeout(this.debounce);
+      this.debounce = setTimeout(() => this.reload(), 300);
+    });
+    // Fallback for single-file bind mounts (Docker): inotify events from
+    // host-side edits do not cross the mount boundary, so directory watching
+    // never fires there. Stat polling catches in-place content changes.
+    // (Host edits must rewrite the file in place — a rename/replace creates a
+    // new inode the mount cannot follow.)
+    fs.watchFile(this.filePath, { interval: this.pollIntervalMs }, (curr, prev) => {
+      if (curr.mtimeMs === prev.mtimeMs && curr.size === prev.size) return;
       clearTimeout(this.debounce);
       this.debounce = setTimeout(() => this.reload(), 300);
     });
@@ -205,5 +216,6 @@ export class ConfigWatcher extends EventEmitter {
   stop(): void {
     clearTimeout(this.debounce);
     this.watcher?.close();
+    fs.unwatchFile(this.filePath);
   }
 }
