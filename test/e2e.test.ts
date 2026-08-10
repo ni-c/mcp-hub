@@ -90,6 +90,7 @@ beforeAll(async () => {
     dataPath: path.join(tmpDir, 'data'),
     password: PASSWORD
   });
+  await hub.supervisor.waitUntilSettled();
   httpServer = hub.app.listen(0);
   baseUrl = `http://127.0.0.1:${(httpServer.address() as AddressInfo).port}`;
   const tokens = await obtainToken(hub.app);

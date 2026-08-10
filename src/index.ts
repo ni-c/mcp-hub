@@ -27,7 +27,7 @@ export async function createHub(options: HubOptions) {
   const origin = new URL(externalUrl).origin;
   const config = loadConfig(options.configPath);
   const supervisor = new Supervisor(config);
-  await supervisor.start();
+  supervisor.start(); // children come up in the background; paths answer 503 until then
 
   const watcher = new ConfigWatcher(options.configPath, config);
   watcher.on('change', (next, diff) => {

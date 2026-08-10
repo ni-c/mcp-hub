@@ -125,17 +125,26 @@ export class ManagedServer {
 
 export class Supervisor {
   readonly servers = new Map<string, ManagedServer>();
+  private initialStarts: Promise<void>[] = [];
 
   constructor(private config: HubConfig) {}
 
-  async start(): Promise<void> {
-    await Promise.all(
-      [...this.config.entries()].map(([name, cfg]) => {
-        const server = new ManagedServer(name, cfg);
-        this.servers.set(name, server);
-        return server.start();
-      })
-    );
+  /**
+   * Kicks off all children without blocking: a slow child (npx/uvx downloads
+   * can take minutes on a Pi) must not delay the HTTP endpoint or the other
+   * servers. Await waitUntilSettled() to know every child has finished its
+   * first start attempt (up or down).
+   */
+  start(): void {
+    this.initialStarts = [...this.config.entries()].map(([name, cfg]) => {
+      const server = new ManagedServer(name, cfg);
+      this.servers.set(name, server);
+      return server.start();
+    });
+  }
+
+  async waitUntilSettled(): Promise<void> {
+    await Promise.all(this.initialStarts);
   }
 
   get(name: string): ManagedServer | undefined {
