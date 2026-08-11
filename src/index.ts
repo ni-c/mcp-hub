@@ -41,6 +41,11 @@ export async function createHub(options: HubOptions) {
   const provider = new HubOAuthProvider(store, externalUrl);
 
   const app = express();
+  if (!options.trustedProxies?.length) {
+    // Without this every request behind a proxy reports the proxy's address,
+    // so per-IP login limiting and the fail2ban log lines are meaningless.
+    console.warn('mcp-hub: TRUSTED_PROXIES is not set — login rate limiting falls back to a single global counter');
+  }
   app.set('trust proxy', options.trustedProxies ?? false);
   app.use(express.json({ limit: '4mb' }));
 

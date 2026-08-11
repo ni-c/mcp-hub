@@ -69,6 +69,40 @@ async function obtainToken(app: Express.Application): Promise<{ access: string; 
   return { access: tokens.body.access_token, refresh: tokens.body.refresh_token, clientId };
 }
 
+async function registerClient(clientName: string, redirectUris: string[] = [REDIRECT_URI]): Promise<string> {
+  const registration = await request(hub.app)
+    .post('/register')
+    .send({ redirect_uris: redirectUris, token_endpoint_auth_method: 'none', client_name: clientName })
+    .expect(201);
+  return registration.body.client_id as string;
+}
+
+function sessionCookie(): string {
+  return `mcp_hub_session=${encodeURIComponent(hub.provider.createSessionCookie())}`;
+}
+
+function authorizeWithSession(clientId: string, cookie: string, redirectUri: string = REDIRECT_URI) {
+  const { challenge } = pkcePair();
+  return request(hub.app)
+    .get('/authorize')
+    .set('Cookie', cookie)
+    .query({
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      response_type: 'code',
+      code_challenge: challenge,
+      code_challenge_method: 'S256',
+      state: 'xyz'
+    });
+}
+
+function consentFields(html: string): { request?: string; csrf?: string } {
+  return {
+    request: html.match(/name="request" value="([^"]+)"/)?.[1],
+    csrf: html.match(/name="csrf" value="([^"]+)"/)?.[1]
+  };
+}
+
 async function mcpClient(pathname: string, token: string): Promise<Client> {
   const client = new Client({ name: 'vitest', version: '0.0.0' });
   const transport = new StreamableHTTPClientTransport(new URL(`${baseUrl}${pathname}`), {
@@ -180,25 +214,107 @@ describe('OAuth', () => {
     await request(hub.app).post('/login').type('form').send({ password: 'nope', request: requestToken }).expect(401);
   });
 
-  it('skips the login form when a valid session cookie is present', async () => {
-    const registration = await request(hub.app)
-      .post('/register')
-      .send({ redirect_uris: [REDIRECT_URI], token_endpoint_auth_method: 'none' })
-      .expect(201);
-    const cookie = `mcp_hub_session=${encodeURIComponent(hub.provider.createSessionCookie())}`;
-    const { challenge } = pkcePair();
-    const response = await request(hub.app)
-      .get('/authorize')
+  it('never issues a code to an unapproved client, even with a valid session', async () => {
+    // The drive-by: a page registers its own client and walks a signed-in
+    // user through /authorize. A code here would be a full-access token.
+    const clientId = await registerClient('drive-by');
+    const response = await authorizeWithSession(clientId, sessionCookie()).expect(200);
+    expect(response.headers.location).toBeUndefined();
+    expect(response.text).toContain('Authorize access?');
+    expect(response.text).toContain(REDIRECT_URI); // the user gets to see where codes would go
+  });
+
+  it('issues codes silently once the client is approved', async () => {
+    const clientId = await registerClient('approved');
+    const cookie = sessionCookie();
+    const consent = await authorizeWithSession(clientId, cookie).expect(200);
+    const { request: token, csrf } = consentFields(consent.text);
+
+    const approved = await request(hub.app)
+      .post('/consent')
       .set('Cookie', cookie)
+      .type('form')
+      .send({ request: token, csrf, action: 'approve' })
+      .expect(302);
+    const location = new URL(approved.headers.location);
+    expect(location.searchParams.get('code')).toBeTruthy();
+    expect(location.searchParams.get('state')).toBe('xyz');
+
+    const again = await authorizeWithSession(clientId, sessionCookie()).expect(302);
+    expect(new URL(again.headers.location).searchParams.get('code')).toBeTruthy();
+  });
+
+  it('redirects with access_denied when consent is refused', async () => {
+    const clientId = await registerClient('denied');
+    const cookie = sessionCookie();
+    const consent = await authorizeWithSession(clientId, cookie).expect(200);
+    const { request: token, csrf } = consentFields(consent.text);
+
+    const denied = await request(hub.app)
+      .post('/consent')
+      .set('Cookie', cookie)
+      .type('form')
+      .send({ request: token, csrf, action: 'deny' })
+      .expect(302);
+    const location = new URL(denied.headers.location);
+    expect(location.searchParams.get('error')).toBe('access_denied');
+    expect(location.searchParams.get('state')).toBe('xyz');
+    expect(location.searchParams.get('code')).toBeNull();
+
+    await authorizeWithSession(clientId, sessionCookie()).expect(200); // still unapproved
+  });
+
+  it('rejects consent without a session or with a bad CSRF token', async () => {
+    const clientId = await registerClient('csrf');
+    const cookie = sessionCookie();
+    const consent = await authorizeWithSession(clientId, cookie).expect(200);
+    const { request: token, csrf } = consentFields(consent.text);
+
+    await request(hub.app).post('/consent').type('form').send({ request: token, csrf, action: 'approve' }).expect(401);
+    await request(hub.app)
+      .post('/consent')
+      .set('Cookie', cookie)
+      .type('form')
+      .send({ request: token, csrf: 'wrong', action: 'approve' })
+      .expect(403);
+  });
+
+  it('treats a successful password login as consent for that client', async () => {
+    const clientId = await registerClient('password-consent');
+    const { challenge } = pkcePair();
+    const authorize = await request(hub.app)
+      .get('/authorize')
       .query({
-        client_id: registration.body.client_id,
+        client_id: clientId,
         redirect_uri: REDIRECT_URI,
         response_type: 'code',
         code_challenge: challenge,
         code_challenge_method: 'S256'
       })
+      .expect(200);
+    const token = authorize.text.match(/name="request" value="([^"]+)"/)?.[1];
+    await request(hub.app).post('/login').type('form').send({ password: PASSWORD, request: token }).expect(302);
+
+    await authorizeWithSession(clientId, sessionCookie()).expect(302); // no second prompt
+  });
+
+  it('binds the approval to the redirect target, ignoring the loopback port', async () => {
+    const approvedUri = 'http://localhost:33418/callback';
+    const clientId = await registerClient('loopback', [approvedUri, 'http://localhost:44000/other']);
+    const cookie = sessionCookie();
+    const consent = await authorizeWithSession(clientId, cookie, approvedUri).expect(200);
+    const { request: token, csrf } = consentFields(consent.text);
+    await request(hub.app)
+      .post('/consent')
+      .set('Cookie', cookie)
+      .type('form')
+      .send({ request: token, csrf, action: 'approve' })
       .expect(302);
-    expect(new URL(response.headers.location).searchParams.get('code')).toBeTruthy();
+
+    // same target on another port — RFC 8252 says that is the same client
+    await authorizeWithSession(clientId, sessionCookie(), 'http://localhost:51234/callback').expect(302);
+    // a different path is a different target and needs its own approval
+    await authorizeWithSession(clientId, sessionCookie(), 'http://localhost:44000/other').expect(200);
   });
 
   it('rotates refresh tokens', async () => {
@@ -219,6 +335,39 @@ describe('OAuth', () => {
       .send({ grant_type: 'refresh_token', refresh_token: refreshToken, client_id: firstClient })
       .expect(400);
     refreshToken = refreshed.body.refresh_token;
+  });
+
+  it('rejects a refresh that asks for more scope than was granted', async () => {
+    const tokens = await obtainToken(hub.app);
+    await request(hub.app)
+      .post('/token')
+      .type('form')
+      .send({ grant_type: 'refresh_token', refresh_token: tokens.refresh, client_id: tokens.clientId, scope: 'admin' })
+      .expect(400);
+  });
+
+  it('revokes the whole token family when a rotated refresh token is replayed', async () => {
+    const tokens = await obtainToken(hub.app);
+    const rotated = await request(hub.app)
+      .post('/token')
+      .type('form')
+      .send({ grant_type: 'refresh_token', refresh_token: tokens.refresh, client_id: tokens.clientId })
+      .expect(200);
+    const successor = rotated.body.refresh_token as string;
+
+    // replaying the consumed token means the chain leaked
+    await request(hub.app)
+      .post('/token')
+      .type('form')
+      .send({ grant_type: 'refresh_token', refresh_token: tokens.refresh, client_id: tokens.clientId })
+      .expect(400);
+
+    // so the successor must be dead too
+    await request(hub.app)
+      .post('/token')
+      .type('form')
+      .send({ grant_type: 'refresh_token', refresh_token: successor, client_id: tokens.clientId })
+      .expect(400);
   });
 
   it('rejects MCP requests without a token, with WWW-Authenticate pointing at the PRM', async () => {

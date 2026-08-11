@@ -7,12 +7,27 @@ export interface RefreshTokenRecord {
   clientId: string;
   scopes: string[];
   expiresAt: number; // epoch seconds
+  familyId?: string; // absent on tokens issued before rotation tracking existed
+}
+
+/** One recorded "yes, this client may have codes" decision. */
+export interface ClientApproval {
+  redirectUris: string[];
+  clientName?: string;
+  approvedAt: number; // epoch seconds
+}
+
+interface ConsumedRefreshToken {
+  familyId: string;
+  expiresAt: number; // epoch seconds
 }
 
 interface PersistedState {
   cookieSecret: string;
   clients: Record<string, OAuthClientInformationFull>;
   refreshTokens: Record<string, RefreshTokenRecord>; // keyed by sha256(token)
+  approvals: Record<string, ClientApproval>; // keyed by client_id
+  consumedRefreshTokens: Record<string, ConsumedRefreshToken>; // keyed by sha256(token)
 }
 
 /**
@@ -39,7 +54,13 @@ export class AuthStore {
 
     this.statePath = path.join(dataDir, 'state.json');
     const restored = AuthStore.readState(this.statePath);
-    this.state = restored ?? { cookieSecret: crypto.randomBytes(32).toString('base64url'), clients: {}, refreshTokens: {} };
+    this.state = restored ?? {
+      cookieSecret: crypto.randomBytes(32).toString('base64url'),
+      clients: {},
+      refreshTokens: {},
+      approvals: {},
+      consumedRefreshTokens: {}
+    };
     if (!restored) this.persist();
   }
 
@@ -56,7 +77,16 @@ export class AuthStore {
       if (!parsed || typeof parsed !== 'object' || typeof parsed.cookieSecret !== 'string') {
         throw new Error('no usable cookieSecret');
       }
-      return { cookieSecret: parsed.cookieSecret, clients: parsed.clients ?? {}, refreshTokens: parsed.refreshTokens ?? {} };
+      // Fields added later default to empty: a state.json written before
+      // client approvals existed leaves every client unapproved, so each one
+      // has to be confirmed once instead of being trusted silently.
+      return {
+        cookieSecret: parsed.cookieSecret,
+        clients: parsed.clients ?? {},
+        refreshTokens: parsed.refreshTokens ?? {},
+        approvals: parsed.approvals ?? {},
+        consumedRefreshTokens: parsed.consumedRefreshTokens ?? {}
+      };
     } catch (error) {
       const backup = `${statePath}.corrupt-${Date.now()}`;
       fs.renameSync(statePath, backup);
@@ -79,6 +109,9 @@ export class AuthStore {
     for (const [hash, record] of Object.entries(this.state.refreshTokens)) {
       if (record.expiresAt < now) delete this.state.refreshTokens[hash];
     }
+    for (const [hash, record] of Object.entries(this.state.consumedRefreshTokens)) {
+      if (record.expiresAt < now) delete this.state.consumedRefreshTokens[hash];
+    }
   }
 
   get cookieSecret(): string {
@@ -91,6 +124,32 @@ export class AuthStore {
 
   saveClient(client: OAuthClientInformationFull): void {
     this.state.clients[client.client_id] = client;
+    this.persist();
+  }
+
+  getApproval(clientId: string): ClientApproval | undefined {
+    return this.state.approvals[clientId];
+  }
+
+  /** Records consent for one client; a client may legitimately use several
+   *  redirect URIs, so they accumulate rather than replace each other. */
+  saveApproval(clientId: string, redirectUri: string, clientName?: string): void {
+    const existing = this.state.approvals[clientId];
+    const redirectUris = existing ? [...new Set([...existing.redirectUris, redirectUri])] : [redirectUri];
+    this.state.approvals[clientId] = {
+      redirectUris,
+      clientName: clientName ?? existing?.clientName,
+      approvedAt: existing?.approvedAt ?? Math.floor(Date.now() / 1000)
+    };
+    this.persist();
+  }
+
+  listApprovals(): Record<string, ClientApproval> {
+    return this.state.approvals;
+  }
+
+  revokeApproval(clientId: string): void {
+    delete this.state.approvals[clientId];
     this.persist();
   }
 
@@ -112,5 +171,32 @@ export class AuthStore {
   deleteRefreshToken(token: string): void {
     delete this.state.refreshTokens[AuthStore.hash(token)];
     this.persist();
+  }
+
+  /**
+   * Rotation step: the token is invalidated but remembered, so that a replay
+   * of an already-rotated token can be told apart from a merely unknown one.
+   */
+  consumeRefreshToken(token: string, familyId: string, expiresAt: number): void {
+    delete this.state.refreshTokens[AuthStore.hash(token)];
+    this.state.consumedRefreshTokens[AuthStore.hash(token)] = { familyId, expiresAt };
+    this.persist();
+  }
+
+  wasConsumed(token: string): ConsumedRefreshToken | undefined {
+    return this.state.consumedRefreshTokens[AuthStore.hash(token)];
+  }
+
+  /** A replayed refresh token means the chain leaked; drop every token of it. */
+  revokeFamily(familyId: string): number {
+    let revoked = 0;
+    for (const [hash, record] of Object.entries(this.state.refreshTokens)) {
+      if (record.familyId === familyId) {
+        delete this.state.refreshTokens[hash];
+        revoked++;
+      }
+    }
+    this.persist();
+    return revoked;
   }
 }

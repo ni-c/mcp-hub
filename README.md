@@ -66,7 +66,7 @@ configured with static headers; bridge those with an
 its token cache (`MCP_REMOTE_CONFIG_DIR`) under `/data`.
 `"hub": false` hides a server from the `/hub` aggregate; its own path keeps
 working. Reserved names: `mcp`, `hub`, `authorize`, `token`, `register`,
-`login`, `health`, `revoke`.
+`login`, `consent`, `health`, `revoke`.
 
 ### Environment
 
@@ -75,14 +75,22 @@ working. Reserved names: `mcp`, `hub`, `authorize`, `token`, `register`,
 | `EXTERNAL_URL` | yes | Public base URL, e.g. `https://mcp.example.net` (no path) |
 | `PASSWORD_HASH` | one of | bcrypt hash of the login password (`htpasswd -bnBC 10 "" 'pw' \| tr -d ':\n'`) |
 | `PASSWORD` | one of | plain-text alternative to `PASSWORD_HASH` |
-| `TRUSTED_PROXIES` | no | comma-separated IPs/CIDRs allowed to set `X-Forwarded-*` |
+| `TRUSTED_PROXIES` | no | comma-separated IPs/CIDRs allowed to set `X-Forwarded-*` (see below) |
 | `PORT` | no | listen port (default 80 in the image, 3000 outside) |
 | `CONFIG_PATH` | no | default `/config/mcp.json` |
 | `DATA_PATH` | no | default `/data` |
 
-`/data` holds the Ed25519 JWT key, registered OAuth clients and refresh
-tokens. **Mount it as a volume** — recreating it invalidates every connector
-authorization.
+`/data` holds the Ed25519 JWT key, registered OAuth clients, approvals and
+refresh tokens. **Mount it as a volume** — recreating it invalidates every
+connector authorization.
+
+`TRUSTED_PROXIES` decides what `req.ip` is, and therefore what the login rate
+limiter counts. List **only** your own reverse proxy, and make sure it
+*overwrites* `X-Forwarded-For` rather than appending to it — otherwise a
+client can supply its own address and rotate it to sidestep the per-IP limit.
+If the variable is unset, every request appears to come from the proxy and
+per-IP limiting degrades to a single global counter (the hub logs a warning
+at startup). A global cap of 100 failures per 15 minutes applies either way.
 
 ## Running
 
@@ -99,6 +107,13 @@ Connect from Claude Web: add a custom connector with URL
 `https://<host>/hub` (or `https://<host>/<name>/mcp` for one server), log in
 once with the password. Claude Code: `claude mcp add -t http name https://<host>/<name>/mcp`.
 
+Each client is confirmed once. Entering the password approves the client that
+asked; while a login session is still valid, a client you have not seen before
+gets an explicit *Approve / Deny* page instead of a code. Approved clients
+reconnect silently from then on. To withdraw an approval, stop the container,
+remove the entry from `approvals` in `/data/state.json` and start it again —
+the client then has to be confirmed the next time it connects.
+
 ## Endpoints
 
 | Path | Auth | Purpose |
@@ -106,7 +121,7 @@ once with the password. Claude Code: `claude mcp add -t http name https://<host>
 | `/<name>`, `/<name>/mcp` | Bearer | Streamable HTTP endpoint of one server |
 | `/hub` | Bearer | aggregate endpoint with the 4 meta-tools |
 | `/health` | none | per-server status (`200` all up / `503` degraded) |
-| `/authorize`, `/token`, `/register`, `/login`, `/revoke` | — | OAuth 2.1 + DCR |
+| `/authorize`, `/token`, `/register`, `/login`, `/consent`, `/revoke` | — | OAuth 2.1 + DCR |
 | `/.well-known/oauth-authorization-server[/…]` | none | RFC 8414 metadata |
 | `/.well-known/oauth-protected-resource[/…]` | none | RFC 9728 metadata (path-scoped) |
 
@@ -117,11 +132,16 @@ once with the password. Claude Code: `claude mcp add -t http name https://<host>
   request-response works fully; the hub's tool cache does follow
   `tools/list_changed` internally.
 - Access tokens are self-contained 24 h JWTs and cannot be revoked
-  individually; refresh tokens rotate and can be revoked.
+  individually; refresh tokens rotate and can be revoked. Replaying a token
+  that was already rotated away revokes its whole chain, and a refresh cannot
+  ask for more scope than the original grant.
 - Upstream auth is fully decoupled from the hub's own OAuth: an expired
   upstream token just marks that one server `down` (503 on its path, visible
   in `/health`) — clients never see the upstream's 401.
-- One login secures everything: any valid token may call every server.
+- One login secures everything: any valid token may call every server. What a
+  token is *not* is automatic — registration is open (as the MCP spec
+  intends), so a client only ever receives codes after you confirmed it, and
+  only at the redirect target you confirmed it for.
 - Failed logins are rate-limited (10/15 min per IP) and logged as
   `mcp-hub: authentication failure from <ip>` for fail2ban.
 

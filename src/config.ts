@@ -32,7 +32,7 @@ export type ServerConfig = StdioServerConfig | RemoteServerConfig;
 export type HubConfig = Map<string, ServerConfig>;
 
 const NAME_PATTERN = /^[a-zA-Z0-9_-]+$/;
-const RESERVED_NAMES = new Set(['mcp', 'hub', 'authorize', 'token', 'register', 'login', 'health', 'revoke', '.well-known']);
+const RESERVED_NAMES = new Set(['mcp', 'hub', 'authorize', 'token', 'register', 'login', 'consent', 'health', 'revoke', '.well-known']);
 const REMOTE_TYPES = new Set(['http', 'sse', 'streamable-http', 'streamable_http']);
 
 export class ConfigError extends Error {}

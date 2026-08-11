@@ -6,14 +6,25 @@ import type { OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/serv
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import type { OAuthClientInformationFull, OAuthTokens, OAuthTokenRevocationRequest } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { InvalidGrantError, InvalidTokenError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
+import { redirectUriMatches } from '@modelcontextprotocol/sdk/server/auth/handlers/authorize.js';
 import type { AuthStore } from './store.js';
 import { renderLoginPage } from './login-page.js';
+import { renderConsentPage } from './consent-page.js';
 
 const ACCESS_TOKEN_TTL_S = 24 * 3600;
 const REFRESH_TOKEN_TTL_S = 30 * 24 * 3600;
 const CODE_TTL_MS = 10 * 60_000;
 export const SESSION_TTL_MS = 30 * 60_000;
 export const SESSION_COOKIE = 'mcp_hub_session';
+
+/**
+ * The `__Host-` prefix pins the cookie to this exact origin, so no neighbouring
+ * subdomain can plant one. It requires Secure, which rules it out over plain
+ * http (local development and the test suite).
+ */
+export function sessionCookieName(externalUrl: string): string {
+  return new URL(externalUrl).protocol === 'https:' ? `__Host-${SESSION_COOKIE}` : SESSION_COOKIE;
+}
 
 interface PendingCode {
   clientId: string;
@@ -40,10 +51,14 @@ export class HubOAuthProvider implements OAuthServerProvider {
   /** Short-lived authorization codes; in-memory on purpose (10 min lifetime). */
   private readonly codes = new Map<string, PendingCode>();
 
+  readonly sessionCookieName: string;
+
   constructor(
     private readonly store: AuthStore,
     private readonly externalUrl: string
-  ) {}
+  ) {
+    this.sessionCookieName = sessionCookieName(externalUrl);
+  }
 
   get clientsStore(): OAuthRegisteredClientsStore {
     const store = this.store;
@@ -64,11 +79,32 @@ export class HubOAuthProvider implements OAuthServerProvider {
 
   // --- Authorization endpoint ---------------------------------------------
 
+  /**
+   * A live session alone must not be enough to hand out a code: the cookie
+   * rides along on cross-site top-level navigations, so any page could walk a
+   * logged-in user through /authorize with a client it registered itself and
+   * collect the code. Only clients the user confirmed once are silent; for
+   * those the code can only ever land on their own registered redirect_uri.
+   *
+   * The SDK re-sends on `res` if this method throws, so nothing may throw
+   * after the response has gone out.
+   */
   async authorize(client: OAuthClientInformationFull, params: AuthorizationParams, res: Response): Promise<void> {
-    if (this.hasValidSession(res.req.headers.cookie)) {
+    const session = this.readSessionCookie(res.req.headers.cookie);
+    if (session && this.isApproved(client, params.redirectUri)) {
       this.redirectWithCode(client, params, res);
       return;
     }
+    const request = this.signPending(client, params);
+    const page = session
+      ? renderConsentPage(request, this.csrfToken(session), params.redirectUri, client.client_name)
+      : renderLoginPage(request, params.redirectUri, client.client_name);
+    res.status(200).type('html').send(page);
+  }
+
+  /** Everything the login/consent form has to carry across, signed so it
+   *  cannot be tampered with while it sits in the browser. */
+  private signPending(client: OAuthClientInformationFull, params: AuthorizationParams): string {
     const pending: PendingAuthorization = {
       clientId: client.client_id,
       redirectUri: params.redirectUri,
@@ -78,7 +114,19 @@ export class HubOAuthProvider implements OAuthServerProvider {
       exp: Date.now() + CODE_TTL_MS
     };
     const payload = Buffer.from(JSON.stringify(pending)).toString('base64url');
-    res.status(200).type('html').send(renderLoginPage(`${payload}.${sign(payload, this.store.cookieSecret)}`, client.client_name));
+    return `${payload}.${sign(payload, this.store.cookieSecret)}`;
+  }
+
+  isApproved(client: OAuthClientInformationFull, redirectUri: string): boolean {
+    const approval = this.store.getApproval(client.client_id);
+    // Same matching the SDK applies at registration, so a loopback client that
+    // picks a fresh port every run stays approved.
+    return approval?.redirectUris.some(uri => redirectUriMatches(redirectUri, uri)) ?? false;
+  }
+
+  approve(client: OAuthClientInformationFull, redirectUri: string): void {
+    this.store.saveApproval(client.client_id, redirectUri, client.client_name);
+    console.log(`mcp-hub: approved OAuth client ${client.client_id} (${client.client_name ?? 'unnamed'}) for ${redirectUri}`);
   }
 
   decodePendingAuthorization(token: string): PendingAuthorization | undefined {
@@ -111,6 +159,15 @@ export class HubOAuthProvider implements OAuthServerProvider {
     res.redirect(target.toString());
   }
 
+  /** RFC 6749 §4.1.2.1 — tell the client it was turned down instead of
+   *  leaving it to time out. */
+  redirectWithError(redirectUri: string, state: string | undefined, error: string, res: Response): void {
+    const target = new URL(redirectUri);
+    target.searchParams.set('error', error);
+    if (state !== undefined) target.searchParams.set('state', state);
+    res.redirect(target.toString());
+  }
+
   /** Codes are otherwise only dropped on redemption, so unredeemed ones from
    *  anyone who can register a client would accumulate for the process' life. */
   private sweepExpiredCodes(): void {
@@ -127,14 +184,31 @@ export class HubOAuthProvider implements OAuthServerProvider {
     return `${expires}.${sign(expires, this.store.cookieSecret)}`;
   }
 
-  hasValidSession(cookieHeader: string | undefined): boolean {
-    const match = cookieHeader?.match(new RegExp(`(?:^|;\\s*)${SESSION_COOKIE}=([^;]+)`));
-    if (!match) return false;
-    const [expires, signature] = decodeURIComponent(match[1]).split('.');
-    if (!expires || !signature) return false;
+  /** The verified cookie value, which doubles as the handle the consent
+   *  form's CSRF token is bound to. */
+  readSessionCookie(cookieHeader: string | undefined): string | undefined {
+    const match = cookieHeader?.match(new RegExp(`(?:^|;\\s*)${this.sessionCookieName}=([^;]+)`));
+    if (!match) return undefined;
+    const value = decodeURIComponent(match[1]);
+    const [expires, signature] = value.split('.');
+    if (!expires || !signature) return undefined;
     const expected = sign(expires, this.store.cookieSecret);
-    if (signature.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) return false;
-    return Number(expires) > Date.now();
+    if (signature.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) return undefined;
+    return Number(expires) > Date.now() ? value : undefined;
+  }
+
+  hasValidSession(cookieHeader: string | undefined): boolean {
+    return this.readSessionCookie(cookieHeader) !== undefined;
+  }
+
+  csrfToken(sessionValue: string): string {
+    return sign(`csrf:${sessionValue}`, this.store.cookieSecret);
+  }
+
+  verifyCsrfToken(sessionValue: string, token: unknown): boolean {
+    if (typeof token !== 'string') return false;
+    const expected = this.csrfToken(sessionValue);
+    return token.length === expected.length && crypto.timingSafeEqual(Buffer.from(token), Buffer.from(expected));
   }
 
   // --- Token endpoint ------------------------------------------------------
@@ -164,12 +238,30 @@ export class HubOAuthProvider implements OAuthServerProvider {
 
   async exchangeRefreshToken(client: OAuthClientInformationFull, refreshToken: string, scopes?: string[]): Promise<OAuthTokens> {
     const record = this.store.getRefreshToken(refreshToken);
-    if (!record || record.clientId !== client.client_id) throw new InvalidGrantError('Invalid refresh token');
-    this.store.deleteRefreshToken(refreshToken); // rotation
-    return this.issueTokens(client.client_id, scopes ?? record.scopes);
+    if (!record || record.clientId !== client.client_id) {
+      // Seeing a token that was already rotated away means the chain leaked:
+      // the legitimate holder and someone else both have one. Drop them all.
+      const consumed = this.store.wasConsumed(refreshToken);
+      if (consumed) {
+        const revoked = this.store.revokeFamily(consumed.familyId);
+        console.warn(`mcp-hub: refresh token replay from client ${client.client_id}, revoked ${revoked} token(s)`);
+      }
+      throw new InvalidGrantError('Invalid refresh token');
+    }
+    if (scopes && !scopes.every(scope => record.scopes.includes(scope))) {
+      throw new InvalidGrantError('Requested scopes exceed the original grant');
+    }
+    // Tokens issued before families existed adopt one on their first rotation.
+    const familyId = record.familyId ?? crypto.randomBytes(16).toString('base64url');
+    this.store.consumeRefreshToken(refreshToken, familyId, record.expiresAt);
+    return this.issueTokens(client.client_id, scopes ?? record.scopes, familyId);
   }
 
-  private async issueTokens(clientId: string, scopes: string[]): Promise<OAuthTokens> {
+  private async issueTokens(
+    clientId: string,
+    scopes: string[],
+    familyId: string = crypto.randomBytes(16).toString('base64url')
+  ): Promise<OAuthTokens> {
     const accessToken = await new SignJWT({ client_id: clientId, scope: scopes.join(' ') })
       .setProtectedHeader({ alg: 'EdDSA' })
       .setIssuer(this.externalUrl)
@@ -183,7 +275,8 @@ export class HubOAuthProvider implements OAuthServerProvider {
     this.store.saveRefreshToken(refreshToken, {
       clientId,
       scopes,
-      expiresAt: Math.floor(Date.now() / 1000) + REFRESH_TOKEN_TTL_S
+      expiresAt: Math.floor(Date.now() / 1000) + REFRESH_TOKEN_TTL_S,
+      familyId
     });
     return {
       access_token: accessToken,

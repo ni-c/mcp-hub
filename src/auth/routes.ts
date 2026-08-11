@@ -2,11 +2,12 @@ import crypto from 'node:crypto';
 import express, { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { mcpAuthRouter, createOAuthMetadata } from '@modelcontextprotocol/sdk/server/auth/router.js';
-import { HubOAuthProvider, SESSION_COOKIE, SESSION_TTL_MS } from './provider.js';
+import { HubOAuthProvider, SESSION_TTL_MS } from './provider.js';
 import { renderLoginPage } from './login-page.js';
 
 const LOGIN_MAX_ATTEMPTS = 10;
 const LOGIN_WINDOW_MS = 15 * 60_000;
+const LOGIN_MAX_ATTEMPTS_TOTAL = 100;
 
 export interface AuthRoutesOptions {
   provider: HubOAuthProvider;
@@ -17,8 +18,10 @@ export interface AuthRoutesOptions {
 
 export class LoginRateLimiter {
   private readonly attempts = new Map<string, { count: number; resetAt: number }>();
+  private total = { count: 0, resetAt: 0 };
 
   isBlocked(ip: string): boolean {
+    if (this.total.resetAt > Date.now() && this.total.count >= LOGIN_MAX_ATTEMPTS_TOTAL) return true;
     const entry = this.attempts.get(ip);
     if (!entry || entry.resetAt < Date.now()) return false;
     return entry.count >= LOGIN_MAX_ATTEMPTS;
@@ -26,9 +29,15 @@ export class LoginRateLimiter {
 
   recordFailure(ip: string): void {
     this.sweepExpired(); // entries are otherwise only dropped on a successful login from that exact IP
+    const now = Date.now();
+    // Behind a reverse proxy req.ip is the proxy for every request, and a
+    // spoofable X-Forwarded-For makes the per-IP counter meaningless — this
+    // caps the total either way.
+    if (this.total.resetAt < now) this.total = { count: 1, resetAt: now + LOGIN_WINDOW_MS };
+    else this.total.count++;
     const entry = this.attempts.get(ip);
-    if (!entry || entry.resetAt < Date.now()) {
-      this.attempts.set(ip, { count: 1, resetAt: Date.now() + LOGIN_WINDOW_MS });
+    if (!entry || entry.resetAt < now) {
+      this.attempts.set(ip, { count: 1, resetAt: now + LOGIN_WINDOW_MS });
     } else {
       entry.count++;
     }
@@ -43,6 +52,7 @@ export class LoginRateLimiter {
 
   reset(ip: string): void {
     this.attempts.delete(ip);
+    this.total = { count: 0, resetAt: 0 };
   }
 }
 
@@ -99,12 +109,12 @@ export function createAuthRoutes(options: AuthRoutesOptions): Router {
     if (typeof password !== 'string' || !checkPassword(password)) {
       rateLimiter.recordFailure(ip);
       console.warn(`mcp-hub: authentication failure from ${ip}`);
-      res.status(401).type('html').send(renderLoginPage(request!, undefined, 'Wrong password'));
+      res.status(401).type('html').send(renderLoginPage(request!, pending.redirectUri, undefined, 'Wrong password'));
       return;
     }
     rateLimiter.reset(ip);
     console.log(`mcp-hub: successful login from ${ip}`);
-    res.cookie(SESSION_COOKIE, provider.createSessionCookie(), {
+    res.cookie(provider.sessionCookieName, provider.createSessionCookie(), {
       httpOnly: true,
       secure: issuerUrl.protocol === 'https:',
       sameSite: 'lax',
@@ -116,6 +126,41 @@ export function createAuthRoutes(options: AuthRoutesOptions): Router {
       res.status(400).type('html').send('<p>Unknown client. Close this window and connect again.</p>');
       return;
     }
+    provider.approve(client, pending.redirectUri); // typing the password is the consent
+    provider.redirectWithCode(client, pending, res);
+  });
+
+  // Reached from the consent page when a signed-in user authorizes a client
+  // for the first time. Everything here has to hold even though the request
+  // may have been triggered by a page the user did not expect to land on.
+  router.post('/consent', express.urlencoded({ extended: false }), async (req, res) => {
+    const { request, csrf, action } = req.body as { request?: string; csrf?: string; action?: string };
+    const pending = typeof request === 'string' ? provider.decodePendingAuthorization(request) : undefined;
+    if (!pending) {
+      res.status(400).type('html').send('<p>Authorization request expired. Close this window and connect again.</p>');
+      return;
+    }
+    const session = provider.readSessionCookie(req.headers.cookie);
+    if (!session) {
+      res.status(401).type('html').send('<p>Session expired. Close this window and connect again.</p>');
+      return;
+    }
+    if (!provider.verifyCsrfToken(session, csrf)) {
+      console.warn(`mcp-hub: consent with an invalid CSRF token from ${req.ip ?? 'unknown'}`);
+      res.status(403).type('html').send('<p>Invalid request. Close this window and connect again.</p>');
+      return;
+    }
+    if (action !== 'approve') {
+      console.log(`mcp-hub: authorization denied for client ${pending.clientId}`);
+      provider.redirectWithError(pending.redirectUri, pending.state, 'access_denied', res);
+      return;
+    }
+    const client = await provider.clientsStore.getClient(pending.clientId);
+    if (!client) {
+      res.status(400).type('html').send('<p>Unknown client. Close this window and connect again.</p>');
+      return;
+    }
+    provider.approve(client, pending.redirectUri);
     provider.redirectWithCode(client, pending, res);
   });
 

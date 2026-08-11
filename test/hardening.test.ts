@@ -47,6 +47,14 @@ describe('LoginRateLimiter', () => {
     expect(limiter.isBlocked('10.0.0.1')).toBe(false);
   });
 
+  it('blocks every address once the global cap is reached', () => {
+    const limiter = new LoginRateLimiter();
+    // 100 distinct addresses, one failure each: no per-IP counter is anywhere
+    // near its limit, which is exactly what rotating X-Forwarded-For looks like.
+    for (let i = 0; i < 100; i++) limiter.recordFailure(`10.0.0.${i}`);
+    expect(limiter.isBlocked('192.168.0.1')).toBe(true);
+  });
+
   it('drops entries whose window has passed instead of growing forever', () => {
     const limiter = new LoginRateLimiter();
     limiter.recordFailure('10.0.0.1');
@@ -67,6 +75,38 @@ describe('AuthStore', () => {
     const second = new AuthStore(dir);
     expect(second.cookieSecret).toBe(first.cookieSecret);
     expect(second.getRefreshToken('rt_example')?.clientId).toBe('c1');
+  });
+
+  it('remembers client approvals across restarts and accumulates redirect uris', () => {
+    const dir = tmpDir();
+    const first = new AuthStore(dir);
+    first.saveApproval('client-1', 'https://example.test/cb', 'Example');
+    first.saveApproval('client-1', 'https://example.test/other');
+    first.saveApproval('client-1', 'https://example.test/cb'); // no duplicate
+
+    const second = new AuthStore(dir);
+    expect(second.getApproval('client-1')?.redirectUris).toEqual(['https://example.test/cb', 'https://example.test/other']);
+    expect(second.getApproval('client-1')?.clientName).toBe('Example');
+    expect(second.getApproval('unknown')).toBeUndefined();
+  });
+
+  it('treats clients from a state file predating approvals as unapproved', () => {
+    const dir = tmpDir();
+    fs.writeFileSync(
+      path.join(dir, 'state.json'),
+      JSON.stringify({
+        cookieSecret: 'kept-secret',
+        clients: { old: { client_id: 'old', redirect_uris: ['https://old.test/cb'] } },
+        refreshTokens: {}
+      })
+    );
+
+    const store = new AuthStore(dir);
+
+    expect(store.cookieSecret).toBe('kept-secret'); // not mistaken for corrupt
+    expect(store.getClient('old')).toBeDefined();
+    expect(store.getApproval('old')).toBeUndefined(); // must be confirmed once
+    expect(fs.readdirSync(dir).some(f => f.startsWith('state.json.corrupt-'))).toBe(false);
   });
 
   it('boots with fresh state when state.json is corrupt, keeping the old file', () => {
