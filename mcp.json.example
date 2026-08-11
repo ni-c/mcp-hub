@@ -4,7 +4,7 @@
       "command": "npx",
       "args": ["-y", "paperless-mcp"],
       "env": {
-        "PAPERLESS_BASE_URL": "http://192.168.1.10:8000",
+        "PAPERLESS_BASE_URL": "http://paperless.example.net:8000",
         "PAPERLESS_API_TOKEN": "${PAPERLESS_API_TOKEN}"
       }
     },
