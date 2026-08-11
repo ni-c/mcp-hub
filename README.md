@@ -213,6 +213,8 @@ failregex = mcp-hub: authentication failure from <HOST>\s*$
 ignoreregex =
 ```
 
+Only the hub's own lines are mirrored — the stdio children inherit stderr
+directly, so their output stays in the container log and the file stays small.
 Rotate it with logrotate (`copytruncate`, since the hub holds the file open).
 
 Why not read the container's own logs instead: the Docker `json-file` path
