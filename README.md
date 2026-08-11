@@ -1,5 +1,9 @@
 # mcp-hub
 
+[![CI](https://github.com/ni-c/mcp-hub/actions/workflows/ci.yml/badge.svg)](https://github.com/ni-c/mcp-hub/actions/workflows/ci.yml)
+[![Container](https://img.shields.io/badge/ghcr.io-ni--c%2Fmcp--hub-2496ED?logo=docker&logoColor=white)](https://github.com/ni-c/mcp-hub/pkgs/container/mcp-hub)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
 Serve many stdio MCP servers from **one container**, published over HTTPS for
 [Claude Web custom connectors](https://claude.ai), Claude Code and any other
 Streamable-HTTP MCP client — with a built-in OAuth 2.1 login protected by a
@@ -94,9 +98,57 @@ at startup). A global cap of 100 failures per 15 minutes applies either way.
 
 ## Running
 
+### Option A — prebuilt image from GHCR (recommended)
+
+Published on every push to `main` and every `vX.Y.Z` release tag, for
+`linux/amd64` and `linux/arm64`. Browse the versions on the
+[package page](https://github.com/ni-c/mcp-hub/pkgs/container/mcp-hub).
+
+```sh
+docker pull ghcr.io/ni-c/mcp-hub:latest
+```
+
+Tags: `latest` (tip of `main`), `X.Y.Z` and `X.Y` (releases), and
+`sha-<commit>` for a specific build.
+
+With compose, copy the example and point it at the image instead of building:
+
+```yaml
+services:
+  mcp-hub:
+    image: ghcr.io/ni-c/mcp-hub:latest   # replaces `build: .`
+    # ...rest of docker-compose.example.yml unchanged
+```
+
+```sh
+cp docker-compose.example.yml docker-compose.yml   # adjust, swap build → image
+cp mcp.json.example mcp.json                        # adjust
+mkdir -p data && sudo chown -R 1000:1000 data       # container runs as uid 1000
+docker compose up -d
+```
+
+Or without compose:
+
+```sh
+mkdir -p data && sudo chown -R 1000:1000 data       # container runs as uid 1000
+docker run -d --name mcp-hub \
+  -p 127.0.0.1:7690:80 \
+  -e EXTERNAL_URL="https://mcp.example.net" \
+  -e PASSWORD_HASH="$(htpasswd -bnBC 10 '' 'yourpassword' | tr -d ':\n')" \
+  -e TRUSTED_PROXIES="192.168.1.0/24" \
+  -v "$PWD/mcp.json:/config/mcp.json:ro" \
+  -v "$PWD/data:/data" \
+  ghcr.io/ni-c/mcp-hub:latest
+```
+
+Update to a newer image with `docker compose pull && docker compose up -d`
+(or `docker pull …`, then recreate the container).
+
+### Option B — build from source
+
 ```sh
 cp docker-compose.example.yml docker-compose.yml   # adjust
-cp mcp.json.example mcp.json                       # adjust
+cp mcp.json.example mcp.json                        # adjust
 docker compose up -d --build
 ```
 
