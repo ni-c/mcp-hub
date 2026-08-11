@@ -71,7 +71,7 @@ export class ManagedServer {
     this.stopping = false;
     this.state = 'starting';
     const transport = this.buildTransport();
-    const client = new Client({ name: 'mcp-hub', version: '0.1.0' }, { capabilities: {} });
+    const client = new Client({ name: 'mcp-hub', version: '0.2.0' }, { capabilities: {} });
     transport.onclose = () => this.onExit(this.config.kind === 'remote' ? 'connection closed' : 'child process exited');
     try {
       await client.connect(transport);

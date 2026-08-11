@@ -9,6 +9,7 @@ import { AuthStore } from './auth/store.js';
 import { HubOAuthProvider } from './auth/provider.js';
 import { createAuthRoutes } from './auth/routes.js';
 import { healthHandler } from './health.js';
+import { installFileLogging } from './logfile.js';
 
 export interface HubOptions {
   externalUrl: string;
@@ -106,6 +107,11 @@ function requireEnv(name: string): string {
 const isMain = process.argv[1] && import.meta.url.endsWith(process.argv[1].split('/').pop()!);
 if (isMain) {
   const port = Number(process.env.PORT ?? 3000);
+  // Before anything else, so the startup lines land in the file too.
+  if (process.env.LOG_FILE) {
+    installFileLogging(process.env.LOG_FILE);
+    console.log(`mcp-hub: mirroring log output to ${process.env.LOG_FILE}`);
+  }
   const { app, supervisor, watcher } = await createHub({
     externalUrl: requireEnv('EXTERNAL_URL'),
     configPath: process.env.CONFIG_PATH ?? '/config/mcp.json',

@@ -1,6 +1,6 @@
 {
   "name": "mcp-hub",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Serve multiple stdio MCP servers from one container: Claude-Code-style mcpServers config, path-based routing, hub meta-tools and a built-in OAuth 2.1 login for Claude Web.",
   "type": "module",
   "license": "MIT",

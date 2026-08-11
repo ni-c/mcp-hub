@@ -83,6 +83,7 @@ working. Reserved names: `mcp`, `hub`, `authorize`, `token`, `register`,
 | `PORT` | no | listen port (default 80 in the image, 3000 outside) |
 | `CONFIG_PATH` | no | default `/config/mcp.json` |
 | `DATA_PATH` | no | default `/data` |
+| `LOG_FILE` | no | additionally mirror all log output into this file, e.g. `/data/mcp-hub.log` (see below) |
 
 `/data` holds the Ed25519 JWT key, registered OAuth clients, approvals and
 refresh tokens. **Mount it as a volume** — recreating it invalidates every
@@ -196,6 +197,33 @@ the client then has to be confirmed the next time it connects.
   only at the redirect target you confirmed it for.
 - Failed logins are rate-limited (10/15 min per IP) and logged as
   `mcp-hub: authentication failure from <ip>` for fail2ban.
+
+### Logging to a file for fail2ban
+
+`LOG_FILE=/data/mcp-hub.log` mirrors every log line into that file, one line
+per entry with an ISO-8601 UTC prefix, while leaving the console output alone —
+so `docker logs` keeps working. A jail then reads the file directly:
+
+```ini
+# /etc/fail2ban/filter.d/mcp-hub-auth.conf
+[Definition]
+failregex = mcp-hub: authentication failure from <HOST>\s*$
+            mcp-hub: login rate limit exceeded from <HOST>\s*$
+            mcp-hub: consent with an invalid CSRF token from <HOST>\s*$
+ignoreregex =
+```
+
+Rotate it with logrotate (`copytruncate`, since the hub holds the file open).
+
+Why not read the container's own logs instead: the Docker `json-file` path
+contains the container ID and changes on every recreate, and the `journald`
+driver maps **all** stderr to priority `err` — since an MCP server must keep
+stdout free for the protocol and therefore logs to stderr, every ordinary line
+would show up as a system error and drown out host monitoring.
+
+Bans belong in the `DOCKER-USER` chain (`banaction = iptables-allports`) when
+the hub is published through a container-based reverse proxy: that traffic
+arrives via DNAT and `FORWARD`, and never passes `INPUT`.
 
 ## Development
 
