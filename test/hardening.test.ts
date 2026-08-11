@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ManagedServer } from '../src/supervisor.js';
-import { AuthStore } from '../src/auth/store.js';
+import { AuthStore, MAX_UNAPPROVED_CLIENTS } from '../src/auth/store.js';
 import { LoginRateLimiter } from '../src/auth/routes.js';
 
 const tmpDirs: string[] = [];
@@ -129,5 +129,33 @@ describe('AuthStore', () => {
 
     expect(store.cookieSecret).toBeTruthy();
     expect(fs.readdirSync(dir).some(f => f.startsWith('state.json.corrupt-'))).toBe(true);
+  });
+
+  it('caps never-approved clients so open registration cannot grow state without bound', () => {
+    const dir = tmpDir();
+    const store = new AuthStore(dir);
+    const total = MAX_UNAPPROVED_CLIENTS + 50;
+    for (let i = 0; i < total; i++) {
+      store.saveClient({ client_id: `c${i}`, client_id_issued_at: 1000 + i, redirect_uris: ['https://x.test/cb'] });
+    }
+
+    const remaining = Object.keys(JSON.parse(fs.readFileSync(path.join(dir, 'state.json'), 'utf8')).clients);
+    expect(remaining.length).toBe(MAX_UNAPPROVED_CLIENTS);
+    // The oldest were evicted; the most recent survive.
+    expect(store.getClient('c0')).toBeUndefined();
+    expect(store.getClient(`c${total - 1}`)).toBeDefined();
+  });
+
+  it('never evicts approved clients even when the cap is exceeded', () => {
+    const dir = tmpDir();
+    const store = new AuthStore(dir);
+    store.saveClient({ client_id: 'approved', client_id_issued_at: 1, redirect_uris: ['https://x.test/cb'] });
+    store.saveApproval('approved', 'https://x.test/cb');
+
+    for (let i = 0; i < MAX_UNAPPROVED_CLIENTS + 10; i++) {
+      store.saveClient({ client_id: `c${i}`, client_id_issued_at: 1000 + i, redirect_uris: ['https://x.test/cb'] });
+    }
+
+    expect(store.getClient('approved')).toBeDefined(); // oldest, but confirmed
   });
 });

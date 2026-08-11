@@ -31,6 +31,14 @@ interface PersistedState {
 }
 
 /**
+ * Registration is open (anyone can POST /register), so unconfirmed clients
+ * would otherwise accumulate on disk without bound and every registration
+ * rewrites state.json whole. Cap the number of clients that were never
+ * approved; approved ones are legitimate and never evicted.
+ */
+export const MAX_UNAPPROVED_CLIENTS = 100;
+
+/**
  * All persistent auth state lives in two files under DATA_PATH:
  * jwt-key.pem (Ed25519 private key) and state.json (clients, refresh tokens,
  * cookie secret). Losing either invalidates every connector authorization —
@@ -124,7 +132,22 @@ export class AuthStore {
 
   saveClient(client: OAuthClientInformationFull): void {
     this.state.clients[client.client_id] = client;
+    this.pruneUnapprovedClients();
     this.persist();
+  }
+
+  /**
+   * Evict the oldest never-approved clients once too many pile up. A client
+   * with an approval entry is one the operator confirmed and is kept; the just
+   * -registered client is the newest and therefore survives its own eviction.
+   */
+  private pruneUnapprovedClients(): void {
+    const unapproved = Object.values(this.state.clients)
+      .filter(c => !this.state.approvals[c.client_id])
+      .sort((a, b) => (a.client_id_issued_at ?? 0) - (b.client_id_issued_at ?? 0));
+    for (let i = 0; i < unapproved.length - MAX_UNAPPROVED_CLIENTS; i++) {
+      delete this.state.clients[unapproved[i].client_id];
+    }
   }
 
   getApproval(clientId: string): ClientApproval | undefined {

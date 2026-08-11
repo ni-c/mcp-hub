@@ -25,6 +25,13 @@ ENV NODE_ENV=production \
     CONFIG_PATH=/config/mcp.json \
     DATA_PATH=/data
 
+# Drop root: the node image ships an unprivileged `node` user (uid 1000). The
+# hub and every stdio child it spawns run as that user. A fresh named /data
+# volume inherits this ownership; a bind-mounted ./data must be chowned to
+# uid 1000 on the host (see docker-compose.example.yml).
+RUN mkdir -p /data && chown -R node:node /data /app
+USER node
+
 EXPOSE 80
 VOLUME /data
 

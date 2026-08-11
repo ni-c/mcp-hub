@@ -65,6 +65,14 @@ export function createAuthRoutes(options: AuthRoutesOptions): Router {
   const router = Router();
   const rateLimiter = new LoginRateLimiter();
 
+  // Keep the password login/consent pages and the OAuth token responses out of
+  // any shared or browser cache (RFC 6749 §5.1 requires no-store on token
+  // responses; the login form has no business being cached either).
+  router.use((_req, res, next) => {
+    res.set('Cache-Control', 'no-store');
+    next();
+  });
+
   // Standard AS endpoints: /.well-known/*, /authorize, /token, /register, /revoke
   router.use(mcpAuthRouter({ provider, issuerUrl, resourceName: 'mcp-hub' }));
 
