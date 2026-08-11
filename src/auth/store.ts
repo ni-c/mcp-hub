@@ -38,11 +38,32 @@ export class AuthStore {
     this.publicKey = crypto.createPublicKey(this.privateKey);
 
     this.statePath = path.join(dataDir, 'state.json');
-    if (fs.existsSync(this.statePath)) {
-      this.state = JSON.parse(fs.readFileSync(this.statePath, 'utf8')) as PersistedState;
-    } else {
-      this.state = { cookieSecret: crypto.randomBytes(32).toString('base64url'), clients: {}, refreshTokens: {} };
-      this.persist();
+    const restored = AuthStore.readState(this.statePath);
+    this.state = restored ?? { cookieSecret: crypto.randomBytes(32).toString('base64url'), clients: {}, refreshTokens: {} };
+    if (!restored) this.persist();
+  }
+
+  /**
+   * Undefined when there is nothing usable to restore. A corrupt file is moved
+   * aside rather than overwritten so it can still be salvaged by hand — the
+   * hub boots with fresh state and every connector has to authorize again,
+   * which beats refusing to start at all.
+   */
+  private static readState(statePath: string): PersistedState | undefined {
+    if (!fs.existsSync(statePath)) return undefined;
+    try {
+      const parsed = JSON.parse(fs.readFileSync(statePath, 'utf8')) as PersistedState | null;
+      if (!parsed || typeof parsed !== 'object' || typeof parsed.cookieSecret !== 'string') {
+        throw new Error('no usable cookieSecret');
+      }
+      return { cookieSecret: parsed.cookieSecret, clients: parsed.clients ?? {}, refreshTokens: parsed.refreshTokens ?? {} };
+    } catch (error) {
+      const backup = `${statePath}.corrupt-${Date.now()}`;
+      fs.renameSync(statePath, backup);
+      console.error(
+        `mcp-hub: unusable auth state (${(error as Error).message}), moved to ${backup}; all connectors must authorize again`
+      );
+      return undefined;
     }
   }
 

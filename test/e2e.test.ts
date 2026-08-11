@@ -11,8 +11,11 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
+import type { Response } from 'express';
 import { createHub } from '../src/index.js';
 import { handleMcpRequest } from '../src/proxy.js';
+import type { ManagedServer } from '../src/supervisor.js';
 
 const EVERYTHING = path.resolve('node_modules/@modelcontextprotocol/server-everything/dist/index.js');
 const PASSWORD = 'test-password';
@@ -334,6 +337,56 @@ describe('supervisor', () => {
     expect(response.body.servers.everything.state).toBe('up');
     expect(response.body.servers.everything.tools).toBeGreaterThan(0);
     expect(response.body.servers.broken.state).toBe('down');
+  });
+
+  it('keeps error details out of the unauthenticated /health response', async () => {
+    const response = await request(hub.app).get('/health').expect(503);
+    expect(response.body.servers.broken.lastError).toBeUndefined();
+    expect(hub.supervisor.get('broken')!.lastError).toBeTruthy(); // still available internally
+  });
+
+  it('answers with an error instead of crashing when the proxy path throws', async () => {
+    const poisoned = {
+      name: 'poisoned',
+      state: 'up',
+      client: {},
+      tools: [],
+      restarts: 0,
+      config: { hub: true },
+      get capabilities(): never {
+        throw new Error('boom');
+      }
+    } as unknown as ManagedServer;
+    hub.supervisor.servers.set('poisoned', poisoned);
+    try {
+      const response = await request(hub.app)
+        .post('/poisoned/mcp')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .set('Accept', 'application/json, text/event-stream')
+        .send({ jsonrpc: '2.0', method: 'ping', id: 1 })
+        .expect(500);
+      expect(response.body.error.code).toBe(-32603);
+    } finally {
+      hub.supervisor.servers.delete('poisoned');
+    }
+
+    // the hub still serves other requests
+    await request(hub.app).get('/health').expect(503);
+  });
+
+  it('sweeps expired authorization codes', () => {
+    const codes = hub.provider['codes'] as Map<string, { expiresAt: number }>;
+    const client = { client_id: 'sweeper' } as OAuthClientInformationFull;
+    const res = { redirect: () => undefined } as unknown as Response;
+
+    hub.provider.redirectWithCode(client, { redirectUri: REDIRECT_URI, codeChallenge: 'challenge' }, res);
+    const stale = [...codes.keys()];
+    expect(stale.length).toBeGreaterThan(0);
+    for (const key of stale) codes.get(key)!.expiresAt = Date.now() - 1;
+
+    hub.provider.redirectWithCode(client, { redirectUri: REDIRECT_URI, codeChallenge: 'challenge' }, res);
+    for (const key of stale) expect(codes.has(key)).toBe(false);
+    expect(codes.size).toBe(1);
   });
 
   it('applies config diffs without touching unchanged servers', async () => {

@@ -97,6 +97,7 @@ export class HubOAuthProvider implements OAuthServerProvider {
     res: Response
   ): void {
     const code = crypto.randomBytes(32).toString('base64url');
+    this.sweepExpiredCodes();
     this.codes.set(code, {
       clientId: client.client_id,
       codeChallenge: params.codeChallenge,
@@ -108,6 +109,15 @@ export class HubOAuthProvider implements OAuthServerProvider {
     target.searchParams.set('code', code);
     if (params.state !== undefined) target.searchParams.set('state', params.state);
     res.redirect(target.toString());
+  }
+
+  /** Codes are otherwise only dropped on redemption, so unredeemed ones from
+   *  anyone who can register a client would accumulate for the process' life. */
+  private sweepExpiredCodes(): void {
+    const now = Date.now();
+    for (const [code, pending] of this.codes) {
+      if (pending.expiresAt < now) this.codes.delete(code);
+    }
   }
 
   // --- Session cookie ------------------------------------------------------

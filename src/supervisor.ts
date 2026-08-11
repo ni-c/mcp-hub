@@ -121,6 +121,11 @@ export class ManagedServer {
   }
 
   private onExit(reason: string): void {
+    // A failed start reports twice: transport.onclose fires and start()'s catch
+    // calls us as well. Without this guard the second call would overwrite
+    // restartTimer without clearing it, so two children would be spawned and
+    // one of them left unreferenced — never pinged, never stopped.
+    if (this.state === 'down' || this.state === 'stopped') return;
     clearInterval(this.pingTimer);
     this.client = undefined;
     if (this.stopping) {

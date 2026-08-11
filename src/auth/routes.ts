@@ -15,7 +15,7 @@ export interface AuthRoutesOptions {
   password?: string; // plain, fallback for parity with mcp-auth-proxy
 }
 
-class LoginRateLimiter {
+export class LoginRateLimiter {
   private readonly attempts = new Map<string, { count: number; resetAt: number }>();
 
   isBlocked(ip: string): boolean {
@@ -25,11 +25,19 @@ class LoginRateLimiter {
   }
 
   recordFailure(ip: string): void {
+    this.sweepExpired(); // entries are otherwise only dropped on a successful login from that exact IP
     const entry = this.attempts.get(ip);
     if (!entry || entry.resetAt < Date.now()) {
       this.attempts.set(ip, { count: 1, resetAt: Date.now() + LOGIN_WINDOW_MS });
     } else {
       entry.count++;
+    }
+  }
+
+  private sweepExpired(): void {
+    const now = Date.now();
+    for (const [ip, entry] of this.attempts) {
+      if (entry.resetAt < now) this.attempts.delete(ip);
     }
   }
 

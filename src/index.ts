@@ -69,8 +69,22 @@ export async function createHub(options: HubOptions) {
   };
 
   for (const route of ['/:name', '/:name/mcp']) {
-    app.all(route, bearer, (req: Request, res: Response, next: NextFunction) => void dispatch(String(req.params.name))(req, res, next));
+    app.all(route, bearer, (req: Request, res: Response, next: NextFunction) =>
+      void dispatch(String(req.params.name))(req, res, next).catch(next)
+    );
   }
+
+  // Express only recognises a four-argument middleware as an error handler.
+  // Without it a throw out of the proxy path would escape as an unhandled
+  // rejection and take the whole hub — all children included — down with it.
+  app.use((error: Error, _req: Request, res: Response, _next: NextFunction) => {
+    console.error(`mcp-hub: request failed: ${error.message}`);
+    if (res.headersSent) {
+      res.end();
+      return;
+    }
+    res.status(500).json({ jsonrpc: '2.0', error: { code: -32603, message: 'Internal error' }, id: null });
+  });
 
   return { app, supervisor, watcher, provider, store };
 }
@@ -97,13 +111,24 @@ if (isMain) {
   });
   const httpServer = app.listen(port, () => console.log(`mcp-hub listening on :${port}`));
 
-  const shutdown = async (signal: string) => {
+  const shutdown = async (signal: string, code = 0) => {
     console.log(`mcp-hub: received ${signal}, shutting down`);
     watcher.stop();
     httpServer.close();
     await supervisor.stop();
-    process.exit(0);
+    process.exit(code);
   };
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
   process.on('SIGINT', () => void shutdown('SIGINT'));
+
+  // A stray rejection is almost always one failed request and must not take
+  // the children with it; an uncaught exception leaves the process in an
+  // undefined state, so shut down cleanly and let Docker restart us instead.
+  process.on('unhandledRejection', reason => {
+    console.error(`mcp-hub: unhandled rejection: ${reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)}`);
+  });
+  process.on('uncaughtException', error => {
+    console.error(`mcp-hub: uncaught exception: ${error.stack ?? error.message}`);
+    void shutdown('uncaughtException', 1);
+  });
 }
