@@ -1,0 +1,38 @@
+name: Dependabot auto-merge
+
+# Queues low-risk Dependabot updates for merge once CI is green, so routine
+# patch and minor bumps do not need a manual click each week.
+#
+# Safety rests on two things:
+#   * `main` requires the CI checks, so `--auto` waits for tests, CodeQL and
+#     the Trivy container scan instead of merging immediately.
+#   * The condition is written positively: only updates Dependabot explicitly
+#     labels patch or minor are queued. Majors — and anything whose update type
+#     cannot be determined — stay manual rather than slipping through.
+
+on: pull_request
+
+permissions:
+  contents: read
+
+jobs:
+  auto-merge:
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - id: metadata
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Queue for merge
+        if: |
+          steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
+          steps.metadata.outputs.update-type == 'version-update:semver-minor'
+        run: gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
