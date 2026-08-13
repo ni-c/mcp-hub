@@ -1,6 +1,8 @@
 # mcp-hub
 
 [![CI](https://github.com/ni-c/mcp-hub/actions/workflows/ci.yml/badge.svg)](https://github.com/ni-c/mcp-hub/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/%40ni-c%2Fmcp-hub)](https://www.npmjs.com/package/@ni-c/mcp-hub)
+[![npm downloads](https://img.shields.io/npm/dm/%40ni-c%2Fmcp-hub)](https://www.npmjs.com/package/@ni-c/mcp-hub)
 [![Container](https://img.shields.io/badge/ghcr.io-ni--c%2Fmcp--hub-2496ED?logo=docker&logoColor=white)](https://github.com/ni-c/mcp-hub/pkgs/container/mcp-hub)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
