@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { ManagedServer } from '../src/supervisor.js';
 import { AuthStore, MAX_UNAPPROVED_CLIENTS } from '../src/auth/store.js';
 import { LoginRateLimiter } from '../src/auth/routes.js';
+import { ClientRequestGate } from '../src/limits.js';
+import type { NextFunction, Request, Response } from 'express';
 
 const tmpDirs: string[] = [];
 
@@ -63,6 +65,27 @@ describe('LoginRateLimiter', () => {
     limiter.recordFailure('10.0.0.2');
     expect(limiter['attempts'].has('10.0.0.1')).toBe(false);
     expect(limiter['attempts'].size).toBe(1);
+  });
+});
+
+describe('ClientRequestGate', () => {
+  it('limits concurrent requests per OAuth client and releases on finish', () => {
+    const gate = new ClientRequestGate(10, 1);
+    const listeners = new Map<string, () => void>();
+    const response = {
+      once: (event: string, handler: () => void) => listeners.set(event, handler),
+      set: () => response,
+      status: () => response,
+      json: () => response
+    } as unknown as Response;
+    const request = { auth: { clientId: 'client-1' } } as Request;
+    let passed = 0;
+    gate.middleware(request, response, (() => passed++) as NextFunction);
+    gate.middleware(request, response, (() => passed++) as NextFunction);
+    expect(passed).toBe(1);
+    listeners.get('finish')?.();
+    gate.middleware(request, response, (() => passed++) as NextFunction);
+    expect(passed).toBe(2);
   });
 });
 
@@ -157,5 +180,21 @@ describe('AuthStore', () => {
     }
 
     expect(store.getClient('approved')).toBeDefined(); // oldest, but confirmed
+  });
+
+  it('revokes approval and every refresh token for a client', () => {
+    const dir = tmpDir();
+    const store = new AuthStore(dir);
+    store.saveClient({ client_id: 'client-1', redirect_uris: ['https://x.test/cb'] });
+    store.saveApproval('client-1', 'https://x.test/cb');
+    store.saveRefreshToken('one', { clientId: 'client-1', scopes: [], expiresAt: Math.floor(Date.now() / 1000) + 600 });
+    store.saveRefreshToken('other-client', { clientId: 'client-2', scopes: [], expiresAt: Math.floor(Date.now() / 1000) + 600 });
+
+    const result = store.revokeClientAccess('client-1');
+    expect(result.refreshTokens).toBe(1);
+    expect(store.getApproval('client-1')).toBeUndefined();
+    expect(store.getRefreshToken('one')).toBeUndefined();
+    expect(store.getRefreshToken('other-client')).toBeDefined();
+    expect(store.getRevokedBefore('client-1')).toBe(result.revokedBefore);
   });
 });

@@ -24,7 +24,7 @@ function firstLine(description: string | undefined): string {
  * four meta-tools, so a client's context holds 4 tool schemas instead of 9×N.
  */
 export function buildHubServer(supervisor: Supervisor): McpServer {
-  const hub = new McpServer({ name: 'mcp-hub', version: '0.2.0' });
+  const hub = new McpServer({ name: 'mcp-hub', version: '0.3.0' });
 
   const findServer = (name: string) => {
     const managed = supervisor.get(name);

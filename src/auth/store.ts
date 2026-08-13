@@ -8,6 +8,7 @@ export interface RefreshTokenRecord {
   scopes: string[];
   expiresAt: number; // epoch seconds
   familyId?: string; // absent on tokens issued before rotation tracking existed
+  resource?: string; // canonical RFC 8707 resource; absent on legacy global tokens
 }
 
 /** One recorded "yes, this client may have codes" decision. */
@@ -28,6 +29,7 @@ interface PersistedState {
   refreshTokens: Record<string, RefreshTokenRecord>; // keyed by sha256(token)
   approvals: Record<string, ClientApproval>; // keyed by client_id
   consumedRefreshTokens: Record<string, ConsumedRefreshToken>; // keyed by sha256(token)
+  revokedBefore: Record<string, number>; // client_id -> epoch milliseconds
 }
 
 /**
@@ -67,7 +69,8 @@ export class AuthStore {
       clients: {},
       refreshTokens: {},
       approvals: {},
-      consumedRefreshTokens: {}
+      consumedRefreshTokens: {},
+      revokedBefore: {}
     };
     if (!restored) this.persist();
   }
@@ -93,7 +96,8 @@ export class AuthStore {
         clients: parsed.clients ?? {},
         refreshTokens: parsed.refreshTokens ?? {},
         approvals: parsed.approvals ?? {},
-        consumedRefreshTokens: parsed.consumedRefreshTokens ?? {}
+        consumedRefreshTokens: parsed.consumedRefreshTokens ?? {},
+        revokedBefore: parsed.revokedBefore ?? {}
       };
     } catch (error) {
       const backup = `${statePath}.corrupt-${Date.now()}`;
@@ -128,6 +132,10 @@ export class AuthStore {
 
   getClient(clientId: string): OAuthClientInformationFull | undefined {
     return this.state.clients[clientId];
+  }
+
+  listClients(): Record<string, OAuthClientInformationFull> {
+    return structuredClone(this.state.clients);
   }
 
   saveClient(client: OAuthClientInformationFull): void {
@@ -168,12 +176,35 @@ export class AuthStore {
   }
 
   listApprovals(): Record<string, ClientApproval> {
-    return this.state.approvals;
+    return structuredClone(this.state.approvals);
   }
 
   revokeApproval(clientId: string): void {
+    this.revokeClientAccess(clientId);
+  }
+
+  getRevokedBefore(clientId: string): number | undefined {
+    return this.state.revokedBefore[clientId];
+  }
+
+  /**
+   * Immediately withdraw every grant for one client. Access JWTs are rejected
+   * using revokedBefore, while every active refresh token is removed from
+   * disk. The client registration stays so it can go through consent again.
+   */
+  revokeClientAccess(clientId: string): { refreshTokens: number; revokedBefore: number } {
     delete this.state.approvals[clientId];
+    let refreshTokens = 0;
+    for (const [hash, record] of Object.entries(this.state.refreshTokens)) {
+      if (record.clientId === clientId) {
+        delete this.state.refreshTokens[hash];
+        refreshTokens++;
+      }
+    }
+    const revokedBefore = Date.now();
+    this.state.revokedBefore[clientId] = revokedBefore;
     this.persist();
+    return { refreshTokens, revokedBefore };
   }
 
   private static hash(token: string): string {

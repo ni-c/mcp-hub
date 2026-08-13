@@ -68,6 +68,7 @@ describe('parseConfig', () => {
     [{ mcpServers: { 'bad name': { command: 'x' } } }, 'invalid'],
     [{ mcpServers: { hub: { command: 'x' } } }, 'reserved'],
     [{ mcpServers: { health: { command: 'x' } } }, 'reserved'],
+    [{ mcpServers: { livez: { command: 'x' } } }, 'reserved'],
     [{ mcpServers: { a: { command: 'x', env: { A: '${DOES_NOT_EXIST}' } } } }, 'Undefined environment variable'],
     [{}, 'mcpServers']
   ])('rejects invalid config %#', (raw, message) => {

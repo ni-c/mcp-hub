@@ -34,7 +34,11 @@ function pkcePair() {
   return { verifier, challenge };
 }
 
-async function obtainToken(app: Express.Application): Promise<{ access: string; refresh: string; clientId: string }> {
+async function obtainToken(
+  app: Express.Application,
+  resource?: string,
+  displayedResource = resource // the login page shows the canonical form
+): Promise<{ access: string; refresh: string; clientId: string }> {
   const registration = await request(app)
     .post('/register')
     .send({ redirect_uris: [REDIRECT_URI], token_endpoint_auth_method: 'none', client_name: 'vitest' })
@@ -50,11 +54,13 @@ async function obtainToken(app: Express.Application): Promise<{ access: string; 
       response_type: 'code',
       code_challenge: challenge,
       code_challenge_method: 'S256',
-      state: 'xyz'
+      state: 'xyz',
+      ...(resource ? { resource } : {})
     })
     .expect(200);
   const requestToken = authorize.text.match(/name="request" value="([^"]+)"/)?.[1];
   expect(requestToken).toBeDefined();
+  if (displayedResource) expect(authorize.text).toContain(displayedResource);
 
   const login = await request(app).post('/login').type('form').send({ password: PASSWORD, request: requestToken }).expect(302);
   const location = new URL(login.headers.location);
@@ -64,8 +70,16 @@ async function obtainToken(app: Express.Application): Promise<{ access: string; 
   const tokens = await request(app)
     .post('/token')
     .type('form')
-    .send({ grant_type: 'authorization_code', code, code_verifier: verifier, client_id: clientId, redirect_uri: REDIRECT_URI })
+    .send({
+      grant_type: 'authorization_code',
+      code,
+      code_verifier: verifier,
+      client_id: clientId,
+      redirect_uri: REDIRECT_URI,
+      ...(resource ? { resource } : {})
+    })
     .expect(200);
+  expect(tokens.body.expires_in).toBe(15 * 60);
   return { access: tokens.body.access_token, refresh: tokens.body.refresh_token, clientId };
 }
 
@@ -192,6 +206,16 @@ describe('OAuth', () => {
     expect(prm.body.authorization_servers).toEqual(['http://localhost:3000/']);
 
     await request(hub.app).get('/.well-known/oauth-authorization-server/everything/mcp').expect(200);
+  });
+
+  it('sets anti-clickjacking and browser hardening headers on interactive auth pages', async () => {
+    const clientId = await registerClient('headers');
+    const response = await authorizeWithSession(clientId, sessionCookie()).expect(200);
+    expect(response.headers['content-security-policy']).toContain("frame-ancestors 'none'");
+    expect(response.headers['content-security-policy']).toContain("form-action 'self'");
+    expect(response.headers['x-frame-options']).toBe('DENY');
+    expect(response.headers['x-content-type-options']).toBe('nosniff');
+    expect(response.headers['referrer-policy']).toBe('no-referrer');
   });
 
   it('rejects a wrong password and logs the attempt', async () => {
@@ -385,6 +409,99 @@ describe('OAuth', () => {
       .send({ jsonrpc: '2.0', method: 'ping', id: 1 })
       .expect(401);
   });
+
+  it('binds an RFC 8707 token to one canonical MCP resource', async () => {
+    const tokens = await obtainToken(hub.app, 'http://localhost:3000/everything');
+    const client = await mcpClient('/everything/mcp', tokens.access);
+    await client.listTools();
+    await client.close();
+
+    await request(hub.app)
+      .post('/hidden/mcp')
+      .set('Authorization', `Bearer ${tokens.access}`)
+      .send({ jsonrpc: '2.0', method: 'ping', id: 1 })
+      .expect(401);
+
+    await request(hub.app)
+      .post('/token')
+      .type('form')
+      .send({
+        grant_type: 'refresh_token',
+        refresh_token: tokens.refresh,
+        client_id: tokens.clientId,
+        resource: 'http://localhost:3000/hidden/mcp'
+      })
+      .expect(400);
+  });
+
+  it('canonicalizes the /hub/mcp resource to /hub', async () => {
+    const tokens = await obtainToken(hub.app, 'http://localhost:3000/hub/mcp', 'http://localhost:3000/hub');
+    const client = await mcpClient('/hub/mcp', tokens.access);
+    await client.listTools();
+    await client.close();
+  });
+
+  it('can require a resource indicator for every newly issued token', async () => {
+    const isolatedDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-hub-resource-'));
+    const configPath = path.join(isolatedDir, 'mcp.json');
+    fs.writeFileSync(configPath, JSON.stringify({ mcpServers: {} }));
+    const isolated = await createHub({
+      externalUrl: 'http://localhost:3000',
+      configPath,
+      dataPath: path.join(isolatedDir, 'data'),
+      password: PASSWORD,
+      requireResourceBoundTokens: true
+    });
+    try {
+      const registration = await request(isolated.app)
+        .post('/register')
+        .send({ redirect_uris: [REDIRECT_URI], token_endpoint_auth_method: 'none' })
+        .expect(201);
+      const { challenge } = pkcePair();
+      const response = await request(isolated.app)
+        .get('/authorize')
+        .query({
+          client_id: registration.body.client_id,
+          redirect_uri: REDIRECT_URI,
+          response_type: 'code',
+          code_challenge: challenge,
+          code_challenge_method: 'S256'
+        })
+        .expect(302);
+      expect(new URL(response.headers.location).searchParams.get('error')).toBe('invalid_target');
+    } finally {
+      isolated.watcher.stop();
+      await isolated.supervisor.stop();
+      fs.rmSync(isolatedDir, { recursive: true, force: true });
+    }
+  });
+
+  it('revokes a client access token and every refresh token immediately', async () => {
+    const tokens = await obtainToken(hub.app);
+    hub.store.revokeClientAccess(tokens.clientId);
+
+    await request(hub.app)
+      .post('/everything/mcp')
+      .set('Authorization', `Bearer ${tokens.access}`)
+      .send({ jsonrpc: '2.0', method: 'ping', id: 1 })
+      .expect(401);
+    await request(hub.app)
+      .post('/token')
+      .type('form')
+      .send({ grant_type: 'refresh_token', refresh_token: tokens.refresh, client_id: tokens.clientId })
+      .expect(400);
+  });
+
+  it('authenticates before parsing an oversized MCP body', async () => {
+    const oversized = JSON.stringify({ value: 'x'.repeat(1_100_000) });
+    await request(hub.app).post('/everything/mcp').set('Content-Type', 'application/json').send(oversized).expect(401);
+    await request(hub.app)
+      .post('/everything/mcp')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .set('Content-Type', 'application/json')
+      .send(oversized)
+      .expect(413);
+  });
 });
 
 describe('per-server proxy', () => {
@@ -480,16 +597,18 @@ describe('supervisor', () => {
     expect(broken.lastError).toBeTruthy();
   });
 
-  it('reports status via /health (degraded because of the broken server)', async () => {
-    const response = await request(hub.app).get('/health').expect(503);
+  it('keeps liveness minimal and detailed health behind bearer auth', async () => {
+    expect((await request(hub.app).get('/livez').expect(200)).body).toEqual({ status: 'ok' });
+    await request(hub.app).get('/health').expect(401);
+    const response = await request(hub.app).get('/health').set('Authorization', `Bearer ${accessToken}`).expect(503);
     expect(response.body.status).toBe('degraded');
     expect(response.body.servers.everything.state).toBe('up');
     expect(response.body.servers.everything.tools).toBeGreaterThan(0);
     expect(response.body.servers.broken.state).toBe('down');
   });
 
-  it('keeps error details out of the unauthenticated /health response', async () => {
-    const response = await request(hub.app).get('/health').expect(503);
+  it('keeps error details out of the authenticated /health response', async () => {
+    const response = await request(hub.app).get('/health').set('Authorization', `Bearer ${accessToken}`).expect(503);
     expect(response.body.servers.broken.lastError).toBeUndefined();
     expect(hub.supervisor.get('broken')!.lastError).toBeTruthy(); // still available internally
   });
@@ -520,7 +639,7 @@ describe('supervisor', () => {
     }
 
     // the hub still serves other requests
-    await request(hub.app).get('/health').expect(503);
+    await request(hub.app).get('/health').set('Authorization', `Bearer ${accessToken}`).expect(503);
   });
 
   it('sweeps expired authorization codes', () => {

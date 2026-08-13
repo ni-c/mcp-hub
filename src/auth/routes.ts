@@ -9,6 +9,38 @@ const LOGIN_MAX_ATTEMPTS = 10;
 const LOGIN_WINDOW_MS = 15 * 60_000;
 const LOGIN_MAX_ATTEMPTS_TOTAL = 100;
 
+function earlyRateLimit(windowMs: number, maxPerIp: number, maxTotal: number) {
+  const byIp = new Map<string, { count: number; resetAt: number }>();
+  let total = { count: 0, resetAt: 0 };
+  return (req: express.Request, res: express.Response, next: express.NextFunction): void => {
+    const now = Date.now();
+    if (total.resetAt <= now) total = { count: 0, resetAt: now + windowMs };
+    const ip = req.ip ?? 'unknown';
+    let entry = byIp.get(ip);
+    if (entry && entry.resetAt <= now) {
+      byIp.delete(ip);
+      entry = undefined;
+    }
+    // Reject before inserting anything: a flood of distinct rejected IPs must
+    // not grow the map. Accepted requests bound it at maxTotal per window.
+    if ((entry?.count ?? 0) >= maxPerIp || total.count >= maxTotal) {
+      res.set('Retry-After', String(Math.max(1, Math.ceil((Math.min(entry?.resetAt ?? Infinity, total.resetAt) - now) / 1000))));
+      res.status(429).json({ error: 'too_many_requests', error_description: 'Request rate limit exceeded' });
+      return;
+    }
+    if (!entry) {
+      if (byIp.size >= maxTotal) {
+        for (const [candidateIp, candidate] of byIp) if (candidate.resetAt <= now) byIp.delete(candidateIp);
+      }
+      entry = { count: 0, resetAt: now + windowMs };
+      byIp.set(ip, entry);
+    }
+    entry.count++;
+    total.count++;
+    next();
+  };
+}
+
 export interface AuthRoutesOptions {
   provider: HubOAuthProvider;
   externalUrl: string;
@@ -67,11 +99,25 @@ export function createAuthRoutes(options: AuthRoutesOptions): Router {
 
   // Keep the password login/consent pages and the OAuth token responses out of
   // any shared or browser cache (RFC 6749 §5.1 requires no-store on token
-  // responses; the login form has no business being cached either).
+  // responses; the login form has no business being cached either). The CSP
+  // and legacy frame header keep an attacker from clickjacking approval or
+  // password entry. This application has no legitimate framing use case.
   router.use((_req, res, next) => {
     res.set('Cache-Control', 'no-store');
+    res.set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
+    res.set('X-Frame-Options', 'DENY');
+    res.set('X-Content-Type-Options', 'nosniff');
+    res.set('Referrer-Policy', 'no-referrer');
     next();
   });
+
+  // These run before the SDK's JSON/form parsers. The SDK applies its own
+  // endpoint limits too, but those otherwise happen only after body parsing.
+  router.use('/register', earlyRateLimit(60 * 60_000, 20, 200));
+  router.use('/authorize', earlyRateLimit(15 * 60_000, 100, 1_000));
+  router.use('/token', earlyRateLimit(15 * 60_000, 50, 500));
+  router.use('/login', earlyRateLimit(15 * 60_000, 100, 500));
+  router.use('/consent', earlyRateLimit(15 * 60_000, 100, 500));
 
   // Standard AS endpoints: /.well-known/*, /authorize, /token, /register, /revoke
   router.use(mcpAuthRouter({ provider, issuerUrl, resourceName: 'mcp-hub' }));
@@ -117,7 +163,7 @@ export function createAuthRoutes(options: AuthRoutesOptions): Router {
     if (typeof password !== 'string' || !checkPassword(password)) {
       rateLimiter.recordFailure(ip);
       console.warn(`mcp-hub: authentication failure from ${ip}`);
-      res.status(401).type('html').send(renderLoginPage(request!, pending.redirectUri, undefined, 'Wrong password'));
+      res.status(401).type('html').send(renderLoginPage(request!, pending.redirectUri, undefined, 'Wrong password', pending.resource));
       return;
     }
     rateLimiter.reset(ip);

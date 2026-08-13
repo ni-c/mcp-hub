@@ -5,13 +5,13 @@ import type { OAuthServerProvider, AuthorizationParams } from '@modelcontextprot
 import type { OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/server/auth/clients.js';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import type { OAuthClientInformationFull, OAuthTokens, OAuthTokenRevocationRequest } from '@modelcontextprotocol/sdk/shared/auth.js';
-import { InvalidGrantError, InvalidTokenError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
+import { InvalidGrantError, InvalidTargetError, InvalidTokenError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import { redirectUriMatches } from '@modelcontextprotocol/sdk/server/auth/handlers/authorize.js';
 import type { AuthStore } from './store.js';
 import { renderLoginPage } from './login-page.js';
 import { renderConsentPage } from './consent-page.js';
 
-const ACCESS_TOKEN_TTL_S = 24 * 3600;
+const ACCESS_TOKEN_TTL_S = 15 * 60;
 const REFRESH_TOKEN_TTL_S = 30 * 24 * 3600;
 const CODE_TTL_MS = 10 * 60_000;
 export const SESSION_TTL_MS = 30 * 60_000;
@@ -32,6 +32,7 @@ interface PendingCode {
   redirectUri: string;
   scopes: string[];
   expiresAt: number;
+  resource?: string;
 }
 
 export interface PendingAuthorization {
@@ -41,6 +42,12 @@ export interface PendingAuthorization {
   state?: string;
   scopes: string[];
   exp: number;
+  resource?: string;
+}
+
+export interface HubOAuthProviderOptions {
+  requireResource?: boolean;
+  resolveResource?: (resource: URL) => URL | undefined;
 }
 
 function sign(value: string, secret: string): string {
@@ -55,7 +62,8 @@ export class HubOAuthProvider implements OAuthServerProvider {
 
   constructor(
     private readonly store: AuthStore,
-    private readonly externalUrl: string
+    private readonly externalUrl: string,
+    private readonly options: HubOAuthProviderOptions = {}
   ) {
     this.sessionCookieName = sessionCookieName(externalUrl);
   }
@@ -90,28 +98,31 @@ export class HubOAuthProvider implements OAuthServerProvider {
    * after the response has gone out.
    */
   async authorize(client: OAuthClientInformationFull, params: AuthorizationParams, res: Response): Promise<void> {
+    const resource = this.resolveResource(params.resource);
     const session = this.readSessionCookie(res.req.headers.cookie);
     if (session && this.isApproved(client, params.redirectUri)) {
-      this.redirectWithCode(client, params, res);
+      this.redirectWithCode(client, { ...params, resource }, res);
       return;
     }
-    const request = this.signPending(client, params);
+    const request = this.signPending(client, { ...params, resource });
     const page = session
-      ? renderConsentPage(request, this.csrfToken(session), params.redirectUri, client.client_name)
-      : renderLoginPage(request, params.redirectUri, client.client_name);
+      ? renderConsentPage(request, this.csrfToken(session), params.redirectUri, client.client_name, resource?.href)
+      : renderLoginPage(request, params.redirectUri, client.client_name, undefined, resource?.href);
     res.status(200).type('html').send(page);
   }
 
   /** Everything the login/consent form has to carry across, signed so it
    *  cannot be tampered with while it sits in the browser. */
   private signPending(client: OAuthClientInformationFull, params: AuthorizationParams): string {
+    const resource = this.resolveResource(params.resource);
     const pending: PendingAuthorization = {
       clientId: client.client_id,
       redirectUri: params.redirectUri,
       codeChallenge: params.codeChallenge,
       state: params.state,
       scopes: params.scopes ?? [],
-      exp: Date.now() + CODE_TTL_MS
+      exp: Date.now() + CODE_TTL_MS,
+      resource: resource?.href
     };
     const payload = Buffer.from(JSON.stringify(pending)).toString('base64url');
     return `${payload}.${sign(payload, this.store.cookieSecret)}`;
@@ -141,9 +152,10 @@ export class HubOAuthProvider implements OAuthServerProvider {
 
   redirectWithCode(
     client: OAuthClientInformationFull,
-    params: { redirectUri: string; codeChallenge: string; state?: string; scopes?: string[] },
+    params: { redirectUri: string; codeChallenge: string; state?: string; scopes?: string[]; resource?: string | URL },
     res: Response
   ): void {
+    const resource = typeof params.resource === 'string' ? params.resource : this.resolveResource(params.resource)?.href;
     const code = crypto.randomBytes(32).toString('base64url');
     this.sweepExpiredCodes();
     this.codes.set(code, {
@@ -151,7 +163,8 @@ export class HubOAuthProvider implements OAuthServerProvider {
       codeChallenge: params.codeChallenge,
       redirectUri: params.redirectUri,
       scopes: params.scopes ?? [],
-      expiresAt: Date.now() + CODE_TTL_MS
+      expiresAt: Date.now() + CODE_TTL_MS,
+      resource
     });
     const target = new URL(params.redirectUri);
     target.searchParams.set('code', code);
@@ -223,7 +236,8 @@ export class HubOAuthProvider implements OAuthServerProvider {
     client: OAuthClientInformationFull,
     authorizationCode: string,
     _codeVerifier?: string,
-    redirectUri?: string
+    redirectUri?: string,
+    resource?: URL
   ): Promise<OAuthTokens> {
     const pending = this.codes.get(authorizationCode);
     if (!pending || pending.expiresAt < Date.now() || pending.clientId !== client.client_id) {
@@ -232,11 +246,20 @@ export class HubOAuthProvider implements OAuthServerProvider {
     if (redirectUri !== undefined && redirectUri !== pending.redirectUri) {
       throw new InvalidGrantError('redirect_uri does not match the authorization request');
     }
+    const requestedResource = resource ? this.resolveResource(resource) : undefined;
+    if (resource && requestedResource?.href !== pending.resource) {
+      throw new InvalidGrantError('resource does not match the authorization request');
+    }
     this.codes.delete(authorizationCode); // single use
-    return this.issueTokens(client.client_id, pending.scopes);
+    return this.issueTokens(client.client_id, pending.scopes, undefined, pending.resource);
   }
 
-  async exchangeRefreshToken(client: OAuthClientInformationFull, refreshToken: string, scopes?: string[]): Promise<OAuthTokens> {
+  async exchangeRefreshToken(
+    client: OAuthClientInformationFull,
+    refreshToken: string,
+    scopes?: string[],
+    resource?: URL
+  ): Promise<OAuthTokens> {
     const record = this.store.getRefreshToken(refreshToken);
     if (!record || record.clientId !== client.client_id) {
       // Seeing a token that was already rotated away means the chain leaked:
@@ -251,21 +274,30 @@ export class HubOAuthProvider implements OAuthServerProvider {
     if (scopes && !scopes.every(scope => record.scopes.includes(scope))) {
       throw new InvalidGrantError('Requested scopes exceed the original grant');
     }
+    const requestedResource = resource ? this.resolveResource(resource) : undefined;
+    if (resource && !requestedResource) throw new InvalidTargetError('Unknown or invalid resource');
+    if (record.resource && requestedResource && record.resource !== requestedResource.href) {
+      throw new InvalidGrantError('resource does not match the original grant');
+    }
+    const tokenResource = requestedResource?.href ?? record.resource;
+    if (this.options.requireResource && !tokenResource) throw new InvalidTargetError('A resource indicator is required');
     // Tokens issued before families existed adopt one on their first rotation.
     const familyId = record.familyId ?? crypto.randomBytes(16).toString('base64url');
     this.store.consumeRefreshToken(refreshToken, familyId, record.expiresAt);
-    return this.issueTokens(client.client_id, scopes ?? record.scopes, familyId);
+    return this.issueTokens(client.client_id, scopes ?? record.scopes, familyId, tokenResource);
   }
 
   private async issueTokens(
     clientId: string,
     scopes: string[],
-    familyId: string = crypto.randomBytes(16).toString('base64url')
+    familyId: string = crypto.randomBytes(16).toString('base64url'),
+    resource?: string
   ): Promise<OAuthTokens> {
-    const accessToken = await new SignJWT({ client_id: clientId, scope: scopes.join(' ') })
+    const issuedMs = Date.now();
+    const accessToken = await new SignJWT({ client_id: clientId, scope: scopes.join(' '), issued_ms: issuedMs })
       .setProtectedHeader({ alg: 'EdDSA' })
       .setIssuer(this.externalUrl)
-      .setAudience(this.externalUrl)
+      .setAudience(resource ?? this.externalUrl)
       .setSubject('mcp-hub-user')
       .setIssuedAt()
       .setExpirationTime(`${ACCESS_TOKEN_TTL_S}s`)
@@ -276,7 +308,8 @@ export class HubOAuthProvider implements OAuthServerProvider {
       clientId,
       scopes,
       expiresAt: Math.floor(Date.now() / 1000) + REFRESH_TOKEN_TTL_S,
-      familyId
+      familyId,
+      resource
     });
     return {
       access_token: accessToken,
@@ -292,22 +325,43 @@ export class HubOAuthProvider implements OAuthServerProvider {
     try {
       ({ payload } = await jwtVerify(token, this.store.publicKey, {
         issuer: this.externalUrl,
-        audience: this.externalUrl
+        algorithms: ['EdDSA']
       }));
     } catch {
       throw new InvalidTokenError('Invalid or expired access token');
     }
+    if (payload.sub !== 'mcp-hub-user' || typeof payload.client_id !== 'string') {
+      throw new InvalidTokenError('Invalid access token claims');
+    }
+    const audience = typeof payload.aud === 'string' ? payload.aud : undefined;
+    const resource = audience && audience !== this.externalUrl ? this.resolveResource(new URL(audience)) : undefined;
+    if (!audience || (audience !== this.externalUrl && !resource)) throw new InvalidTokenError('Invalid token audience');
+    const issuedMs = typeof payload.issued_ms === 'number' ? payload.issued_ms : (payload.iat ?? 0) * 1000;
+    const revokedBefore = this.store.getRevokedBefore(payload.client_id);
+    if (revokedBefore !== undefined && issuedMs <= revokedBefore) throw new InvalidTokenError('Access token has been revoked');
     return {
       token,
-      clientId: (payload.client_id as string) ?? 'unknown',
+      clientId: payload.client_id,
       scopes: typeof payload.scope === 'string' && payload.scope.length > 0 ? payload.scope.split(' ') : [],
-      expiresAt: payload.exp
+      expiresAt: payload.exp,
+      resource
     };
   }
 
   async revokeToken(client: OAuthClientInformationFull, request: OAuthTokenRevocationRequest): Promise<void> {
     const record = this.store.getRefreshToken(request.token);
     if (record && record.clientId === client.client_id) this.store.deleteRefreshToken(request.token);
-    // Access tokens are self-contained 24h JWTs and cannot be revoked individually.
+    // Individual JWTs are not stored; the offline admin command revokes all
+    // access and refresh tokens for a client through the revokedBefore marker.
+  }
+
+  private resolveResource(resource: URL | undefined): URL | undefined {
+    if (!resource) {
+      if (this.options.requireResource) throw new InvalidTargetError('A resource indicator is required');
+      return undefined;
+    }
+    const resolved = this.options.resolveResource?.(resource);
+    if (!resolved) throw new InvalidTargetError('Unknown or invalid resource');
+    return resolved;
   }
 }
