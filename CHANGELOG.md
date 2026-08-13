@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Documentation site at [mcp-hub.ni-c.de](https://mcp-hub.ni-c.de) — guides for
+  configuration, deployment, clients and security, an architecture walkthrough,
+  a troubleshooting FAQ and a full endpoint/meta-tool reference. Built with
+  VitePress from `docs/`, which carries its own manifest so the runtime image
+  and the test matrix are unaffected, and published to `gh-pages` by
+  `.github/workflows/docs.yml`.
+
 ## [0.4.0] - 2026-08-13
 
 ### Added

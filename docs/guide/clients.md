@@ -1,0 +1,165 @@
+# Connecting clients
+
+Every MCP endpoint the hub exposes is Streamable HTTP behind an OAuth 2.1
+bearer token. Any client that supports remote MCP servers with OAuth can use
+it.
+
+## Which URL to register
+
+| URL | Use it for |
+|---|---|
+| `https://mcp.example.net/hub` | one connector for everything, four meta-tools, minimal context cost |
+| `https://mcp.example.net/<name>/mcp` | a single server with its native tools, for the ones you use constantly |
+
+Both can be registered at the same time. A common setup is one `/hub`
+connector plus two or three direct connectors, with those servers marked
+`"hub": false` so they are not offered twice.
+
+The short form `https://mcp.example.net/<name>` works as well and is
+canonicalized to `/<name>/mcp`.
+
+## Claude Web
+
+Settings → Connectors → **Add custom connector**, then enter the URL.
+
+Claude registers itself through dynamic client registration, opens the hub's
+login page, and asks for the password. Entering it correctly signs you in and
+approves that client in one step. From then on the connector reconnects on its
+own.
+
+::: tip One login, several connectors
+The login session lasts 30 minutes. Adding a second connector within that
+window shows an **Approve / Deny** page instead of the password prompt — the
+hub already knows who you are, but it will not hand a code to a client you have
+not confirmed.
+:::
+
+## Claude Code
+
+```sh
+claude mcp add -t http paperless https://mcp.example.net/paperless/mcp
+claude mcp add -t http hub https://mcp.example.net/hub
+```
+
+Claude Code opens a browser for the OAuth flow on first use, the same way.
+
+## Other clients
+
+Anything that implements the MCP authorization spec works. The hub publishes
+the standard discovery documents, so a client only needs the endpoint URL:
+
+- `/.well-known/oauth-protected-resource[/<path>]` — RFC 9728, tells the client
+  which authorization server to use, path-scoped so `/paperless/mcp` gets its
+  own resource identifier
+- `/.well-known/oauth-authorization-server[/<path>]` — RFC 8414 metadata for
+  the hub's own authorization server
+
+Dynamic client registration (`/register`) is open, as the MCP specification
+intends. Registration alone grants nothing: a client only receives an
+authorization code after you have confirmed it, and only at the redirect URI
+you confirmed.
+
+## The approval flow
+
+<figure class="hub-diagram">
+<svg viewBox="0 0 760 330" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="consent-title">
+  <title id="consent-title">Decision flow when a client requests authorization</title>
+  <defs>
+    <marker id="arrow-consent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" />
+    </marker>
+  </defs>
+
+  <rect class="node-accent" x="290" y="14" width="180" height="44" rx="9" />
+  <text x="380" y="41" text-anchor="middle" class="label-mono">GET /authorize</text>
+
+  <path class="edge" d="M380 58 L380 88" marker-end="url(#arrow-consent)" />
+
+  <rect class="node" x="272" y="88" width="216" height="44" rx="9" />
+  <text x="380" y="115" text-anchor="middle">Valid login session?</text>
+
+  <path class="edge" d="M272 110 L150 110 L150 158" marker-end="url(#arrow-consent)" />
+  <text x="205" y="102" text-anchor="middle" class="label-muted">no</text>
+  <path class="edge" d="M488 110 L610 110 L610 158" marker-end="url(#arrow-consent)" />
+  <text x="556" y="102" text-anchor="middle" class="label-muted">yes</text>
+
+  <rect class="node" x="66" y="158" width="168" height="48" rx="9" />
+  <text x="150" y="180" text-anchor="middle" class="label-title">Password page</text>
+  <text x="150" y="197" text-anchor="middle" class="label-muted">10 tries / 15 min per IP</text>
+
+  <rect class="node" x="520" y="158" width="180" height="48" rx="9" />
+  <text x="610" y="180" text-anchor="middle">Client already</text>
+  <text x="610" y="196" text-anchor="middle">approved?</text>
+
+  <path class="edge" d="M150 206 L150 246" marker-end="url(#arrow-consent)" />
+  <path class="edge" d="M520 182 L400 182 L400 246" marker-end="url(#arrow-consent)" />
+  <text x="452" y="174" text-anchor="middle" class="label-muted">no</text>
+  <path class="edge-accent" d="M700 182 L730 182 L730 292 L468 292" marker-end="url(#arrow-consent)" />
+  <text x="730" y="172" text-anchor="middle" class="label-muted">yes</text>
+
+  <rect class="node" x="66" y="246" width="168" height="46" rx="9" />
+  <text x="150" y="268" text-anchor="middle" class="label-title">Correct password</text>
+  <text x="150" y="284" text-anchor="middle" class="label-muted">counts as consent</text>
+
+  <rect class="node" x="316" y="246" width="168" height="46" rx="9" />
+  <text x="400" y="268" text-anchor="middle" class="label-title">Approve / Deny</text>
+  <text x="400" y="284" text-anchor="middle" class="label-muted">CSRF-protected page</text>
+
+  <path class="edge-accent" d="M234 269 L312 269" marker-end="url(#arrow-consent)" />
+</svg>
+<figcaption>A client is confirmed exactly once, bound to its client ID <em>and</em> the redirect URI it used.</figcaption>
+</figure>
+
+An approval records the client ID together with the redirect URI it was
+approved for. A client that later asks for a different redirect target is
+treated as new and needs confirming again. Loopback redirect URIs — the
+`http://127.0.0.1:<port>/…` form desktop clients use — match regardless of
+port, as the OAuth specification requires.
+
+Denying sends the client away with `error=access_denied`.
+
+## Token lifetimes
+
+| | |
+|---|---|
+| Authorization code | 10 minutes, single use |
+| Access token | **15 minutes**, self-contained EdDSA-signed JWT |
+| Refresh token | 30 days, rotated on every use |
+| Login session cookie | 30 minutes, `HttpOnly`, `SameSite=Lax`, `__Host-` prefixed over HTTPS |
+
+Refresh tokens rotate: each use issues a new one and retires the old. Replaying
+a token that was already rotated away revokes the whole chain, on the
+assumption that it leaked. A refresh can never widen scope beyond the original
+grant.
+
+## Resource-bound tokens
+
+With `RESOURCE_BOUND_TOKENS=true` (recommended), a token is bound to the single
+resource the client asked for. A token issued for `/paperless/mcp` cannot call
+`/hub` or any other server's path.
+
+Clients discover the right resource identifier from the RFC 9728 document of
+the endpoint they connect to, so this needs no client-side configuration.
+
+::: warning Turning it on invalidates existing tokens
+Enabling it retires previously issued global access and refresh tokens; every
+connector authorizes once more. Plan for that when migrating an existing
+deployment. With the setting off, new clients that send `resource` still get a
+bound token, legacy clients stay globally authorized, and the hub logs a
+warning at startup.
+:::
+
+## Revoking a client
+
+Use the offline admin command; it is covered on the
+[deployment page](/guide/deployment#revoking-a-client).
+
+## Notification support
+
+The transport is stateless, which means server-initiated messages are not
+delivered to clients: `listChanged` notifications, resource subscriptions and
+sampling requests do not travel outward. Tool, resource and prompt
+request/response traffic works in full.
+
+Internally the hub does follow `tools/list_changed` from its children, so the
+`/hub` tool cache stays current even though clients are not notified.

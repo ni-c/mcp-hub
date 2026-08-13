@@ -1,0 +1,165 @@
+---
+layout: home
+
+hero:
+  name: mcp-hub
+  text: One container for all your MCP servers
+  tagline: Serve many stdio MCP servers over one HTTPS endpoint — with the Claude Code config format you already have, path-based routing, a context-friendly aggregate endpoint and a built-in OAuth 2.1 login.
+  image:
+    src: /logo.svg
+    alt: mcp-hub
+  actions:
+    - theme: brand
+      text: Get started
+      link: /guide/getting-started
+    - theme: alt
+      text: What is mcp-hub?
+      link: /guide/
+    - theme: alt
+      text: View on GitHub
+      link: https://github.com/ni-c/mcp-hub
+
+features:
+  - icon:
+      src: /icons/config.svg
+      width: 26
+      height: 26
+    title: Your existing config, unchanged
+    details: '/config/mcp.json is exactly Claude Code''s mcpServers format. Copy entries over 1:1 — stdio commands, environment variables and native http/sse upstreams all work.'
+    link: /guide/configuration
+    linkText: Configuration reference
+  - icon:
+      src: /icons/routing.svg
+      width: 26
+      height: 26
+    title: One path per server
+    details: 'Every server gets its own Streamable HTTP endpoint at /«name»/mcp. Register the servers you use most as individual connectors, with no extra container per server.'
+    link: /reference/endpoints
+    linkText: Endpoint reference
+  - icon:
+      src: /icons/hub.svg
+      width: 26
+      height: 26
+    title: The /hub aggregate
+    details: A single connector that exposes every server through four meta-tools — so your model's context holds 4 tool schemas instead of N×tools.
+    link: /reference/hub-tools
+    linkText: Meta-tool reference
+  - icon:
+      src: /icons/oauth.svg
+      width: 26
+      height: 26
+    title: OAuth 2.1, built in
+    details: Dynamic client registration, PKCE, one password, explicit per-client approval, 15-minute access tokens and rotating refresh tokens with reuse detection.
+    link: /guide/security
+    linkText: Security model
+  - icon:
+      src: /icons/supervise.svg
+      width: 26
+      height: 26
+    title: Supervised, not fire-and-forget
+    details: Children are spawned at boot, pinged every 60 s and restarted with exponential backoff. A dead server answers 503 on its path — never silence.
+    link: /guide/architecture
+    linkText: How it works
+  - icon:
+      src: /icons/stateless.svg
+      width: 26
+      height: 26
+    title: No database, no session state
+    details: State is one JSON file plus a JWT key on a volume. The transport is stateless, so a client that reconnects without closing its session cannot leak processes.
+    link: /guide/architecture
+    linkText: Architecture
+---
+
+## The shape of it
+
+<figure class="hub-diagram">
+<svg viewBox="0 0 760 320" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="flow-title">
+  <title id="flow-title">Request flow from an MCP client through a reverse proxy into mcp-hub and on to its child servers</title>
+  <defs>
+    <marker id="arrow-flow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" />
+    </marker>
+    <marker id="arrow-flow-accent" class="accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" />
+    </marker>
+  </defs>
+
+  <rect class="node" x="4" y="124" width="160" height="72" rx="10" />
+  <text x="84" y="153" text-anchor="middle" class="label-title">MCP client</text>
+  <text x="84" y="172" text-anchor="middle" class="label-muted">Claude Web · Claude Code</text>
+
+  <rect class="node" x="196" y="124" width="124" height="72" rx="10" />
+  <text x="258" y="153" text-anchor="middle" class="label-title">Reverse proxy</text>
+  <text x="258" y="172" text-anchor="middle" class="label-muted">TLS termination</text>
+
+  <rect class="node-accent" x="344" y="24" width="228" height="272" rx="14" />
+  <text x="458" y="50" text-anchor="middle" class="label-title">mcp-hub</text>
+  <text x="458" y="68" text-anchor="middle" class="label-muted">one Node process</text>
+
+  <rect class="node" x="362" y="84" width="192" height="44" rx="8" />
+  <text x="458" y="111" text-anchor="middle" class="label-mono">OAuth 2.1 AS</text>
+
+  <rect class="node" x="362" y="140" width="192" height="44" rx="8" />
+  <text x="458" y="167" text-anchor="middle" class="label-mono">/hub · /&lt;name&gt;/mcp</text>
+
+  <rect class="node" x="362" y="196" width="192" height="44" rx="8" />
+  <text x="458" y="223" text-anchor="middle" class="label-mono">supervisor</text>
+
+  <text x="458" y="268" text-anchor="middle" class="label-muted">ping · backoff restart · hot reload</text>
+
+  <rect class="node" x="616" y="52" width="136" height="56" rx="10" />
+  <text x="684" y="76" text-anchor="middle" class="label-mono">paperless</text>
+  <text x="684" y="94" text-anchor="middle" class="label-muted">stdio child</text>
+
+  <rect class="node" x="616" y="132" width="136" height="56" rx="10" />
+  <text x="684" y="156" text-anchor="middle" class="label-mono">calendar</text>
+  <text x="684" y="174" text-anchor="middle" class="label-muted">stdio child</text>
+
+  <rect class="node" x="616" y="212" width="136" height="56" rx="10" />
+  <text x="684" y="236" text-anchor="middle" class="label-mono">homeassistant</text>
+  <text x="684" y="254" text-anchor="middle" class="label-muted">remote http/sse</text>
+
+  <path class="edge-accent" d="M164 160 L192 160" marker-end="url(#arrow-flow-accent)" />
+  <text x="178" y="150" text-anchor="middle" class="label-muted">TLS</text>
+  <path class="edge-accent" d="M320 160 L340 160" marker-end="url(#arrow-flow-accent)" />
+
+  <path class="edge" d="M572 218 C 596 218, 592 80, 612 80" marker-end="url(#arrow-flow)" />
+  <path class="edge" d="M572 218 C 596 218, 592 160, 612 160" marker-end="url(#arrow-flow)" />
+  <path class="edge edge-dashed" d="M572 218 C 596 218, 592 240, 612 240" marker-end="url(#arrow-flow)" />
+</svg>
+<figcaption>One process terminates the client's OAuth session, routes by path, and keeps every configured server alive behind it.</figcaption>
+</figure>
+
+## Try it in two minutes
+
+```sh
+mkdir -p data && sudo chown -R 1000:1000 data   # the container runs as uid 1000
+
+docker run -d --name mcp-hub \
+  -p 127.0.0.1:7690:80 \
+  -e EXTERNAL_URL="https://mcp.example.net" \
+  -e PASSWORD_HASH="$(htpasswd -bnBC 10 '' 'yourpassword' | tr -d ':\n')" \
+  -e TRUSTED_PROXIES="192.168.1.0/24" \
+  -e RESOURCE_BOUND_TOKENS="true" \
+  -v "$PWD/mcp.json:/config/mcp.json:ro" \
+  -v "$PWD/data:/data" \
+  ghcr.io/ni-c/mcp-hub:0.4.0
+```
+
+Point a reverse proxy with a TLS certificate at `127.0.0.1:7690`, then add
+`https://mcp.example.net/hub` as a custom connector in Claude and log in once
+with the password.
+
+[Full walkthrough →](/guide/getting-started)
+
+## Where to go next
+
+| If you want to… | Read |
+|---|---|
+| understand the problem it solves | [What is mcp-hub?](/guide/) |
+| get a working deployment | [Getting started](/guide/getting-started) · [Deployment](/guide/deployment) |
+| write your `mcp.json` | [Configuration](/guide/configuration) |
+| hook up Claude Web or Claude Code | [Connecting clients](/guide/clients) |
+| run it safely on the public internet | [Security](/guide/security) |
+| know what happens inside | [Architecture](/guide/architecture) |
+| fix something that is misbehaving | [FAQ & troubleshooting](/guide/faq) |

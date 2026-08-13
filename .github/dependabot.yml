@@ -15,6 +15,16 @@ updates:
         update-types:
           - minor
           - patch
+  # The documentation site has its own manifest so its toolchain never lands in
+  # the runtime image or the test matrix.
+  - package-ecosystem: npm
+    directory: /docs
+    schedule:
+      interval: weekly
+    groups:
+      docs:
+        patterns:
+          - '*'
   - package-ecosystem: docker
     directory: /
     schedule:
