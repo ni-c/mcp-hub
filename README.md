@@ -40,14 +40,15 @@ replaces N containers with one process:
 
 `/config/mcp.json` — identical to Claude Code (`${VAR}` expands from the
 container environment; unknown fields are ignored by Claude Code, so the file
-stays interchangeable):
+stays interchangeable). Install stdio server binaries at a reviewed, exact
+version in your image; do not download mutable packages at runtime:
 
 ```json
 {
   "mcpServers": {
     "paperless": {
-      "command": "npx",
-      "args": ["-y", "paperless-mcp"],
+      "command": "paperless-mcp",
+      "args": [],
       "env": { "PAPERLESS_API_TOKEN": "${PAPERLESS_API_TOKEN}" }
     },
     "homeassistant": {
@@ -55,7 +56,7 @@ stays interchangeable):
       "url": "http://homeassistant:8123/api/mcp",
       "headers": { "Authorization": "Bearer ${HA_TOKEN}" }
     },
-    "private-thing": { "command": "uvx", "args": ["some-mcp"], "hub": false }
+    "private-thing": { "command": "some-mcp", "args": [], "hub": false }
   }
 }
 ```
@@ -70,7 +71,21 @@ configured with static headers; bridge those with an
 its token cache (`MCP_REMOTE_CONFIG_DIR`) under `/data`.
 `"hub": false` hides a server from the `/hub` aggregate; its own path keeps
 working. Reserved names: `mcp`, `hub`, `authorize`, `token`, `register`,
-`login`, `consent`, `health`, `revoke`.
+`login`, `consent`, `health`, `livez`, `revoke`.
+
+All stdio children share the hub's Unix user and can read its mounted files.
+Only install fully trusted stdio servers. Put servers with a different trust
+level in separate containers/hosts and connect them as remote HTTP/SSE servers;
+see [SECURITY.md](SECURITY.md).
+
+For a custom image, pin every package to an exact version:
+
+```dockerfile
+FROM ghcr.io/ni-c/mcp-hub:0.3.0
+USER root
+RUN npm install -g your-mcp-package@1.2.3
+USER node
+```
 
 ### Environment
 
@@ -80,6 +95,12 @@ working. Reserved names: `mcp`, `hub`, `authorize`, `token`, `register`,
 | `PASSWORD_HASH` | one of | bcrypt hash of the login password (`htpasswd -bnBC 10 "" 'pw' \| tr -d ':\n'`) |
 | `PASSWORD` | one of | plain-text alternative to `PASSWORD_HASH` |
 | `TRUSTED_PROXIES` | no | comma-separated IPs/CIDRs allowed to set `X-Forwarded-*` (see below) |
+| `RESOURCE_BOUND_TOKENS` | no | require RFC 8707 tokens bound to `/hub` or one `/<name>/mcp`; recommended `true`, legacy default `false` during migration |
+| `MCP_BODY_LIMIT` | no | authenticated MCP JSON body limit, default `1mb` |
+| `MCP_REQUESTS_PER_MINUTE` | no | limit per OAuth client, default `120` |
+| `MCP_MAX_CONCURRENT_REQUESTS` | no | in-flight limit per OAuth client, default `4` |
+| `HTTP_HEADERS_TIMEOUT_MS` | no | Node HTTP header timeout, default `10000` |
+| `HTTP_REQUEST_TIMEOUT_MS` | no | complete request timeout, default `310000` (slightly above the tool-call timeout) |
 | `PORT` | no | listen port (default 80 in the image, 3000 outside) |
 | `CONFIG_PATH` | no | default `/config/mcp.json` |
 | `DATA_PATH` | no | default `/data` |
@@ -88,6 +109,14 @@ working. Reserved names: `mcp`, `hub`, `authorize`, `token`, `register`,
 `/data` holds the Ed25519 JWT key, registered OAuth clients, approvals and
 refresh tokens. **Mount it as a volume** — recreating it invalidates every
 connector authorization.
+
+With `RESOURCE_BOUND_TOKENS=true`, the OAuth client must include the resource
+advertised by the endpoint's RFC 9728 document. A token for `/paperless/mcp`
+then cannot call `/hub` or another server. The shorter `/<name>` route is
+canonicalized to `/<name>/mcp`. Enabling this setting invalidates previously
+issued global access/refresh tokens; clients must authorize again. Without it,
+new clients that send `resource` still receive a bound token, while legacy
+clients remain globally authorized and the hub logs a warning.
 
 `TRUSTED_PROXIES` decides what `req.ip` is, and therefore what the login rate
 limiter counts. List **only** your own reverse proxy, and make sure it
@@ -106,18 +135,22 @@ Published on every push to `main` and every `vX.Y.Z` release tag, for
 [package page](https://github.com/ni-c/mcp-hub/pkgs/container/mcp-hub).
 
 ```sh
-docker pull ghcr.io/ni-c/mcp-hub:latest
+docker pull ghcr.io/ni-c/mcp-hub:0.3.0
 ```
 
 Tags: `latest` (tip of `main`), `X.Y.Z` and `X.Y` (releases), and
 `sha-<commit>` for a specific build.
+
+Use a version tag instead of `latest` for controlled updates. For an immutable
+deployment, record the resolved digest from `docker image inspect` and use
+`ghcr.io/ni-c/mcp-hub:<version>@sha256:<digest>` in Compose.
 
 With compose, copy the example and point it at the image instead of building:
 
 ```yaml
 services:
   mcp-hub:
-    image: ghcr.io/ni-c/mcp-hub:latest   # replaces `build: .`
+    image: ghcr.io/ni-c/mcp-hub:0.3.0   # replaces `build: .`; pin a digest in production
     # ...rest of docker-compose.example.yml unchanged
 ```
 
@@ -139,7 +172,7 @@ docker run -d --name mcp-hub \
   -e TRUSTED_PROXIES="192.168.1.0/24" \
   -v "$PWD/mcp.json:/config/mcp.json:ro" \
   -v "$PWD/data:/data" \
-  ghcr.io/ni-c/mcp-hub:latest
+  ghcr.io/ni-c/mcp-hub:0.3.0
 ```
 
 Update to a newer image with `docker compose pull && docker compose up -d`
@@ -154,7 +187,8 @@ docker compose up -d --build
 ```
 
 Reverse-proxy requirements: TLS termination, WebSockets/SSE allowed (proxy
-buffering off, long read timeouts), and pass `X-Forwarded-Proto`/`Host`.
+buffering off, a request timeout above 310 seconds, a request-body limit at or
+below `MCP_BODY_LIMIT`, and pass `X-Forwarded-Proto`/`Host`.
 
 Connect from Claude Web: add a custom connector with URL
 `https://<host>/hub` (or `https://<host>/<name>/mcp` for one server), log in
@@ -163,9 +197,20 @@ once with the password. Claude Code: `claude mcp add -t http name https://<host>
 Each client is confirmed once. Entering the password approves the client that
 asked; while a login session is still valid, a client you have not seen before
 gets an explicit *Approve / Deny* page instead of a code. Approved clients
-reconnect silently from then on. To withdraw an approval, stop the container,
-remove the entry from `approvals` in `/data/state.json` and start it again —
-the client then has to be confirmed the next time it connects.
+reconnect silently from then on.
+
+List clients or revoke one while the main container is stopped (both commands
+mount the same `/data`; stopping avoids concurrent state writers):
+
+```sh
+docker compose stop mcp-hub
+docker compose run --rm --no-deps mcp-hub node /app/dist/admin.js clients list
+docker compose run --rm --no-deps mcp-hub node /app/dist/admin.js clients revoke CLIENT_ID
+docker compose up -d
+```
+
+Revocation removes the approval and all refresh tokens and immediately rejects
+already-issued access tokens. The next connection needs explicit approval.
 
 ## Endpoints
 
@@ -173,7 +218,8 @@ the client then has to be confirmed the next time it connects.
 |---|---|---|
 | `/<name>`, `/<name>/mcp` | Bearer | Streamable HTTP endpoint of one server |
 | `/hub` | Bearer | aggregate endpoint with the 4 meta-tools |
-| `/health` | none | per-server status (`200` all up / `503` degraded) |
+| `/livez` | none | minimal process liveness (`200`) |
+| `/health` | Bearer | per-server status (`200` all up / `503` degraded) |
 | `/authorize`, `/token`, `/register`, `/login`, `/consent`, `/revoke` | — | OAuth 2.1 + DCR |
 | `/.well-known/oauth-authorization-server[/…]` | none | RFC 8414 metadata |
 | `/.well-known/oauth-protected-resource[/…]` | none | RFC 9728 metadata (path-scoped) |
@@ -184,19 +230,23 @@ the client then has to be confirmed the next time it connects.
   subscriptions, sampling) are not delivered to clients. Tool/resource/prompt
   request-response works fully; the hub's tool cache does follow
   `tools/list_changed` internally.
-- Access tokens are self-contained 24 h JWTs and cannot be revoked
-  individually; refresh tokens rotate and can be revoked. Replaying a token
+- Access tokens are self-contained 15-minute JWTs. Revoking a client rejects
+  its existing JWTs and removes all of its refresh tokens. Refresh tokens
+  rotate; replaying a token
   that was already rotated away revokes its whole chain, and a refresh cannot
   ask for more scope than the original grant.
 - Upstream auth is fully decoupled from the hub's own OAuth: an expired
   upstream token just marks that one server `down` (503 on its path, visible
   in `/health`) — clients never see the upstream's 401.
-- One login secures everything: any valid token may call every server. What a
-  token is *not* is automatic — registration is open (as the MCP spec
-  intends), so a client only ever receives codes after you confirmed it, and
-  only at the redirect target you confirmed it for.
+- With `RESOURCE_BOUND_TOKENS=true`, one login can approve multiple connectors
+  but each token is valid only for its requested server or `/hub`. Registration
+  remains open as the MCP specification intends; a client only receives codes
+  after confirmation and only at the confirmed redirect target.
 - Failed logins are rate-limited (10/15 min per IP) and logged as
   `mcp-hub: authentication failure from <ip>` for fail2ban.
+- Auth pages deny framing and carry a restrictive CSP. MCP bodies are parsed
+  only after bearer verification and are bounded by size, per-client request
+  rate and per-client concurrency.
 
 ### Logging to a file for fail2ban
 
