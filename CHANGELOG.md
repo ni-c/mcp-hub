@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `uv` layer is pinned to a version tag (`0.12.3`) instead of `latest`. The
   digest is unchanged, so the image content is identical; upgrades now arrive as
   readable version bumps rather than opaque digest churn.
+- The documentation site builds with VitePress 2. VitePress 1 pins Vite 5,
+  which is end-of-life and carries unfixable dev-server advisories; Vite 8 clears
+  them. Documentation tooling is not part of the published package or image.
 
 ### Added
 

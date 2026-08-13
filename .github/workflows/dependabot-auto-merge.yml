@@ -9,6 +9,11 @@ name: Dependabot auto-merge
 #   * The condition is written positively: only updates Dependabot explicitly
 #     labels patch or minor are queued. Majors — and anything whose update type
 #     cannot be determined — stay manual rather than slipping through.
+#
+# /docs is excluded on purpose. Its build runs in docs.yml, which is path
+# filtered and therefore cannot be a required check on every PR — so auto-merge
+# would not wait for it, and a bad VitePress bump could reach the published
+# site unseen. That is one PR a week at most; it can have a human look.
 
 on: pull_request
 
@@ -30,8 +35,9 @@ jobs:
 
       - name: Queue for merge
         if: |
-          steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
-          steps.metadata.outputs.update-type == 'version-update:semver-minor'
+          steps.metadata.outputs.directory != '/docs' &&
+          (steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
+           steps.metadata.outputs.update-type == 'version-update:semver-minor')
         run: gh pr merge --auto --squash "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
