@@ -14,6 +14,16 @@ COPY --from=ghcr.io/astral-sh/uv:latest@sha256:2d890623d310b57771ce840f0da5eed5f
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git python3 python3-pip ca-certificates tini \
     && rm -rf /var/lib/apt/lists/*
+# The base image bundles npm 10, whose vendored deps (tar, brace-expansion,
+# sigstore, ...) carry known HIGH/CRITICAL CVEs; replace it wholesale. Even
+# current npm still pins two vendored packages to vulnerable releases, so
+# overwrite those in place with the fixed same-major versions (identical
+# dependency footprint, verified against the registry).
+RUN npm install -g npm@12.0.2 \
+    && npm pack brace-expansion@5.0.9 ip-address@10.3.1 --pack-destination /tmp > /dev/null \
+    && tar -xzf /tmp/brace-expansion-5.0.9.tgz --strip-components=1 -C /usr/local/lib/node_modules/npm/node_modules/brace-expansion \
+    && tar -xzf /tmp/ip-address-10.3.1.tgz --strip-components=1 -C /usr/local/lib/node_modules/npm/node_modules/ip-address \
+    && rm -f /tmp/brace-expansion-5.0.9.tgz /tmp/ip-address-10.3.1.tgz
 
 WORKDIR /app
 COPY --from=build /app/node_modules ./node_modules
