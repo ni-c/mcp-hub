@@ -4,6 +4,7 @@ services:
     image: mcp-hub:latest
     container_name: mcp-hub
     mem_limit: 1g
+    read_only: true
     restart: unless-stopped
 
     ports:
@@ -17,6 +18,13 @@ services:
 
       # Networks allowed to set X-Forwarded-* (your reverse proxy).
       TRUSTED_PROXIES: "192.168.1.0/24"
+
+      # Bind every new access token to /hub or one /<name>/mcp resource.
+      RESOURCE_BOUND_TOKENS: "true"
+
+      MCP_BODY_LIMIT: "1mb"
+      MCP_REQUESTS_PER_MINUTE: "120"
+      MCP_MAX_CONCURRENT_REQUESTS: "4"
 
       # bcrypt hash of the OAuth login password. Generate with:
       #   htpasswd -bnBC 10 "" 'yourpassword' | tr -d ':\n'
@@ -36,8 +44,17 @@ services:
 
     pids_limit: 300
 
+    # Child servers should not need a writable image. Put deliberate persistent
+    # child state under /data; transient caches belong in these tmpfs mounts.
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      - /home/node/.cache:size=128m,mode=0700,uid=1000,gid=1000
+
     security_opt:
       - no-new-privileges:true
+
+    cap_drop:
+      - ALL
 
 networks:
   default:
