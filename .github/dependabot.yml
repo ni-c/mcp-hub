@@ -4,6 +4,17 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    groups:
+      # Keep lockstep packages together so major bumps don't arrive as
+      # individually broken PRs.
+      vitest:
+        patterns:
+          - vitest
+          - '@vitest/*'
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
   - package-ecosystem: docker
     directory: /
     schedule:
