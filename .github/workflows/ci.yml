@@ -64,7 +64,7 @@ jobs:
           tags: mcp-hub:audit-${{ matrix.tag }}
           cache-from: type=gha,scope=scan-${{ matrix.tag }}
           cache-to: type=gha,mode=max,scope=scan-${{ matrix.tag }}
-      - uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # v0.33.1
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           # The action's default Trivy (v0.65.0) was withdrawn upstream; its
           # assets 404 and the installer dies. Pin a release that exists.
