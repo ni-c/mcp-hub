@@ -92,7 +92,7 @@ export function buildHubServer(supervisor: Supervisor): McpServer {
       inputSchema: {
         server: z.string().describe('Server name from list_servers'),
         tool: z.string().describe('Tool name from list_tools'),
-        arguments: z.record(z.unknown()).optional().describe('Tool arguments matching its input schema')
+        arguments: z.record(z.string(), z.unknown()).optional().describe('Tool arguments matching its input schema')
       }
     },
     async ({ server, tool, arguments: args }) => {
