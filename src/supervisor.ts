@@ -3,6 +3,7 @@ import { StdioClientTransport, getDefaultEnvironment } from '@modelcontextprotoc
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+import { VERSION } from './version.js';
 import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
 import type { ServerCapabilities, Implementation, Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { HubConfig, ServerConfig, RemoteServerConfig, ConfigDiff } from './config.js';
@@ -71,7 +72,7 @@ export class ManagedServer {
     this.stopping = false;
     this.state = 'starting';
     const transport = this.buildTransport();
-    const client = new Client({ name: 'mcp-hub', version: '0.3.0' }, { capabilities: {} });
+    const client = new Client({ name: 'mcp-hub', version: VERSION }, { capabilities: {} });
     transport.onclose = () => this.onExit(this.config.kind === 'remote' ? 'connection closed' : 'child process exited');
     try {
       await client.connect(transport);

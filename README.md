@@ -186,6 +186,19 @@ cp mcp.json.example mcp.json                        # adjust
 docker compose up -d --build
 ```
 
+### Option C — npm (without a container)
+
+```sh
+CONFIG_PATH=./mcp.json DATA_PATH=./data PASSWORD_HASH='...' \
+  npx @ni-c/mcp-hub
+```
+
+Installs as [`@ni-c/mcp-hub`](https://www.npmjs.com/package/@ni-c/mcp-hub)
+(the unscoped npm name belongs to an unrelated project) and provides the
+`mcp-hub` and `mcp-hub-admin` binaries. The container remains the recommended
+deployment — it provides the isolation, read-only root filesystem and resource
+limits that SECURITY.md assumes.
+
 Reverse-proxy requirements: TLS termination, WebSockets/SSE allowed (proxy
 buffering off, a request timeout above 310 seconds, a request-body limit at or
 below `MCP_BODY_LIMIT`, and pass `X-Forwarded-Proto`/`Host`.

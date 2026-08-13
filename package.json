@@ -1,7 +1,15 @@
 {
-  "name": "mcp-hub",
-  "version": "0.3.0",
+  "name": "@ni-c/mcp-hub",
+  "version": "0.4.0",
   "description": "Serve multiple stdio MCP servers from one container: Claude-Code-style mcpServers config, path-based routing, hub meta-tools and a built-in OAuth 2.1 login for Claude Web.",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "gateway",
+    "proxy",
+    "oauth",
+    "claude"
+  ],
   "type": "module",
   "license": "MIT",
   "author": "Willi Thiel <github@willithiel.net>",
@@ -9,6 +17,10 @@
     "type": "git",
     "url": "git+https://github.com/ni-c/mcp-hub.git"
   },
+  "bugs": {
+    "url": "https://github.com/ni-c/mcp-hub/issues"
+  },
+  "homepage": "https://github.com/ni-c/mcp-hub#readme",
   "engines": {
     "node": ">=20"
   },
@@ -17,12 +29,20 @@
     "mcp-hub": "dist/index.js",
     "mcp-hub-admin": "dist/admin.js"
   },
+  "files": [
+    "dist",
+    "CHANGELOG.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "prepublishOnly": "npm test && npm run build"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",

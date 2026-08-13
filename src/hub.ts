@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { Supervisor } from './supervisor.js';
+import { VERSION } from './version.js';
 
 const CALL_TIMEOUT_MS = 5 * 60_000;
 
@@ -24,7 +25,7 @@ function firstLine(description: string | undefined): string {
  * four meta-tools, so a client's context holds 4 tool schemas instead of 9×N.
  */
 export function buildHubServer(supervisor: Supervisor): McpServer {
-  const hub = new McpServer({ name: 'mcp-hub', version: '0.3.0' });
+  const hub = new McpServer({ name: 'mcp-hub', version: VERSION });
 
   const findServer = (name: string) => {
     const managed = supervisor.get(name);
