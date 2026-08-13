@@ -29,7 +29,7 @@
     "bcryptjs": "^3.0.2",
     "express": "^5.1.0",
     "jose": "^6.2.8",
-    "zod": "^3.25.0"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@modelcontextprotocol/server-everything": "^2025.9.25",
