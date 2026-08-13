@@ -20,7 +20,7 @@
   "bugs": {
     "url": "https://github.com/ni-c/mcp-hub/issues"
   },
-  "homepage": "https://mcp-hub.ni-c.de",
+  "homepage": "https://ni-c.github.io/mcp-hub/",
   "engines": {
     "node": ">=20"
   },

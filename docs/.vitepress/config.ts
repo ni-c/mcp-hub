@@ -1,6 +1,8 @@
 import { defineConfig } from 'vitepress';
 
-const site = 'https://mcp-hub.ni-c.de';
+// Project page on github.io, so everything is served under /mcp-hub/.
+const base = '/mcp-hub/';
+const site = 'https://ni-c.github.io/mcp-hub';
 const description =
   'Serve many stdio MCP servers from one container: Claude-Code-style config, path-based routing, hub meta-tools and a built-in OAuth 2.1 login for Claude Web.';
 
@@ -8,12 +10,15 @@ export default defineConfig({
   title: 'mcp-hub',
   description,
   lang: 'en-US',
+  base,
   cleanUrls: true,
   lastUpdated: true,
-  sitemap: { hostname: site },
+  sitemap: { hostname: `${site}/` },
 
   head: [
-    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' }],
+    // head entries are emitted verbatim — unlike links and assets elsewhere,
+    // they are not rewritten with `base`.
+    ['link', { rel: 'icon', type: 'image/svg+xml', href: `${base}favicon.svg` }],
     ['meta', { name: 'theme-color', content: '#6366f1' }],
     ['meta', { property: 'og:type', content: 'website' }],
     ['meta', { property: 'og:site_name', content: 'mcp-hub' }],
@@ -102,6 +107,8 @@ export default defineConfig({
   },
 
   markdown: {
-    theme: { light: 'github-light', dark: 'github-dark' }
+    // The *-default variants darken comments enough to clear 4.5:1 against the
+    // code background; plain github-light lands just under it.
+    theme: { light: 'github-light-default', dark: 'github-dark-default' }
   }
 });
