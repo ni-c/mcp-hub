@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The `uv` layer is pinned to a version tag (`0.12.3`) instead of `latest`. The
+  digest is unchanged, so the image content is identical; upgrades now arrive as
+  readable version bumps rather than opaque digest churn.
+
 ### Added
 
 - Documentation site at [mcp-hub.ni-c.de](https://mcp-hub.ni-c.de) — guides for

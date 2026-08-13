@@ -10,7 +10,7 @@ RUN npm run build && npm prune --omit=dev --ignore-scripts
 # Runtime: node + npx for JS servers, uv/uvx + python3 for Python servers,
 # git for servers installed straight from a repository.
 FROM node:26-bookworm-slim@sha256:cd565714d4da3e84bfd341e31448f81d47c6362198f152345297c9c1154e6341
-COPY --from=ghcr.io/astral-sh/uv:latest@sha256:2d890623d310b57771ce840f0da5eed5fc6d657da05ffaa45d82797b53fa3abc /uv /uvx /usr/local/bin/
+COPY --from=ghcr.io/astral-sh/uv:0.12.3@sha256:2d890623d310b57771ce840f0da5eed5fc6d657da05ffaa45d82797b53fa3abc /uv /uvx /usr/local/bin/
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git python3 python3-pip ca-certificates tini \
     && rm -rf /var/lib/apt/lists/*
