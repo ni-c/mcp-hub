@@ -1,8 +1,6 @@
 import { defineConfig } from 'vitepress';
 
-// Project page on github.io, so everything is served under /mcp-hub/.
-const base = '/mcp-hub/';
-const site = 'https://ni-c.github.io/mcp-hub';
+const site = 'https://mcp-hub.ni-c.de';
 const description =
   'Serve many stdio MCP servers from one container: Claude-Code-style config, path-based routing, hub meta-tools and a built-in OAuth 2.1 login for Claude Web.';
 
@@ -10,15 +8,12 @@ export default defineConfig({
   title: 'mcp-hub',
   description,
   lang: 'en-US',
-  base,
   cleanUrls: true,
   lastUpdated: true,
-  sitemap: { hostname: `${site}/` },
+  sitemap: { hostname: site },
 
   head: [
-    // head entries are emitted verbatim — unlike links and assets elsewhere,
-    // they are not rewritten with `base`.
-    ['link', { rel: 'icon', type: 'image/svg+xml', href: `${base}favicon.svg` }],
+    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' }],
     ['meta', { name: 'theme-color', content: '#6366f1' }],
     ['meta', { property: 'og:type', content: 'website' }],
     ['meta', { property: 'og:site_name', content: 'mcp-hub' }],

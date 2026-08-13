@@ -5,9 +5,9 @@
 [![npm downloads](https://img.shields.io/npm/dm/%40ni-c%2Fmcp-hub)](https://www.npmjs.com/package/@ni-c/mcp-hub)
 [![Container](https://img.shields.io/badge/ghcr.io-ni--c%2Fmcp--hub-2496ED?logo=docker&logoColor=white)](https://github.com/ni-c/mcp-hub/pkgs/container/mcp-hub)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Docs](https://img.shields.io/badge/docs-ni--c.github.io%2Fmcp--hub-4f46e5)](https://ni-c.github.io/mcp-hub/)
+[![Docs](https://img.shields.io/badge/docs-mcp--hub.ni--c.de-4f46e5)](https://mcp-hub.ni-c.de)
 
-📖 **Full documentation: <https://ni-c.github.io/mcp-hub/>**
+📖 **Full documentation: <https://mcp-hub.ni-c.de>**
 
 Serve many stdio MCP servers from **one container**, published over HTTPS for
 [Claude Web custom connectors](https://claude.ai), Claude Code and any other

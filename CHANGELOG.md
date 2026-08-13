@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Documentation site at [ni-c.github.io/mcp-hub](https://ni-c.github.io/mcp-hub/) — guides for
+- Documentation site at [mcp-hub.ni-c.de](https://mcp-hub.ni-c.de) — guides for
   configuration, deployment, clients and security, an architecture walkthrough,
   a troubleshooting FAQ and a full endpoint/meta-tool reference. Built with
   VitePress from `docs/`, which carries its own manifest so the runtime image
