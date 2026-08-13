@@ -32,7 +32,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@modelcontextprotocol/server-everything": "^2025.9.25",
+    "@modelcontextprotocol/server-everything": "^2026.7.4",
     "@types/express": "^5.0.0",
     "@types/node": "^26.2.0",
     "@types/supertest": "^7.2.1",
