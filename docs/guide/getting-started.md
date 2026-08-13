@@ -80,14 +80,13 @@ docker run -d --name mcp-hub \
   -e EXTERNAL_URL="https://mcp.example.net" \
   -e PASSWORD_HASH='$2y$10$…' \
   -e TRUSTED_PROXIES="192.168.1.0/24" \
-  -e RESOURCE_BOUND_TOKENS="true" \
   -e PAPERLESS_API_TOKEN="…" \
   -v "$PWD/mcp.json:/config/mcp.json:ro" \
   -v "$PWD/data:/data" \
-  ghcr.io/ni-c/mcp-hub:0.4.0
+  ghcr.io/ni-c/mcp-hub:0.5.0
 ```
 
-Three of those matter more than the rest:
+Two of those matter more than the rest:
 
 - **`EXTERNAL_URL`** is the public HTTPS origin exactly as clients see it, with
   no trailing path. Every OAuth metadata document and every redirect is built
@@ -95,9 +94,10 @@ Three of those matter more than the rest:
 - **`TRUSTED_PROXIES`** lists the addresses allowed to set `X-Forwarded-*`.
   Get it wrong and the login rate limiter counts the wrong IP — see
   [Security](/guide/security#trusted-proxies).
-- **`RESOURCE_BOUND_TOKENS=true`** binds each access token to one endpoint. It
-  is recommended for new installations; the default is `false` only so that
-  existing deployments can migrate without re-authorizing.
+
+Access tokens are bound to one endpoint out of the box — nothing to switch on.
+`RESOURCE_BOUND_TOKENS=false` exists only as a migration mode for deployments
+from 0.4 and earlier; see [Connecting clients](/guide/clients#resource-bound-tokens).
 
 The full list lives in the [environment reference](/reference/environment). A
 Compose file with hardening options is on the

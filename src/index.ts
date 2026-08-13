@@ -21,6 +21,7 @@ export interface HubOptions {
   passwordHash?: string;
   password?: string;
   trustedProxies?: string[];
+  /** Defaults to true; set false only to keep pre-0.5 global tokens working. */
   requireResourceBoundTokens?: boolean;
   mcpBodyLimit?: string;
   mcpRequestsPerMinute?: number;
@@ -39,6 +40,9 @@ export async function createHub(options: HubOptions) {
   if (!Number.isSafeInteger(requestsPerMinute) || requestsPerMinute < 1) throw new Error('mcpRequestsPerMinute must be a positive integer');
   if (!Number.isSafeInteger(maxConcurrentRequests) || maxConcurrentRequests < 1) throw new Error('mcpMaxConcurrentRequests must be a positive integer');
   if (!/^\d+(?:b|kb|mb)$/i.test(options.mcpBodyLimit ?? '1mb')) throw new Error('mcpBodyLimit must use b, kb or mb units');
+  // Bound tokens are the default: an unbound token reaches every MCP path, so
+  // the safe behaviour must be the one you get without asking for it.
+  const requireResource = options.requireResourceBoundTokens ?? true;
   const config = loadConfig(options.configPath);
   const supervisor = new Supervisor(config);
   supervisor.start(); // children come up in the background; paths answer 503 until then
@@ -53,7 +57,7 @@ export async function createHub(options: HubOptions) {
 
   const store = new AuthStore(options.dataPath);
   const provider = new HubOAuthProvider(store, externalUrl, {
-    requireResource: options.requireResourceBoundTokens,
+    requireResource,
     resolveResource: resource => canonicalResourceUrl(resource, origin, watcher.current)
   });
 
@@ -79,18 +83,27 @@ export async function createHub(options: HubOptions) {
       resourceMetadataUrl: `${origin}/.well-known/oauth-protected-resource${req.path === '/' ? '' : req.path}`
     })(req, res, next);
 
-  app.get('/health', bearer, healthHandler(supervisor));
-
-  const requireRouteResource = (req: Request, res: Response, next: NextFunction): void => {
-    const expected = resourceUrlForRoute(origin, String(req.params.name));
+  // A bound token may only reach the resource it was issued for. An unbound one
+  // passes only while binding is not enforced, which is what keeps pre-0.5
+  // deployments working until they have re-authorized their connectors.
+  const requireResourceFor = (expected: (req: Request) => URL) => (req: Request, res: Response, next: NextFunction): void => {
+    const target = expected(req);
     const actual = req.auth?.resource;
-    if ((actual && actual.href !== expected.href) || (options.requireResourceBoundTokens && !actual)) {
+    if ((actual && actual.href !== target.href) || (requireResource && !actual)) {
       res.set('WWW-Authenticate', 'Bearer error="invalid_token", error_description="Access token is not valid for this resource"');
       res.status(401).json({ error: 'invalid_token', error_description: 'Access token is not valid for this resource' });
       return;
     }
     next();
   };
+
+  // /health reports the same fleet-wide view as the /hub aggregate — every
+  // server's name, state and tool count — so it takes the same resource. A
+  // token for one server must not be able to enumerate the others.
+  const hubResource = resourceUrlForRoute(origin, 'hub');
+  app.get('/health', bearer, requireResourceFor(() => hubResource), healthHandler(supervisor));
+
+  const requireRouteResource = requireResourceFor(req => resourceUrlForRoute(origin, String(req.params.name)));
   const gate = new ClientRequestGate(requestsPerMinute, maxConcurrentRequests);
   const parseMcpJson = express.json({ limit: options.mcpBodyLimit ?? '1mb' });
 
@@ -167,13 +180,16 @@ if (isMain) {
     passwordHash: process.env.PASSWORD_HASH,
     password: process.env.PASSWORD,
     trustedProxies: process.env.TRUSTED_PROXIES?.split(',').map(s => s.trim()).filter(Boolean),
-    requireResourceBoundTokens: process.env.RESOURCE_BOUND_TOKENS === 'true' || process.env.RESOURCE_BOUND_TOKENS === '1',
+    requireResourceBoundTokens: process.env.RESOURCE_BOUND_TOKENS !== 'false' && process.env.RESOURCE_BOUND_TOKENS !== '0',
     mcpBodyLimit: process.env.MCP_BODY_LIMIT ?? '1mb',
     mcpRequestsPerMinute: positiveIntegerEnv('MCP_REQUESTS_PER_MINUTE', 120),
     mcpMaxConcurrentRequests: positiveIntegerEnv('MCP_MAX_CONCURRENT_REQUESTS', 4)
   });
-  if (process.env.RESOURCE_BOUND_TOKENS !== 'true' && process.env.RESOURCE_BOUND_TOKENS !== '1') {
-    console.warn('mcp-hub: RESOURCE_BOUND_TOKENS is not enabled — legacy access tokens may call every MCP path');
+  if (process.env.RESOURCE_BOUND_TOKENS === 'false' || process.env.RESOURCE_BOUND_TOKENS === '0') {
+    console.warn(
+      'mcp-hub: RESOURCE_BOUND_TOKENS is disabled — unbound access tokens may call every MCP path. ' +
+        'This is a migration mode for deployments from 0.4 and earlier; remove the setting once every connector has re-authorized.'
+    );
   }
   const httpServer = app.listen(port, () => console.log(`mcp-hub listening on :${port}`));
   httpServer.headersTimeout = positiveIntegerEnv('HTTP_HEADERS_TIMEOUT_MS', 10_000);

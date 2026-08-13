@@ -28,7 +28,10 @@ A server that is not `up` answers `503` with a JSON-RPC error naming its state:
 | Path | Auth | Purpose |
 |---|---|---|
 | `/livez` | none | process liveness; always `200 {"status":"ok"}` while the process runs |
-| `/health` | Bearer | per-server state; `200` when every server is up, `503` otherwise |
+| `/health` | Bearer for `/hub` | per-server state; `200` when every server is up, `503` otherwise |
+
+`/health` reports the same fleet-wide view as the `/hub` aggregate, so it takes
+the same resource: a token issued for one server's path gets `401` here.
 
 `/livez` is what the image `HEALTHCHECK` calls, and it is the endpoint external
 monitoring should poll. A degraded child does **not** make the container

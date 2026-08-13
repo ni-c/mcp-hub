@@ -86,7 +86,7 @@ see [SECURITY.md](SECURITY.md).
 For a custom image, pin every package to an exact version:
 
 ```dockerfile
-FROM ghcr.io/ni-c/mcp-hub:0.3.0
+FROM ghcr.io/ni-c/mcp-hub:0.5.0
 USER root
 RUN npm install -g your-mcp-package@1.2.3
 USER node
@@ -100,7 +100,7 @@ USER node
 | `PASSWORD_HASH` | one of | bcrypt hash of the login password (`htpasswd -bnBC 10 "" 'pw' \| tr -d ':\n'`) |
 | `PASSWORD` | one of | plain-text alternative to `PASSWORD_HASH` |
 | `TRUSTED_PROXIES` | no | comma-separated IPs/CIDRs allowed to set `X-Forwarded-*` (see below) |
-| `RESOURCE_BOUND_TOKENS` | no | require RFC 8707 tokens bound to `/hub` or one `/<name>/mcp`; recommended `true`, legacy default `false` during migration |
+| `RESOURCE_BOUND_TOKENS` | no | RFC 8707 tokens bound to `/hub` or one `/<name>/mcp`, default `true`; set `false` only to keep pre-0.5 unbound tokens working |
 | `MCP_BODY_LIMIT` | no | authenticated MCP JSON body limit, default `1mb` |
 | `MCP_REQUESTS_PER_MINUTE` | no | limit per OAuth client, default `120` |
 | `MCP_MAX_CONCURRENT_REQUESTS` | no | in-flight limit per OAuth client, default `4` |
@@ -115,13 +115,16 @@ USER node
 refresh tokens. **Mount it as a volume** — recreating it invalidates every
 connector authorization.
 
-With `RESOURCE_BOUND_TOKENS=true`, the OAuth client must include the resource
-advertised by the endpoint's RFC 9728 document. A token for `/paperless/mcp`
-then cannot call `/hub` or another server. The shorter `/<name>` route is
-canonicalized to `/<name>/mcp`. Enabling this setting invalidates previously
-issued global access/refresh tokens; clients must authorize again. Without it,
-new clients that send `resource` still receive a bound token, while legacy
-clients remain globally authorized and the hub logs a warning.
+Every access token is bound to one resource. The OAuth client includes the
+resource advertised by the endpoint's RFC 9728 document — no client-side
+configuration needed — and the resulting token is valid only there: a token for
+`/paperless/mcp` cannot call `/hub`, `/health` or another server. The shorter
+`/<name>` route is canonicalized to `/<name>/mcp`.
+
+`RESOURCE_BOUND_TOKENS=false` turns this off and is a migration mode for
+deployments from 0.4 and earlier, where tokens were issued without a resource
+and reach every path. The hub logs a warning while it is set. Removing it
+invalidates those unbound tokens, so every connector authorizes once more.
 
 `TRUSTED_PROXIES` decides what `req.ip` is, and therefore what the login rate
 limiter counts. List **only** your own reverse proxy, and make sure it
@@ -140,7 +143,7 @@ Published on every push to `main` and every `vX.Y.Z` release tag, for
 [package page](https://github.com/ni-c/mcp-hub/pkgs/container/mcp-hub).
 
 ```sh
-docker pull ghcr.io/ni-c/mcp-hub:0.3.0
+docker pull ghcr.io/ni-c/mcp-hub:0.5.0
 ```
 
 Tags: `latest` (tip of `main`), `X.Y.Z` and `X.Y` (releases), and
@@ -155,7 +158,7 @@ With compose, copy the example and point it at the image instead of building:
 ```yaml
 services:
   mcp-hub:
-    image: ghcr.io/ni-c/mcp-hub:0.3.0   # replaces `build: .`; pin a digest in production
+    image: ghcr.io/ni-c/mcp-hub:0.5.0   # replaces `build: .`; pin a digest in production
     # ...rest of docker-compose.example.yml unchanged
 ```
 
@@ -177,7 +180,7 @@ docker run -d --name mcp-hub \
   -e TRUSTED_PROXIES="192.168.1.0/24" \
   -v "$PWD/mcp.json:/config/mcp.json:ro" \
   -v "$PWD/data:/data" \
-  ghcr.io/ni-c/mcp-hub:0.3.0
+  ghcr.io/ni-c/mcp-hub:0.5.0
 ```
 
 Update to a newer image with `docker compose pull && docker compose up -d`
@@ -256,10 +259,10 @@ already-issued access tokens. The next connection needs explicit approval.
 - Upstream auth is fully decoupled from the hub's own OAuth: an expired
   upstream token just marks that one server `down` (503 on its path, visible
   in `/health`) — clients never see the upstream's 401.
-- With `RESOURCE_BOUND_TOKENS=true`, one login can approve multiple connectors
-  but each token is valid only for its requested server or `/hub`. Registration
-  remains open as the MCP specification intends; a client only receives codes
-  after confirmation and only at the confirmed redirect target.
+- One login can approve multiple connectors, but each token is valid only for
+  its requested server or `/hub`. Registration remains open as the MCP
+  specification intends; a client only receives codes after confirmation and
+  only at the confirmed redirect target.
 - Failed logins are rate-limited (10/15 min per IP) and logged as
   `mcp-hub: authentication failure from <ip>` for fail2ban.
 - Auth pages deny framing and carry a restrictive CSP. MCP bodies are parsed

@@ -33,7 +33,7 @@ export default defineConfig({
       { text: 'Guide', link: '/guide/', activeMatch: '/guide/' },
       { text: 'Reference', link: '/reference/endpoints', activeMatch: '/reference/' },
       {
-        text: 'v0.4.0',
+        text: 'v0.5.0',
         items: [
           { text: 'Changelog', link: '/reference/changelog' },
           { text: 'Releases', link: 'https://github.com/ni-c/mcp-hub/releases' },

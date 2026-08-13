@@ -134,19 +134,25 @@ grant.
 
 ## Resource-bound tokens
 
-With `RESOURCE_BOUND_TOKENS=true` (recommended), a token is bound to the single
-resource the client asked for. A token issued for `/paperless/mcp` cannot call
-`/hub` or any other server's path.
+Every token is bound to the single resource the client asked for. A token
+issued for `/paperless/mcp` cannot call `/hub`, `/health` or any other server's
+path — `/health` counts as part of `/hub`, because it reports the same
+fleet-wide view.
 
 Clients discover the right resource identifier from the RFC 9728 document of
-the endpoint they connect to, so this needs no client-side configuration.
+the endpoint they connect to, so this needs no client-side configuration. An
+authorization request that names no resource at all is refused with
+`invalid_target`.
 
-::: warning Turning it on invalidates existing tokens
-Enabling it retires previously issued global access and refresh tokens; every
-connector authorizes once more. Plan for that when migrating an existing
-deployment. With the setting off, new clients that send `resource` still get a
-bound token, legacy clients stay globally authorized, and the hub logs a
-warning at startup.
+::: warning Upgrading from 0.4 or earlier
+Before 0.5.0 this had to be switched on with `RESOURCE_BOUND_TOKENS=true`, and
+tokens issued without a resource reached every path. Those unbound tokens stop
+working the moment binding is enforced, so **every connector authorizes once
+more** after the upgrade.
+
+If you need to postpone that, set `RESOURCE_BOUND_TOKENS=false`. It keeps the
+old behaviour, logs a warning on every start, and is meant to be removed again
+— not to be left in place.
 :::
 
 ## Revoking a client

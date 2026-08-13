@@ -89,8 +89,8 @@ The order of the middleware is deliberate:
 1. **Rate limit** — before anything is parsed, and before an unknown IP is
    inserted into any table.
 2. **Bearer verification** — an EdDSA JWT with a pinned algorithm.
-3. **Resource check** — with `RESOURCE_BOUND_TOKENS=true`, the token's audience
-   must match this endpoint.
+3. **Resource check** — the token's audience must match this endpoint;
+   `/health` shares the `/hub` resource.
 4. **Per-client gate** — requests per minute and in-flight concurrency, keyed
    by OAuth client rather than IP.
 5. **Body parsing** — capped at `MCP_BODY_LIMIT`, and only now, so an

@@ -49,7 +49,8 @@ runtime root filesystem read-only.
       headers ([details below](#trusted-proxies))
 - [ ] `PASSWORD_HASH` rather than a plain-text `PASSWORD`
 - [ ] `/data` on a persistent, private volume
-- [ ] `RESOURCE_BOUND_TOKENS=true`
+- [ ] `RESOURCE_BOUND_TOKENS` left at its default (`true`) — the migration
+      mode is not still switched off
 - [ ] The example's non-root user, dropped capabilities, read-only root
       filesystem, `pids_limit`, memory limit and `no-new-privileges`
 - [ ] `/data/jwt-key.pem`, `/data/state.json`, the MCP config and every
@@ -78,9 +79,9 @@ token.
 **Tokens are short-lived and bound.** Access tokens are EdDSA-signed JWTs valid
 for 15 minutes; the verifier pins the algorithm rather than trusting the token
 header. Refresh tokens rotate, reuse of a retired token revokes its family, and
-a refresh cannot request more scope than the original grant. With
-`RESOURCE_BOUND_TOKENS=true` each token is additionally bound (RFC 8707) to the
-one resource it was issued for.
+a refresh cannot request more scope than the original grant. Each token is
+additionally bound (RFC 8707) to the one resource it was issued for, so a token
+for one server reaches neither another server nor `/hub` and `/health`.
 
 **Revocation works offline.** `mcp-hub-admin clients revoke <id>` removes the
 approval and every refresh token, and sets a marker that rejects already-issued

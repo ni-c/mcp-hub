@@ -58,8 +58,9 @@ Three causes, in order of likelihood:
 1. **`/data` was recreated.** The JWT key and all client records live there. A
    fresh directory means a fresh authorization server as far as clients are
    concerned.
-2. **`RESOURCE_BOUND_TOKENS` was switched to `true`.** That intentionally
-   retires globally-scoped tokens. It is a one-time cost.
+2. **You upgraded to 0.5.0 or later.** Resource binding is on by default now,
+   which intentionally retires tokens issued without a resource. It is a
+   one-time cost; `RESOURCE_BOUND_TOKENS=false` postpones it.
 3. **A client was revoked** with `mcp-hub-admin clients revoke`.
 
 ### I get an *Approve / Deny* page instead of the password prompt
@@ -86,6 +87,9 @@ credentials.
 By design since v0.3.0: `/health` exposes per-server state and sits behind a
 bearer token. Point liveness monitoring at `/livez`, which is unauthenticated
 and returns `{"status":"ok"}`.
+
+Since 0.5.0 the token also has to be the one for `/hub` — `/health` lists every
+server, so a token bound to a single server does not cover it.
 
 ### fail2ban banned my own clients
 

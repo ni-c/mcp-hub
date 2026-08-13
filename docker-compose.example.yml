@@ -19,8 +19,9 @@ services:
       # Networks allowed to set X-Forwarded-* (your reverse proxy).
       TRUSTED_PROXIES: "192.168.1.0/24"
 
-      # Bind every new access token to /hub or one /<name>/mcp resource.
-      RESOURCE_BOUND_TOKENS: "true"
+      # Access tokens are bound to /hub or one /<name>/mcp resource by
+      # default. RESOURCE_BOUND_TOKENS: "false" restores the pre-0.5 behaviour
+      # for a migration period; it is not something to keep.
 
       MCP_BODY_LIMIT: "1mb"
       MCP_REQUESTS_PER_MINUTE: "120"

@@ -177,7 +177,12 @@ beforeAll(async () => {
     externalUrl: 'http://localhost:3000',
     configPath,
     dataPath: path.join(tmpDir, 'data'),
-    password: PASSWORD
+    password: PASSWORD,
+    // Deliberately the pre-0.5 migration mode. One unbound token reaches /hub,
+    // /health and every server, which is what lets the suite below share a
+    // single token — and it keeps that legacy path under test. The default
+    // (bound) behaviour has its own suite further down.
+    requireResourceBoundTokens: false
   });
   await hub.supervisor.waitUntilSettled();
   httpServer = hub.app.listen(0);
@@ -664,5 +669,109 @@ describe('supervisor', () => {
     await hub.supervisor.applyDiff(config, { added: [], removed: ['broken'], changed: [] });
     expect(hub.supervisor.get('broken')).toBeUndefined();
     expect(hub.supervisor.get('everything')).toBe(before); // untouched instance
+  });
+});
+
+/**
+ * The behaviour you get without asking for it since 0.5.0: every token is bound
+ * to exactly one resource. The suite above deliberately runs the opposite mode,
+ * so this one builds its own hub with the plain default.
+ */
+describe('resource-bound tokens (default)', () => {
+  const ORIGIN = 'http://localhost:3000';
+  let boundDir: string;
+  let bound: Awaited<ReturnType<typeof createHub>>;
+  let boundServer: ReturnType<Awaited<ReturnType<typeof createHub>>['app']['listen']>;
+  let boundUrl: string;
+  let hubToken: string;
+  let serverToken: string;
+
+  const boundClient = async (pathname: string, token: string): Promise<Client> => {
+    const client = new Client({ name: 'vitest', version: '0.0.0' });
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL(`${boundUrl}${pathname}`), {
+        requestInit: { headers: { Authorization: `Bearer ${token}` } }
+      })
+    );
+    return client;
+  };
+
+  beforeAll(async () => {
+    boundDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-hub-bound-'));
+    const configPath = path.join(boundDir, 'mcp.json');
+    fs.writeFileSync(configPath, JSON.stringify({ mcpServers: { everything: { command: process.execPath, args: [EVERYTHING] } } }));
+    bound = await createHub({
+      externalUrl: ORIGIN,
+      configPath,
+      dataPath: path.join(boundDir, 'data'),
+      password: PASSWORD
+      // requireResourceBoundTokens intentionally omitted — that is the point.
+    });
+    await bound.supervisor.waitUntilSettled();
+    boundServer = bound.app.listen(0);
+    boundUrl = `http://127.0.0.1:${(boundServer.address() as AddressInfo).port}`;
+    hubToken = (await obtainToken(bound.app, `${ORIGIN}/hub`)).access;
+    serverToken = (await obtainToken(bound.app, `${ORIGIN}/everything/mcp`)).access;
+  }, 30_000);
+
+  afterAll(async () => {
+    boundServer?.close();
+    bound?.watcher.stop();
+    await bound?.supervisor.stop();
+    fs.rmSync(boundDir, { recursive: true, force: true });
+  });
+
+  it('refuses an authorization request that names no resource', async () => {
+    const clientId = (
+      await request(bound.app)
+        .post('/register')
+        .send({ redirect_uris: [REDIRECT_URI], token_endpoint_auth_method: 'none' })
+        .expect(201)
+    ).body.client_id as string;
+    const { challenge } = pkcePair();
+    const response = await request(bound.app)
+      .get('/authorize')
+      .query({
+        client_id: clientId,
+        redirect_uri: REDIRECT_URI,
+        response_type: 'code',
+        code_challenge: challenge,
+        code_challenge_method: 'S256'
+      })
+      .expect(302);
+    expect(new URL(response.headers.location).searchParams.get('error')).toBe('invalid_target');
+  });
+
+  it('canonicalises the short path, so one token serves /<name> and /<name>/mcp', async () => {
+    for (const pathname of ['/everything', '/everything/mcp']) {
+      const client = await boundClient(pathname, serverToken);
+      expect((await client.listTools()).tools.map(t => t.name)).toContain('echo');
+      await client.close();
+    }
+  });
+
+  it('lets a /hub token reach the aggregate and the fleet view', async () => {
+    const client = await boundClient('/hub', hubToken);
+    expect((await client.listTools()).tools.map(t => t.name)).toContain('list_servers');
+    await client.close();
+    await request(bound.app).get('/health').set('Authorization', `Bearer ${hubToken}`).expect(200);
+  });
+
+  it('refuses a /hub token on a server path', async () => {
+    await request(bound.app)
+      .post('/everything/mcp')
+      .set('Authorization', `Bearer ${hubToken}`)
+      .send({ jsonrpc: '2.0', method: 'ping', id: 1 })
+      .expect(401);
+  });
+
+  it('refuses a server token on /hub and on /health', async () => {
+    await request(bound.app)
+      .post('/hub')
+      .set('Authorization', `Bearer ${serverToken}`)
+      .send({ jsonrpc: '2.0', method: 'ping', id: 1 })
+      .expect(401);
+    // /health enumerates every server, so a token for one of them must not read it.
+    await request(bound.app).get('/health').set('Authorization', `Bearer ${serverToken}`).expect(401);
   });
 });

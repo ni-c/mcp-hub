@@ -5,10 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.5.0] - 2026-08-14
 
 ### Changed
 
+- **Breaking: access tokens are bound to one resource by default.**
+  `RESOURCE_BOUND_TOKENS` no longer has to be switched on; RFC 8707 binding is
+  what you get without asking, and the setting only exists to turn it *off*.
+  A token issued for `/paperless/mcp` reaches neither another server nor `/hub`,
+  and an authorization request that names no resource is refused with
+  `invalid_target`.
+
+  **Upgrading:** tokens issued before this release carry no resource and stop
+  working, so every connector authorizes once more. To postpone that, set
+  `RESOURCE_BOUND_TOKENS=false` — it restores the old behaviour and logs a
+  warning on every start. The default also applies to `createHub()` for
+  programmatic use.
+- **Breaking: `/health` requires a token for `/hub`.** It reports the same
+  fleet-wide view as the aggregate — every server's name, state and tool count —
+  so a token bound to a single server no longer reads it. Unauthenticated
+  liveness monitoring belongs on `/livez`, unchanged.
 - The `uv` layer is pinned to a version tag (`0.12.3`) instead of `latest`. The
   digest is unchanged, so the image content is identical; upgrades now arrive as
   readable version bumps rather than opaque digest churn.

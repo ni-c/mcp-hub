@@ -18,7 +18,7 @@ Avoid `npx -y`, unversioned `uvx`, mutable Git branches and other runtime downlo
 
 - Terminate TLS at a trusted reverse proxy and set `EXTERNAL_URL` to the exact public HTTPS origin.
 - Set `TRUSTED_PROXIES` only to proxy addresses that overwrite forwarded headers.
-- Use `PASSWORD_HASH`, a persistent private `/data` volume, and `RESOURCE_BOUND_TOKENS=true`.
+- Use `PASSWORD_HASH` and a persistent private `/data` volume, and leave `RESOURCE_BOUND_TOKENS` at its default; `false` is a migration mode, not a setting to keep.
 - Keep the example's non-root user, dropped capabilities, read-only root filesystem, process/RAM limits and `no-new-privileges` setting.
 - Treat `/data/jwt-key.pem`, `/data/state.json`, the MCP config and all referenced environment variables as secrets.
 - Restrict outbound network access to the destinations required by configured servers.
