@@ -106,14 +106,17 @@ export async function createHub(options: HubOptions) {
     next();
   };
 
+  // The per-client gate sits between bearer auth and the resource check on
+  // every authenticated route: bearer first so only authenticated clients
+  // create gate state, gate before the resource check so rejected-resource
+  // requests count as load too — they cost the same work.
+  const gate = new ClientRequestGate(requestsPerMinute, maxConcurrentRequests);
+
   // /health reports the same fleet-wide view as the /hub aggregate — every
   // server's name, state and tool count — so it takes the same resource. A
-  // token for one server must not be able to enumerate the others. It shares
-  // the per-client gate with the MCP routes; the resource check runs first so
-  // only authenticated requests create gate state.
-  const gate = new ClientRequestGate(requestsPerMinute, maxConcurrentRequests);
+  // token for one server must not be able to enumerate the others.
   const hubResource = resourceUrlForRoute(origin, 'hub');
-  app.get('/health', bearer, requireResourceFor(() => hubResource), gate.middleware, healthHandler(supervisor));
+  app.get('/health', bearer, gate.middleware, requireResourceFor(() => hubResource), healthHandler(supervisor));
 
   const requireRouteResource = requireResourceFor(req => resourceUrlForRoute(origin, String(req.params.name)));
   const parseMcpJson = express.json({ limit: options.mcpBodyLimit ?? '1mb' });
@@ -132,7 +135,7 @@ export async function createHub(options: HubOptions) {
   };
 
   for (const route of ['/:name', '/:name/mcp']) {
-    app.all(route, bearer, requireRouteResource, gate.middleware, parseMcpJson, (req: Request, res: Response, next: NextFunction) =>
+    app.all(route, bearer, gate.middleware, requireRouteResource, parseMcpJson, (req: Request, res: Response, next: NextFunction) =>
       void dispatch(String(req.params.name))(req, res, next).catch(next)
     );
   }
