@@ -48,10 +48,44 @@ export interface PendingAuthorization {
 export interface HubOAuthProviderOptions {
   requireResource?: boolean;
   resolveResource?: (resource: URL) => URL | undefined;
+  /** Bind tokens here when a client sends no resource parameter at all. */
+  defaultResource?: URL;
 }
 
 function sign(value: string, secret: string): string {
   return crypto.createHmac('sha256', secret).update(value).digest('base64url');
+}
+
+/** Distinguishes admin-minted API tokens from interactive OAuth tokens. */
+export const API_TOKEN_SUBJECT = 'mcp-hub-token';
+
+/**
+ * Mint a long-lived, resource-bound API token for clients that cannot do
+ * OAuth (OpenAI Responses API, xAI API, Gemini API, plain-header clients).
+ * The JWT is returned exactly once; only its record (jti) is persisted, which
+ * is what `tokens list` shows and `tokens revoke` deletes.
+ */
+export async function mintApiToken(
+  store: AuthStore,
+  externalUrl: string,
+  resource: URL,
+  days: number,
+  label: string
+): Promise<{ id: string; token: string; expiresAt: number }> {
+  const id = crypto.randomBytes(8).toString('base64url');
+  const now = Math.floor(Date.now() / 1000);
+  const expiresAt = now + days * 86_400;
+  const token = await new SignJWT({})
+    .setProtectedHeader({ alg: 'EdDSA' })
+    .setIssuer(new URL(externalUrl).href)
+    .setAudience(resource.href)
+    .setSubject(API_TOKEN_SUBJECT)
+    .setIssuedAt(now)
+    .setExpirationTime(expiresAt)
+    .setJti(id)
+    .sign(store.privateKey);
+  store.saveApiToken(id, { label, resource: resource.href, createdAt: now, expiresAt });
+  return { id, token, expiresAt };
 }
 
 export class HubOAuthProvider implements OAuthServerProvider {
@@ -73,14 +107,25 @@ export class HubOAuthProvider implements OAuthServerProvider {
     return {
       getClient: clientId => store.getClient(clientId),
       registerClient: client => {
-        const full: OAuthClientInformationFull = {
+        const isPublic = client.token_endpoint_auth_method === 'none';
+        const stored: OAuthClientInformationFull = {
           ...client,
           client_id: crypto.randomBytes(16).toString('base64url'),
-          client_id_issued_at: Math.floor(Date.now() / 1000)
+          client_id_issued_at: Math.floor(Date.now() / 1000),
+          // Secrets never expire: ChatGPT registers once per connector and
+          // never re-registers, so an expiring secret bricks the connector
+          // when it runs out (the SDK default is 30 days).
+          client_secret_expires_at: 0
         };
-        store.saveClient(full);
-        console.log(`mcp-hub: registered OAuth client ${full.client_id} (${full.client_name ?? 'unnamed'})`);
-        return full;
+        // A stored secret makes the SDK demand it on every token request, so a
+        // public client must be persisted without one — but ChatGPT expects a
+        // client_secret in the registration response even for "none" and
+        // refuses its own registration otherwise. Hand it one in the response
+        // only; token requests from public clients ignore it.
+        if (isPublic) delete stored.client_secret;
+        store.saveClient(stored);
+        console.log(`mcp-hub: registered OAuth client ${stored.client_id} (${stored.client_name ?? 'unnamed'})`);
+        return isPublic ? { ...stored, client_secret: crypto.randomBytes(32).toString('hex'), client_secret_expires_at: 0 } : stored;
       }
     };
   }
@@ -330,11 +375,26 @@ export class HubOAuthProvider implements OAuthServerProvider {
     } catch {
       throw new InvalidTokenError('Invalid or expired access token');
     }
+
+    // Admin-minted API token: same signature and audience rules as an OAuth
+    // access token, but revocation lives in its state record — a jti whose
+    // record is gone (revoked or expired) is refused even though the JWT
+    // itself still verifies.
+    if (payload.sub === API_TOKEN_SUBJECT) {
+      if (typeof payload.jti !== 'string' || !this.store.getApiToken(payload.jti)) {
+        throw new InvalidTokenError('Access token has been revoked');
+      }
+      const audience = typeof payload.aud === 'string' ? payload.aud : undefined;
+      const resource = audience ? this.resolveResourceStrict(audience) : undefined;
+      if (!resource) throw new InvalidTokenError('Invalid token audience');
+      return { token, clientId: `token:${payload.jti}`, scopes: [], expiresAt: payload.exp, resource };
+    }
+
     if (payload.sub !== 'mcp-hub-user' || typeof payload.client_id !== 'string') {
       throw new InvalidTokenError('Invalid access token claims');
     }
     const audience = typeof payload.aud === 'string' ? payload.aud : undefined;
-    const resource = audience && audience !== this.externalUrl ? this.resolveResource(new URL(audience)) : undefined;
+    const resource = audience && audience !== this.externalUrl ? this.resolveResourceStrict(audience) : undefined;
     if (!audience || (audience !== this.externalUrl && !resource)) throw new InvalidTokenError('Invalid token audience');
     const issuedMs = typeof payload.issued_ms === 'number' ? payload.issued_ms : (payload.iat ?? 0) * 1000;
     const revokedBefore = this.store.getRevokedBefore(payload.client_id);
@@ -348,6 +408,17 @@ export class HubOAuthProvider implements OAuthServerProvider {
     };
   }
 
+  /** Audience check for already-issued tokens: never falls back to a default. */
+  private resolveResourceStrict(audience: string): URL | undefined {
+    let url: URL;
+    try {
+      url = new URL(audience);
+    } catch {
+      return undefined;
+    }
+    return this.options.resolveResource?.(url);
+  }
+
   async revokeToken(client: OAuthClientInformationFull, request: OAuthTokenRevocationRequest): Promise<void> {
     const record = this.store.getRefreshToken(request.token);
     if (record && record.clientId === client.client_id) this.store.deleteRefreshToken(request.token);
@@ -357,6 +428,11 @@ export class HubOAuthProvider implements OAuthServerProvider {
 
   private resolveResource(resource: URL | undefined): URL | undefined {
     if (!resource) {
+      // Real clients omit the RFC 8707 parameter (older Codex logins, Google
+      // ADK, Gemini Enterprise). DEFAULT_RESOURCE lets the operator route
+      // those onto one chosen resource instead of turning them away — the
+      // token is still bound, never global.
+      if (this.options.defaultResource) return this.options.defaultResource;
       if (this.options.requireResource) throw new InvalidTargetError('A resource indicator is required');
       return undefined;
     }

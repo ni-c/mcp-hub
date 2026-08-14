@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-08-14
+
+### Added
+
+- **API tokens** for clients that cannot do OAuth — the OpenAI Responses API,
+  the xAI API, Gemini's `mcp_server` tool and plain-header clients.
+  `mcp-hub-admin tokens create --resource <name|hub> --days <n>` mints a
+  long-lived, resource-bound token (printed once, never stored); `tokens list`
+  and `tokens revoke` manage the records, and revocation refuses the token
+  immediately even though its signature is still valid.
+- `DEFAULT_RESOURCE`: optionally bind tokens to one chosen resource when an
+  OAuth client sends no RFC 8707 `resource` parameter at all (older Codex
+  logins, Google ADK, Gemini Enterprise) instead of refusing with
+  `invalid_target`. Tokens stay bound either way — never global.
+- OIDC discovery alias: `/.well-known/openid-configuration` (plus the
+  path-inserted form) serves the RFC 8414 document for clients that probe the
+  OIDC path, as the MCP spec expects both to work.
+- Documentation: a [client compatibility](https://mcp-hub.ni-c.de/guide/client-compatibility)
+  page covering OAuth clients, API clients and their per-client quirks.
+
+### Changed
+
+- Registration plays along with ChatGPT's connector behaviour: public clients
+  (`token_endpoint_auth_method: none`) receive a `client_secret` in the
+  registration response — ChatGPT refuses its own registration without one —
+  but the secret is not stored, so correct public clients are unaffected; and
+  client secrets no longer expire (ChatGPT registers once per connector and
+  never re-registers, so the SDK's 30-day default would brick the connector).
+
 ## [0.5.1] - 2026-08-14
 
 ### Added

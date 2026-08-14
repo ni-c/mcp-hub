@@ -130,6 +130,16 @@ export function createAuthRoutes(options: AuthRoutesOptions): Router {
   router.get('/.well-known/oauth-authorization-server/{*splat}', (_req, res) => {
     res.json(asMetadata);
   });
+  // OIDC Discovery alias: some clients (ChatGPT among them) probe
+  // /.well-known/openid-configuration instead of — or before — the RFC 8414
+  // path, and the MCP spec requires clients to support both. The RFC 8414
+  // document is a compatible answer for the fields such clients read.
+  router.get('/.well-known/openid-configuration', (_req, res) => {
+    res.json(asMetadata);
+  });
+  router.get('/.well-known/openid-configuration/{*splat}', (_req, res) => {
+    res.json(asMetadata);
+  });
   router.get('/.well-known/oauth-protected-resource/{*splat}', (req, res) => {
     const suffix = req.path.replace('/.well-known/oauth-protected-resource', '');
     res.json({

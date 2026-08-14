@@ -23,6 +23,8 @@ export interface HubOptions {
   trustedProxies?: string[];
   /** Defaults to true; set false only to keep pre-0.5 global tokens working. */
   requireResourceBoundTokens?: boolean;
+  /** Server name (or "hub") to bind tokens to when a client omits the RFC 8707 resource parameter. */
+  defaultResource?: string;
   mcpBodyLimit?: string;
   mcpRequestsPerMinute?: number;
   mcpMaxConcurrentRequests?: number;
@@ -44,6 +46,12 @@ export async function createHub(options: HubOptions) {
   // the safe behaviour must be the one you get without asking for it.
   const requireResource = options.requireResourceBoundTokens ?? true;
   const config = loadConfig(options.configPath);
+  if (options.defaultResource !== undefined) {
+    const name = options.defaultResource;
+    if (name !== 'hub' && !config.has(name)) {
+      throw new Error(`defaultResource "${name}" is neither "hub" nor a configured server`);
+    }
+  }
   const supervisor = new Supervisor(config);
   supervisor.start(); // children come up in the background; paths answer 503 until then
 
@@ -58,7 +66,8 @@ export async function createHub(options: HubOptions) {
   const store = new AuthStore(options.dataPath);
   const provider = new HubOAuthProvider(store, externalUrl, {
     requireResource,
-    resolveResource: resource => canonicalResourceUrl(resource, origin, watcher.current)
+    resolveResource: resource => canonicalResourceUrl(resource, origin, watcher.current),
+    defaultResource: options.defaultResource !== undefined ? resourceUrlForRoute(origin, options.defaultResource) : undefined
   });
 
   const app = express();
@@ -181,6 +190,7 @@ if (isMain) {
     password: process.env.PASSWORD,
     trustedProxies: process.env.TRUSTED_PROXIES?.split(',').map(s => s.trim()).filter(Boolean),
     requireResourceBoundTokens: process.env.RESOURCE_BOUND_TOKENS !== 'false' && process.env.RESOURCE_BOUND_TOKENS !== '0',
+    defaultResource: process.env.DEFAULT_RESOURCE || undefined,
     mcpBodyLimit: process.env.MCP_BODY_LIMIT ?? '1mb',
     mcpRequestsPerMinute: positiveIntegerEnv('MCP_REQUESTS_PER_MINUTE', 120),
     mcpMaxConcurrentRequests: positiveIntegerEnv('MCP_MAX_CONCURRENT_REQUESTS', 4)
@@ -190,6 +200,9 @@ if (isMain) {
       'mcp-hub: RESOURCE_BOUND_TOKENS is disabled — unbound access tokens may call every MCP path. ' +
         'This is a migration mode for deployments from 0.4 and earlier; remove the setting once every connector has re-authorized.'
     );
+  }
+  if (process.env.DEFAULT_RESOURCE) {
+    console.log(`mcp-hub: clients that send no resource parameter are bound to "${process.env.DEFAULT_RESOURCE}"`);
   }
   const httpServer = app.listen(port, () => console.log(`mcp-hub listening on :${port}`));
   httpServer.headersTimeout = positiveIntegerEnv('HTTP_HEADERS_TIMEOUT_MS', 10_000);

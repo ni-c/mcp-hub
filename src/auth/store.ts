@@ -23,6 +23,19 @@ interface ConsumedRefreshToken {
   expiresAt: number; // epoch seconds
 }
 
+/**
+ * A long-lived API token minted by the admin CLI for clients that cannot do
+ * OAuth (OpenAI Responses API, xAI API, Gemini API, header-only clients). The
+ * JWT itself is never stored — this record is what makes it listable and
+ * revocable; verification refuses a jti with no live record.
+ */
+export interface ApiTokenRecord {
+  label: string;
+  resource: string; // canonical resource URL the token is bound to
+  createdAt: number; // epoch seconds
+  expiresAt: number; // epoch seconds
+}
+
 interface PersistedState {
   cookieSecret: string;
   clients: Record<string, OAuthClientInformationFull>;
@@ -30,6 +43,7 @@ interface PersistedState {
   approvals: Record<string, ClientApproval>; // keyed by client_id
   consumedRefreshTokens: Record<string, ConsumedRefreshToken>; // keyed by sha256(token)
   revokedBefore: Record<string, number>; // client_id -> epoch milliseconds
+  apiTokens: Record<string, ApiTokenRecord>; // keyed by token id (jti)
 }
 
 /**
@@ -70,7 +84,8 @@ export class AuthStore {
       refreshTokens: {},
       approvals: {},
       consumedRefreshTokens: {},
-      revokedBefore: {}
+      revokedBefore: {},
+      apiTokens: {}
     };
     if (!restored) this.persist();
   }
@@ -97,7 +112,8 @@ export class AuthStore {
         refreshTokens: parsed.refreshTokens ?? {},
         approvals: parsed.approvals ?? {},
         consumedRefreshTokens: parsed.consumedRefreshTokens ?? {},
-        revokedBefore: parsed.revokedBefore ?? {}
+        revokedBefore: parsed.revokedBefore ?? {},
+        apiTokens: parsed.apiTokens ?? {}
       };
     } catch (error) {
       const backup = `${statePath}.corrupt-${Date.now()}`;
@@ -123,6 +139,9 @@ export class AuthStore {
     }
     for (const [hash, record] of Object.entries(this.state.consumedRefreshTokens)) {
       if (record.expiresAt < now) delete this.state.consumedRefreshTokens[hash];
+    }
+    for (const [id, record] of Object.entries(this.state.apiTokens)) {
+      if (record.expiresAt < now) delete this.state.apiTokens[id];
     }
   }
 
@@ -252,5 +271,29 @@ export class AuthStore {
     }
     this.persist();
     return revoked;
+  }
+
+  saveApiToken(id: string, record: ApiTokenRecord): void {
+    this.state.apiTokens[id] = record;
+    this.persist();
+  }
+
+  /** Undefined for unknown, revoked or expired ids — all three mean "refuse". */
+  getApiToken(id: string): ApiTokenRecord | undefined {
+    const record = this.state.apiTokens[id];
+    if (record && record.expiresAt < Math.floor(Date.now() / 1000)) return undefined;
+    return record;
+  }
+
+  listApiTokens(): Record<string, ApiTokenRecord> {
+    return structuredClone(this.state.apiTokens);
+  }
+
+  /** Deleting the record is the revocation: verification refuses unknown ids. */
+  revokeApiToken(id: string): boolean {
+    if (!this.state.apiTokens[id]) return false;
+    delete this.state.apiTokens[id];
+    this.persist();
+    return true;
   }
 }

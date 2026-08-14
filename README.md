@@ -101,6 +101,7 @@ USER node
 | `PASSWORD` | one of | plain-text alternative to `PASSWORD_HASH` |
 | `TRUSTED_PROXIES` | no | comma-separated IPs/CIDRs allowed to set `X-Forwarded-*` (see below) |
 | `RESOURCE_BOUND_TOKENS` | no | RFC 8707 tokens bound to `/hub` or one `/<name>/mcp`, default `true`; set `false` only to keep pre-0.5 unbound tokens working |
+| `DEFAULT_RESOURCE` | no | server name (or `hub`) to bind tokens to when a client sends no `resource` parameter; unset → such requests are refused |
 | `MCP_BODY_LIMIT` | no | authenticated MCP JSON body limit, default `1mb` |
 | `MCP_REQUESTS_PER_MINUTE` | no | limit per OAuth client, default `120` |
 | `MCP_MAX_CONCURRENT_REQUESTS` | no | in-flight limit per OAuth client, default `4` |
@@ -232,6 +233,21 @@ docker compose up -d
 
 Revocation removes the approval and all refresh tokens and immediately rejects
 already-issued access tokens. The next connection needs explicit approval.
+
+For clients that cannot do OAuth at all — the OpenAI Responses API, the xAI
+API, Gemini's `mcp_server` tool, plain-header clients — the same CLI mints
+long-lived, resource-bound API tokens:
+
+```sh
+docker compose run --rm --no-deps mcp-hub \
+  node /app/dist/admin.js tokens create --resource hub --days 90 --label "openai"
+docker compose run --rm --no-deps mcp-hub node /app/dist/admin.js tokens list
+docker compose run --rm --no-deps mcp-hub node /app/dist/admin.js tokens revoke TOKEN_ID
+```
+
+The token is printed once and never stored; `tokens revoke` takes effect
+immediately. Per-client recipes:
+[client compatibility](https://mcp-hub.ni-c.de/guide/client-compatibility).
 
 ## Endpoints
 

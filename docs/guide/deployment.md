@@ -321,3 +321,26 @@ again.
 Installed from npm, the same commands are `mcp-hub-admin clients list` and
 `mcp-hub-admin clients revoke <id>` with `DATA_PATH` pointing at the state
 directory.
+
+## API tokens
+
+The same offline CLI mints, lists and revokes the long-lived tokens used by
+[API clients that cannot do OAuth](/guide/client-compatibility#camp-2-api-clients-use-an-api-token):
+
+```sh
+docker compose stop mcp-hub
+docker compose run --rm --no-deps mcp-hub \
+  node /app/dist/admin.js tokens create --resource hub --days 90 --label "openai"
+docker compose run --rm --no-deps mcp-hub node /app/dist/admin.js tokens list
+docker compose run --rm --no-deps mcp-hub node /app/dist/admin.js tokens revoke TOKEN_ID
+docker compose up -d
+```
+
+`tokens create` needs `EXTERNAL_URL` in the environment (compose provides it)
+and prints the token exactly once — only its metadata record is stored, which
+is what makes it listable and revocable. Revocation takes effect immediately:
+the record is gone, so verification refuses the JWT even before it expires.
+
+Stopping the hub first is not just about concurrent writers: the hub reads
+`state.json` once at startup, so a token minted while it runs is not accepted
+until the next restart.

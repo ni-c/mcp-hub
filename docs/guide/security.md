@@ -87,6 +87,15 @@ for one server reaches neither another server nor `/hub` and `/health`.
 approval and every refresh token, and sets a marker that rejects already-issued
 access tokens immediately — no waiting for the 15-minute expiry.
 
+**API tokens are the deliberate exception.** `mcp-hub-admin tokens create`
+mints long-lived tokens for [clients that cannot do
+OAuth](/guide/client-compatibility#camp-2-api-clients-use-an-api-token) —
+no refresh, no rotation, one resource. The mitigations are procedural: short
+lifetimes, one token per integration, immediate revocation via
+`tokens revoke` (verification refuses a revoked token even though its
+signature still checks out). A leaked API token is equivalent to a leaked
+password scoped to one resource.
+
 ## Rate limits
 
 | Endpoint | Per IP | Global |

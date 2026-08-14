@@ -27,6 +27,7 @@ it. Use it only for a throwaway test.
 |---|---|---|
 | `TRUSTED_PROXIES` | *(unset)* | Comma-separated IPs/CIDRs allowed to set `X-Forwarded-*`. Decides what `req.ip` is, and therefore what the login rate limiter counts. Unset → a startup warning and per-IP limiting degrades to one global counter. See [Security](/guide/security#trusted-proxies). |
 | `RESOURCE_BOUND_TOKENS` | `true` | RFC 8707 resource binding: a token is valid only for `/hub` (which covers `/health`) or the one `/<name>/mcp` it was issued for. `false`/`0` restores the pre-0.5 behaviour where unbound tokens reach every path — a migration mode that logs a warning on every start. |
+| `DEFAULT_RESOURCE` | *(unset)* | Server name (or `hub`) to bind a token to when the OAuth client sends **no** `resource` parameter at all (older Codex logins, Google ADK, Gemini Enterprise). Unset → such requests are refused with `invalid_target`. The token is still bound either way — never global. |
 
 ## Limits and timeouts
 

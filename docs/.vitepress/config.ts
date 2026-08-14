@@ -50,7 +50,8 @@ export default defineConfig({
           items: [
             { text: 'What is mcp-hub?', link: '/guide/' },
             { text: 'Getting started', link: '/guide/getting-started' },
-            { text: 'Connecting clients', link: '/guide/clients' }
+            { text: 'Connecting clients', link: '/guide/clients' },
+            { text: 'Client compatibility', link: '/guide/client-compatibility' }
           ]
         },
         {
