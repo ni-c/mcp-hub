@@ -22,10 +22,12 @@ jobs:
       - name: Sync version from package.json into server.json
         run: |
           version="$(node -p "require('./package.json').version")"
+          # The registry rejects a 'version' field on OCI packages — their
+          # version lives in the identifier tag instead.
           jq --arg v "$version" \
             '.version = $v
-             | (.packages[] | .version?) |= $v
-             | (.packages[] | select(.registryType == "oci") | .identifier) |= sub(":[^:]*$"; ":" + $v)' \
+             | (.packages[] | select(.registryType != "oci") | .version) = $v
+             | (.packages[] | select(.registryType == "oci")) |= (del(.version) | .identifier |= sub(":[^:]*$"; ":" + $v))' \
             server.json > server.tmp && mv server.tmp server.json
           jq -r '.packages[] | "\(.registryType) \(.identifier) \(.version // "-")"' server.json
       - name: Install mcp-publisher
