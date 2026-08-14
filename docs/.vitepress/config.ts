@@ -1,4 +1,12 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitepress';
+
+// The nav version comes from the root package.json — it was a hand-maintained
+// string once and promptly went stale on the next release.
+const { version } = JSON.parse(readFileSync(fileURLToPath(new URL('../../package.json', import.meta.url)), 'utf8')) as {
+  version: string;
+};
 
 const site = 'https://mcp-hub.ni-c.de';
 const description =
@@ -33,7 +41,7 @@ export default defineConfig({
       { text: 'Guide', link: '/guide/', activeMatch: '/guide/' },
       { text: 'Reference', link: '/reference/endpoints', activeMatch: '/reference/' },
       {
-        text: 'v0.5.0',
+        text: `v${version}`,
         items: [
           { text: 'Changelog', link: '/reference/changelog' },
           { text: 'Releases', link: 'https://github.com/ni-c/mcp-hub/releases' },
