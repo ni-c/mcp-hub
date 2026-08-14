@@ -108,12 +108,14 @@ export async function createHub(options: HubOptions) {
 
   // /health reports the same fleet-wide view as the /hub aggregate — every
   // server's name, state and tool count — so it takes the same resource. A
-  // token for one server must not be able to enumerate the others.
+  // token for one server must not be able to enumerate the others. It shares
+  // the per-client gate with the MCP routes; the resource check runs first so
+  // only authenticated requests create gate state.
+  const gate = new ClientRequestGate(requestsPerMinute, maxConcurrentRequests);
   const hubResource = resourceUrlForRoute(origin, 'hub');
-  app.get('/health', bearer, requireResourceFor(() => hubResource), healthHandler(supervisor));
+  app.get('/health', bearer, requireResourceFor(() => hubResource), gate.middleware, healthHandler(supervisor));
 
   const requireRouteResource = requireResourceFor(req => resourceUrlForRoute(origin, String(req.params.name)));
-  const gate = new ClientRequestGate(requestsPerMinute, maxConcurrentRequests);
   const parseMcpJson = express.json({ limit: options.mcpBodyLimit ?? '1mb' });
 
   const dispatch = (name: string) => async (req: Request, res: Response, next: NextFunction) => {

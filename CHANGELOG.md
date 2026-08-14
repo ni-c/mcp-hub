@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `/health` runs through the same per-client request gate as the MCP routes.
+  It had bearer auth and the resource check but no rate limit, so a token
+  holder could hammer it without bound (CodeQL `js/missing-rate-limiting`).
+
 ### Changed
 
 - README, package descriptions and documentation no longer present Claude Web

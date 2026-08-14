@@ -95,4 +95,28 @@ describe('API tokens', () => {
     expect(info.clientId).toBe(`token:${hubToken.id}`);
     expect(info.resource?.href).toBe(`${ORIGIN}/hub`);
   });
+
+  it('rate-limits /health through the same per-client gate as the MCP routes', async () => {
+    const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-hub-healthgate-'));
+    const configPath = path.join(dir2, 'mcp.json');
+    fs.writeFileSync(configPath, JSON.stringify({ mcpServers: {} }));
+    const limited = await createHub({
+      externalUrl: ORIGIN,
+      configPath,
+      dataPath: path.join(dir2, 'data'),
+      password: PASSWORD,
+      mcpRequestsPerMinute: 2
+    });
+    try {
+      const token = await mintApiToken(limited.store, ORIGIN, new URL('/hub', ORIGIN), 30, 'gate');
+      await request(limited.app).get('/health').set('Authorization', `Bearer ${token.token}`).expect(200);
+      await request(limited.app).get('/health').set('Authorization', `Bearer ${token.token}`).expect(200);
+      const blocked = await request(limited.app).get('/health').set('Authorization', `Bearer ${token.token}`).expect(429);
+      expect(blocked.headers['retry-after']).toBeDefined();
+    } finally {
+      limited.watcher.stop();
+      await limited.supervisor.stop();
+      fs.rmSync(dir2, { recursive: true, force: true });
+    }
+  });
 });
