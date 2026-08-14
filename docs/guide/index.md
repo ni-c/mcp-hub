@@ -1,16 +1,17 @@
 # What is mcp-hub?
 
 mcp-hub serves many [Model Context Protocol](https://modelcontextprotocol.io)
-servers from **one container**, published over HTTPS for Claude Web custom
-connectors, Claude Code and any other Streamable-HTTP MCP client — behind a
-built-in OAuth 2.1 authorization server protected by a single password.
+servers from **one container**, published over HTTPS for ChatGPT connectors,
+Claude (Web and Code), Mistral Le Chat, Cursor and any other Streamable-HTTP
+MCP client — behind a built-in OAuth 2.1 authorization server protected by a
+single password, with API tokens for clients that cannot do OAuth.
 
 ## The problem
 
 Most MCP servers are stdio programs. They read JSON-RPC on stdin and write it
 on stdout, and they assume a client that starts them as a child process. That
-works beautifully on a laptop and not at all for a hosted client: Claude Web
-connectors speak HTTP and expect OAuth.
+works beautifully on a laptop and not at all for a hosted client: ChatGPT
+connectors, Claude Web and Le Chat speak HTTP and expect OAuth.
 
 The usual fix is to wrap each stdio server in its own auth proxy. That works,
 but the cost per server is real:

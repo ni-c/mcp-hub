@@ -1,7 +1,10 @@
 # Getting started
 
-This walks from nothing to a working connector in Claude. It assumes Docker and
-a reverse proxy that already terminates TLS for a hostname you control.
+This walks from nothing to a working connector, with Claude as the example
+client — ChatGPT, Le Chat, Cursor and the rest work the same way and have
+their own notes on the [client compatibility](/guide/client-compatibility)
+page. It assumes Docker and a reverse proxy that already terminates TLS for a
+hostname you control.
 
 ## What you need
 
@@ -83,7 +86,7 @@ docker run -d --name mcp-hub \
   -e PAPERLESS_API_TOKEN="…" \
   -v "$PWD/mcp.json:/config/mcp.json:ro" \
   -v "$PWD/data:/data" \
-  ghcr.io/ni-c/mcp-hub:0.5.0
+  ghcr.io/ni-c/mcp-hub:0.6.0
 ```
 
 Two of those matter more than the rest:

@@ -4,7 +4,7 @@ layout: home
 hero:
   name: mcp-hub
   text: One container for all your MCP servers
-  tagline: Serve many stdio MCP servers over one HTTPS endpoint — with the Claude Code config format you already have, path-based routing, a context-friendly aggregate endpoint and a built-in OAuth 2.1 login.
+  tagline: Serve many stdio MCP servers over one HTTPS endpoint for ChatGPT, Claude, Le Chat, Cursor and any other MCP client — with the Claude Code config format you already have, path-based routing, a context-friendly aggregate endpoint, OAuth 2.1 and API tokens.
   image:
     src: /logo.svg
     alt: mcp-hub
@@ -86,7 +86,7 @@ features:
 
   <rect class="node" x="4" y="124" width="160" height="72" rx="10" />
   <text x="84" y="153" text-anchor="middle" class="label-title">MCP client</text>
-  <text x="84" y="172" text-anchor="middle" class="label-muted">Claude Web · Claude Code</text>
+  <text x="84" y="172" text-anchor="middle" class="label-muted">ChatGPT · Claude · Cursor · …</text>
 
   <rect class="node" x="196" y="124" width="124" height="72" rx="10" />
   <text x="258" y="153" text-anchor="middle" class="label-title">Reverse proxy</text>
@@ -142,12 +142,13 @@ docker run -d --name mcp-hub \
   -e TRUSTED_PROXIES="192.168.1.0/24" \
   -v "$PWD/mcp.json:/config/mcp.json:ro" \
   -v "$PWD/data:/data" \
-  ghcr.io/ni-c/mcp-hub:0.5.0
+  ghcr.io/ni-c/mcp-hub:0.6.0
 ```
 
 Point a reverse proxy with a TLS certificate at `127.0.0.1:7690`, then add
-`https://mcp.example.net/hub` as a custom connector in Claude and log in once
-with the password.
+`https://mcp.example.net/hub` as a custom connector in your MCP client —
+ChatGPT, Claude, Le Chat, Cursor and friends — and log in once with the
+password.
 
 [Full walkthrough →](/guide/getting-started)
 
@@ -158,7 +159,7 @@ with the password.
 | understand the problem it solves | [What is mcp-hub?](/guide/) |
 | get a working deployment | [Getting started](/guide/getting-started) · [Deployment](/guide/deployment) |
 | write your `mcp.json` | [Configuration](/guide/configuration) |
-| hook up Claude Web or Claude Code | [Connecting clients](/guide/clients) |
+| connect ChatGPT, Claude, Cursor, an API… | [Connecting clients](/guide/clients) · [Client compatibility](/guide/client-compatibility) |
 | run it safely on the public internet | [Security](/guide/security) |
 | know what happens inside | [Architecture](/guide/architecture) |
 | fix something that is misbehaving | [FAQ & troubleshooting](/guide/faq) |

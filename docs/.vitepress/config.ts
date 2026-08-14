@@ -2,7 +2,7 @@ import { defineConfig } from 'vitepress';
 
 const site = 'https://mcp-hub.ni-c.de';
 const description =
-  'Serve many stdio MCP servers from one container: Claude-Code-style config, path-based routing, hub meta-tools and a built-in OAuth 2.1 login for Claude Web.';
+  'Serve many stdio MCP servers from one container: Claude-Code-style config, path-based routing, hub meta-tools, and OAuth 2.1 + API tokens for ChatGPT, Claude and any Streamable-HTTP MCP client.';
 
 export default defineConfig({
   title: 'mcp-hub',

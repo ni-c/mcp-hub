@@ -9,7 +9,7 @@ Recommended. Multi-arch images (`linux/amd64`, `linux/arm64`) are published on
 every push to `main` and on every `vX.Y.Z` release tag.
 
 ```sh
-docker pull ghcr.io/ni-c/mcp-hub:0.5.0
+docker pull ghcr.io/ni-c/mcp-hub:0.6.0
 ```
 
 | Tag | Points at |
@@ -21,7 +21,7 @@ docker pull ghcr.io/ni-c/mcp-hub:0.5.0
 
 Use a version tag, not `latest`, so updates happen when you decide. For a truly
 immutable deployment, record the resolved digest from `docker image inspect`
-and pin `ghcr.io/ni-c/mcp-hub:0.5.0@sha256:…`.
+and pin `ghcr.io/ni-c/mcp-hub:0.6.0@sha256:…`.
 
 Update with `docker compose pull && docker compose up -d`.
 
@@ -60,7 +60,7 @@ The parts that matter:
 ```yaml
 services:
   mcp-hub:
-    image: ghcr.io/ni-c/mcp-hub:0.5.0   # pin a digest in production
+    image: ghcr.io/ni-c/mcp-hub:0.6.0   # pin a digest in production
     container_name: mcp-hub
     restart: unless-stopped
 
@@ -179,7 +179,7 @@ The published image contains Node, `npx`, `uv`/`uvx`, Python 3 and `git`, but
 no MCP servers. Install the ones you need at exact versions in your own layer:
 
 ```dockerfile
-FROM ghcr.io/ni-c/mcp-hub:0.5.0
+FROM ghcr.io/ni-c/mcp-hub:0.6.0
 USER root
 RUN npm install -g paperless-mcp@1.2.3 \
  && uv tool install --python 3.12 some-python-mcp==0.4.1

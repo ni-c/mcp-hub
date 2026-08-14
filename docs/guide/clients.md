@@ -2,7 +2,9 @@
 
 Every MCP endpoint the hub exposes is Streamable HTTP behind an OAuth 2.1
 bearer token. Any client that supports remote MCP servers with OAuth can use
-it.
+it — Claude is shown here as the reference; the full per-client list, from
+ChatGPT to the header-only APIs, lives on the
+[client compatibility](/guide/client-compatibility) page.
 
 ## Which URL to register
 

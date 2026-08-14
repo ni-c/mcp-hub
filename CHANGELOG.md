@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- README, package descriptions and documentation no longer present Claude Web
+  as the only client: the hub serves ChatGPT connectors, Claude, Mistral
+  Le Chat, Cursor, LibreChat and any other Streamable-HTTP MCP client, plus
+  API-token access for the OpenAI, xAI and Gemini APIs. Wording only.
+
 ## [0.6.0] - 2026-08-14
 
 ### Added

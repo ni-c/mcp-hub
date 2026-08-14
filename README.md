@@ -10,12 +10,14 @@
 📖 **Full documentation: <https://mcp-hub.ni-c.de>**
 
 Serve many stdio MCP servers from **one container**, published over HTTPS for
-[Claude Web custom connectors](https://claude.ai), Claude Code and any other
-Streamable-HTTP MCP client — with a built-in OAuth 2.1 login protected by a
-single password.
+ChatGPT connectors, Claude (Web and Code), Mistral Le Chat, Cursor, LibreChat
+and any other Streamable-HTTP MCP client — with a built-in OAuth 2.1 login
+protected by a single password, plus long-lived API tokens for clients that
+cannot do OAuth (OpenAI Responses API, xAI API, Gemini API). Per-client
+recipes: [client compatibility](https://mcp-hub.ni-c.de/guide/client-compatibility).
 
 ```
-Claude ──TLS──> reverse proxy ──> mcp-hub (one Node process)
+MCP client ─TLS─> reverse proxy ──> mcp-hub (one Node process)
                                    ├─ OAuth 2.1 AS (DCR, PKCE, password login)
                                    ├─ /<name>, /<name>/mcp   one path per server
                                    ├─ /hub                   4 meta-tools for all servers
@@ -86,7 +88,7 @@ see [SECURITY.md](SECURITY.md).
 For a custom image, pin every package to an exact version:
 
 ```dockerfile
-FROM ghcr.io/ni-c/mcp-hub:0.5.0
+FROM ghcr.io/ni-c/mcp-hub:0.6.0
 USER root
 RUN npm install -g your-mcp-package@1.2.3
 USER node
@@ -144,7 +146,7 @@ Published on every push to `main` and every `vX.Y.Z` release tag, for
 [package page](https://github.com/ni-c/mcp-hub/pkgs/container/mcp-hub).
 
 ```sh
-docker pull ghcr.io/ni-c/mcp-hub:0.5.0
+docker pull ghcr.io/ni-c/mcp-hub:0.6.0
 ```
 
 Tags: `latest` (tip of `main`), `X.Y.Z` and `X.Y` (releases), and
@@ -159,7 +161,7 @@ With compose, copy the example and point it at the image instead of building:
 ```yaml
 services:
   mcp-hub:
-    image: ghcr.io/ni-c/mcp-hub:0.5.0   # replaces `build: .`; pin a digest in production
+    image: ghcr.io/ni-c/mcp-hub:0.6.0   # replaces `build: .`; pin a digest in production
     # ...rest of docker-compose.example.yml unchanged
 ```
 
@@ -181,7 +183,7 @@ docker run -d --name mcp-hub \
   -e TRUSTED_PROXIES="192.168.1.0/24" \
   -v "$PWD/mcp.json:/config/mcp.json:ro" \
   -v "$PWD/data:/data" \
-  ghcr.io/ni-c/mcp-hub:0.5.0
+  ghcr.io/ni-c/mcp-hub:0.6.0
 ```
 
 Update to a newer image with `docker compose pull && docker compose up -d`
@@ -212,9 +214,13 @@ Reverse-proxy requirements: TLS termination, WebSockets/SSE allowed (proxy
 buffering off, a request timeout above 310 seconds, a request-body limit at or
 below `MCP_BODY_LIMIT`, and pass `X-Forwarded-Proto`/`Host`.
 
-Connect from Claude Web: add a custom connector with URL
-`https://<host>/hub` (or `https://<host>/<name>/mcp` for one server), log in
-once with the password. Claude Code: `claude mcp add -t http name https://<host>/<name>/mcp`.
+Connect a client: add `https://<host>/hub` (or `https://<host>/<name>/mcp`
+for one server) as a custom connector — in ChatGPT (developer mode), Claude
+Web, Mistral Le Chat, Cursor, LibreChat or any other OAuth-capable MCP client —
+and log in once with the password. Claude Code:
+`claude mcp add -t http name https://<host>/<name>/mcp`. API-only clients
+(OpenAI Responses API, xAI, Gemini API) use an admin-minted token instead —
+see [client compatibility](https://mcp-hub.ni-c.de/guide/client-compatibility).
 
 Each client is confirmed once. Entering the password approves the client that
 asked; while a login session is still valid, a client you have not seen before
