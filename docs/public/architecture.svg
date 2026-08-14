@@ -1,0 +1,80 @@
+<svg viewBox="0 0 800 320" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Request flow from an MCP client through a reverse proxy into mcp-hub and on to its child servers">
+  <!-- Standalone copy of the inline diagram in docs/index.md — keep the
+       geometry in sync. This file is embedded by the README and follows the
+       OS colour scheme; the inline version follows the docs theme toggle. -->
+  <style>
+    text { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; font-size: 13px; fill: #3c3c43; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+    .title { font-size: 13.5px; font-weight: 600; }
+    .muted { fill: #64748b; font-size: 11.5px; }
+    .node { fill: #f8fafc; stroke: #94a3b8; stroke-width: 1.25; }
+    .accentbox { fill: rgba(99, 102, 241, 0.12); stroke: #4f46e5; stroke-width: 1.5; }
+    .edge { stroke: #cbd5e1; stroke-width: 1.5; fill: none; }
+    .edgeaccent { stroke: #4f46e5; stroke-width: 1.75; fill: none; }
+    .dashed { stroke-dasharray: 5 4; }
+    #ah path { fill: #cbd5e1; }
+    #ahaccent path { fill: #4f46e5; }
+    @media (prefers-color-scheme: dark) {
+      text { fill: #dfdfd6; }
+      .muted { fill: #94a3b8; }
+      .node { fill: rgba(148, 163, 184, 0.08); stroke: #64748b; }
+      .accentbox { fill: rgba(129, 140, 248, 0.14); stroke: #a5b4fc; }
+      .edge { stroke: #475569; }
+      .edgeaccent { stroke: #a5b4fc; }
+      #ah path { fill: #475569; }
+      #ahaccent path { fill: #a5b4fc; }
+    }
+  </style>
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" />
+    </marker>
+    <marker id="ahaccent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" />
+    </marker>
+  </defs>
+
+  <rect class="node" x="4" y="124" width="150" height="72" rx="10" />
+  <text x="79" y="149" text-anchor="middle" class="title">MCP client</text>
+  <text x="79" y="167" text-anchor="middle" class="muted" font-size="10.5">ChatGPT · Claude</text>
+  <text x="79" y="182" text-anchor="middle" class="muted" font-size="10.5">Cursor · Le Chat …</text>
+
+  <rect class="node" x="200" y="124" width="124" height="72" rx="10" />
+  <text x="262" y="153" text-anchor="middle" class="title">Reverse proxy</text>
+  <text x="262" y="172" text-anchor="middle" class="muted">TLS termination</text>
+
+  <rect class="accentbox" x="368" y="24" width="220" height="272" rx="14" />
+  <text x="478" y="50" text-anchor="middle" class="title">mcp-hub</text>
+  <text x="478" y="68" text-anchor="middle" class="muted">one Node process</text>
+
+  <rect class="node" x="384" y="84" width="188" height="44" rx="8" />
+  <text x="478" y="111" text-anchor="middle" class="mono">OAuth 2.1 AS</text>
+
+  <rect class="node" x="384" y="140" width="188" height="44" rx="8" />
+  <text x="478" y="167" text-anchor="middle" class="mono">/hub · /&lt;name&gt;/mcp</text>
+
+  <rect class="node" x="384" y="196" width="188" height="44" rx="8" />
+  <text x="478" y="223" text-anchor="middle" class="mono">supervisor</text>
+
+  <text x="478" y="268" text-anchor="middle" class="muted">ping · backoff restart · hot reload</text>
+
+  <rect class="node" x="650" y="52" width="146" height="56" rx="10" />
+  <text x="723" y="76" text-anchor="middle" class="mono">paperless</text>
+  <text x="723" y="94" text-anchor="middle" class="muted">stdio child</text>
+
+  <rect class="node" x="650" y="132" width="146" height="56" rx="10" />
+  <text x="723" y="156" text-anchor="middle" class="mono">calendar</text>
+  <text x="723" y="174" text-anchor="middle" class="muted">stdio child</text>
+
+  <rect class="node" x="650" y="212" width="146" height="56" rx="10" />
+  <text x="723" y="236" text-anchor="middle" class="mono">homeassistant</text>
+  <text x="723" y="254" text-anchor="middle" class="muted">remote http/sse</text>
+
+  <path class="edgeaccent" d="M154 160 L194 160" marker-end="url(#ahaccent)" />
+  <text x="174" y="149" text-anchor="middle" class="muted">TLS</text>
+  <path class="edgeaccent" d="M324 160 L362 160" marker-end="url(#ahaccent)" />
+
+  <path class="edge" d="M588 218 C 612 218, 616 80, 632 80 L644 80" marker-end="url(#ah)" />
+  <path class="edge" d="M588 218 C 612 218, 616 160, 632 160 L644 160" marker-end="url(#ah)" />
+  <path class="edge dashed" d="M588 218 C 612 218, 616 240, 632 240 L644 240" marker-end="url(#ah)" />
+</svg>

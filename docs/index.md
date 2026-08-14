@@ -64,16 +64,19 @@ features:
       src: /icons/stateless.svg
       width: 26
       height: 26
-    title: No database, no session state
-    details: State is one JSON file plus a JWT key on a volume. The transport is stateless, so a client that reconnects without closing its session cannot leak processes.
+    title: Light enough for a Raspberry Pi
+    details: One Node process, no database — state is one JSON file plus a JWT key on a volume — and a stateless transport that cannot leak processes. Multi-arch images (amd64/arm64) run comfortably on a single-board computer.
     link: /guide/architecture
     linkText: Architecture
 ---
 
 ## The shape of it
 
+<!-- Keep the geometry in sync with docs/public/architecture.svg (the
+     standalone copy the README embeds). This inline version follows the docs
+     theme toggle; the standalone follows the OS colour scheme. -->
 <figure class="hub-diagram">
-<svg viewBox="0 0 760 320" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="flow-title">
+<svg viewBox="0 0 800 320" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="flow-title">
   <title id="flow-title">Request flow from an MCP client through a reverse proxy into mcp-hub and on to its child servers</title>
   <defs>
     <marker id="arrow-flow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -84,50 +87,51 @@ features:
     </marker>
   </defs>
 
-  <rect class="node" x="4" y="124" width="160" height="72" rx="10" />
-  <text x="84" y="153" text-anchor="middle" class="label-title">MCP client</text>
-  <text x="84" y="172" text-anchor="middle" class="label-muted">ChatGPT · Claude · Cursor · …</text>
+  <rect class="node" x="4" y="124" width="150" height="72" rx="10" />
+  <text x="79" y="149" text-anchor="middle" class="label-title">MCP client</text>
+  <text x="79" y="167" text-anchor="middle" class="label-muted" font-size="10.5">ChatGPT · Claude</text>
+  <text x="79" y="182" text-anchor="middle" class="label-muted" font-size="10.5">Cursor · Le Chat …</text>
 
-  <rect class="node" x="196" y="124" width="124" height="72" rx="10" />
-  <text x="258" y="153" text-anchor="middle" class="label-title">Reverse proxy</text>
-  <text x="258" y="172" text-anchor="middle" class="label-muted">TLS termination</text>
+  <rect class="node" x="200" y="124" width="124" height="72" rx="10" />
+  <text x="262" y="153" text-anchor="middle" class="label-title">Reverse proxy</text>
+  <text x="262" y="172" text-anchor="middle" class="label-muted">TLS termination</text>
 
-  <rect class="node-accent" x="344" y="24" width="228" height="272" rx="14" />
-  <text x="458" y="50" text-anchor="middle" class="label-title">mcp-hub</text>
-  <text x="458" y="68" text-anchor="middle" class="label-muted">one Node process</text>
+  <rect class="node-accent" x="368" y="24" width="220" height="272" rx="14" />
+  <text x="478" y="50" text-anchor="middle" class="label-title">mcp-hub</text>
+  <text x="478" y="68" text-anchor="middle" class="label-muted">one Node process</text>
 
-  <rect class="node" x="362" y="84" width="192" height="44" rx="8" />
-  <text x="458" y="111" text-anchor="middle" class="label-mono">OAuth 2.1 AS</text>
+  <rect class="node" x="384" y="84" width="188" height="44" rx="8" />
+  <text x="478" y="111" text-anchor="middle" class="label-mono">OAuth 2.1 AS</text>
 
-  <rect class="node" x="362" y="140" width="192" height="44" rx="8" />
-  <text x="458" y="167" text-anchor="middle" class="label-mono">/hub · /&lt;name&gt;/mcp</text>
+  <rect class="node" x="384" y="140" width="188" height="44" rx="8" />
+  <text x="478" y="167" text-anchor="middle" class="label-mono">/hub · /&lt;name&gt;/mcp</text>
 
-  <rect class="node" x="362" y="196" width="192" height="44" rx="8" />
-  <text x="458" y="223" text-anchor="middle" class="label-mono">supervisor</text>
+  <rect class="node" x="384" y="196" width="188" height="44" rx="8" />
+  <text x="478" y="223" text-anchor="middle" class="label-mono">supervisor</text>
 
-  <text x="458" y="268" text-anchor="middle" class="label-muted">ping · backoff restart · hot reload</text>
+  <text x="478" y="268" text-anchor="middle" class="label-muted">ping · backoff restart · hot reload</text>
 
-  <rect class="node" x="616" y="52" width="136" height="56" rx="10" />
-  <text x="684" y="76" text-anchor="middle" class="label-mono">paperless</text>
-  <text x="684" y="94" text-anchor="middle" class="label-muted">stdio child</text>
+  <rect class="node" x="650" y="52" width="146" height="56" rx="10" />
+  <text x="723" y="76" text-anchor="middle" class="label-mono">paperless</text>
+  <text x="723" y="94" text-anchor="middle" class="label-muted">stdio child</text>
 
-  <rect class="node" x="616" y="132" width="136" height="56" rx="10" />
-  <text x="684" y="156" text-anchor="middle" class="label-mono">calendar</text>
-  <text x="684" y="174" text-anchor="middle" class="label-muted">stdio child</text>
+  <rect class="node" x="650" y="132" width="146" height="56" rx="10" />
+  <text x="723" y="156" text-anchor="middle" class="label-mono">calendar</text>
+  <text x="723" y="174" text-anchor="middle" class="label-muted">stdio child</text>
 
-  <rect class="node" x="616" y="212" width="136" height="56" rx="10" />
-  <text x="684" y="236" text-anchor="middle" class="label-mono">homeassistant</text>
-  <text x="684" y="254" text-anchor="middle" class="label-muted">remote http/sse</text>
+  <rect class="node" x="650" y="212" width="146" height="56" rx="10" />
+  <text x="723" y="236" text-anchor="middle" class="label-mono">homeassistant</text>
+  <text x="723" y="254" text-anchor="middle" class="label-muted">remote http/sse</text>
 
-  <path class="edge-accent" d="M164 160 L192 160" marker-end="url(#arrow-flow-accent)" />
-  <text x="178" y="150" text-anchor="middle" class="label-muted">TLS</text>
-  <path class="edge-accent" d="M320 160 L340 160" marker-end="url(#arrow-flow-accent)" />
+  <path class="edge-accent" d="M154 160 L194 160" marker-end="url(#arrow-flow-accent)" />
+  <text x="174" y="149" text-anchor="middle" class="label-muted">TLS</text>
+  <path class="edge-accent" d="M324 160 L362 160" marker-end="url(#arrow-flow-accent)" />
 
-  <path class="edge" d="M572 218 C 596 218, 592 80, 612 80" marker-end="url(#arrow-flow)" />
-  <path class="edge" d="M572 218 C 596 218, 592 160, 612 160" marker-end="url(#arrow-flow)" />
-  <path class="edge edge-dashed" d="M572 218 C 596 218, 592 240, 612 240" marker-end="url(#arrow-flow)" />
+  <path class="edge" d="M588 218 C 612 218, 616 80, 632 80 L644 80" marker-end="url(#arrow-flow)" />
+  <path class="edge" d="M588 218 C 612 218, 616 160, 632 160 L644 160" marker-end="url(#arrow-flow)" />
+  <path class="edge edge-dashed" d="M588 218 C 612 218, 616 240, 632 240 L644 240" marker-end="url(#arrow-flow)" />
 </svg>
-<figcaption>One process terminates the client's OAuth session, routes by path, and keeps every configured server alive behind it.</figcaption>
+<figcaption>One process terminates the client’s OAuth session, routes by path, and keeps every configured server alive behind it.</figcaption>
 </figure>
 
 ## See it run

@@ -249,8 +249,10 @@ See the [meta-tool reference](/reference/hub-tools) for the exact schemas.
 | `state.json` | registered OAuth clients, approvals, refresh-token families, revocation markers |
 | `mcp-hub.log` | only if `LOG_FILE` points there |
 
-There is no database and no migration step. A corrupt `state.json` is moved
-aside as `state.json.corrupt-<timestamp>` and the hub boots with empty state
+There is no database and no migration step — deliberately: staying light
+enough for a single-board computer like a Raspberry Pi is a project goal, and
+a database would be the first thing to outgrow one. A corrupt `state.json` is
+moved aside as `state.json.corrupt-<timestamp>` and the hub boots with empty state
 rather than crash-looping — connectors then have to authorize again, which is
 recoverable, unlike a hub that will not start.
 

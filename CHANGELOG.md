@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as the only client: the hub serves ChatGPT connectors, Claude, Mistral
   Le Chat, Cursor, LibreChat and any other Streamable-HTTP MCP client, plus
   API-token access for the OpenAI, xAI and Gemini APIs. Wording only.
+- README and documentation state the lightweight goal explicitly — one Node
+  process, no database, stateless transport, multi-arch images, comfortable on
+  a single-board computer like a Raspberry Pi — and the README's ASCII
+  architecture sketch is replaced by the reworked SVG diagram (served from the
+  docs site, following the OS colour scheme).
 
 ## [0.6.0] - 2026-08-14
 

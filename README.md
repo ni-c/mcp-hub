@@ -16,13 +16,7 @@ protected by a single password, plus long-lived API tokens for clients that
 cannot do OAuth (OpenAI Responses API, xAI API, Gemini API). Per-client
 recipes: [client compatibility](https://mcp-hub.ni-c.de/guide/client-compatibility).
 
-```
-MCP client ─TLS─> reverse proxy ──> mcp-hub (one Node process)
-                                   ├─ OAuth 2.1 AS (DCR, PKCE, password login)
-                                   ├─ /<name>, /<name>/mcp   one path per server
-                                   ├─ /hub                   4 meta-tools for all servers
-                                   └─ supervisor: one stdio child per server, auto-restart
-```
+<img src="https://mcp-hub.ni-c.de/architecture.svg" alt="MCP clients connect through a reverse proxy to mcp-hub: one Node process with an OAuth 2.1 authorization server, one path per server plus the /hub aggregate, and a supervisor keeping the stdio children and remote upstreams alive" width="800">
 
 ![Demo: config in, hub up, servers reachable through one endpoint](https://mcp-hub.ni-c.de/demo.gif)
 
@@ -43,7 +37,10 @@ replaces N containers with one process:
   servers.
 - **Stateless Streamable HTTP**: no session state, so claude.ai's
   reconnect-without-DELETE behaviour cannot leak processes or memory.
-- **No database**: state is one JSON file plus a JWT key under `/data`.
+- **Lightweight by design**: one Node process, no database (state is one JSON
+  file plus a JWT key under `/data`), a handful of runtime dependencies, and
+  multi-arch images — a stated project goal is to run comfortably on a
+  single-board computer like a Raspberry Pi.
 
 ## Configuration
 
