@@ -24,6 +24,8 @@ MCP client ─TLS─> reverse proxy ──> mcp-hub (one Node process)
                                    └─ supervisor: one stdio child per server, auto-restart
 ```
 
+![Demo: config in, hub up, servers reachable through one endpoint](https://mcp-hub.ni-c.de/demo.gif)
+
 ## Why
 
 Wrapping each stdio MCP server in its own auth-proxy container costs a full

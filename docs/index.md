@@ -130,6 +130,10 @@ features:
 <figcaption>One process terminates the client's OAuth session, routes by path, and keeps every configured server alive behind it.</figcaption>
 </figure>
 
+## See it run
+
+![Demo: config in, hub up, servers reachable through one endpoint](/demo.gif)
+
 ## Try it in two minutes
 
 ```sh

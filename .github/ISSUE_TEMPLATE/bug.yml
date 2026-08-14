@@ -1,0 +1,53 @@
+name: Bug report
+description: Something behaves wrongly or breaks
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: mcp-hub version
+      placeholder: "0.6.0 (docker tag, npm version or commit)"
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment
+      options:
+        - Docker (ghcr.io image)
+        - Docker (custom image)
+        - npm / npx
+        - other
+    validations:
+      required: true
+  - type: input
+    id: client
+    attributes:
+      label: MCP client
+      description: Which client talks to the hub when the problem occurs?
+      placeholder: "Claude Web, ChatGPT connector, Cursor, OpenAI Responses API, curl, …"
+  - type: textarea
+    id: what
+    attributes:
+      label: What happens, and what did you expect?
+      description: Include the exact error message or HTTP status if there is one.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log lines
+      description: >
+        From `docker logs mcp-hub` (or the console). Redact hostnames, tokens
+        and passwords — the hub's own lines contain no secrets, but child
+        server output might.
+      render: text
+  - type: textarea
+    id: config
+    attributes:
+      label: Sanitized configuration
+      description: >
+        The relevant part of mcp.json and the environment (EXTERNAL_URL shape,
+        RESOURCE_BOUND_TOKENS, DEFAULT_RESOURCE, …) with real hostnames and
+        secrets replaced.
+      render: json
