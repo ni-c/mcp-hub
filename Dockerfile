@@ -25,6 +25,9 @@ RUN npm install -g npm@12.0.2 \
     && tar -xzf /tmp/ip-address-10.3.1.tgz --strip-components=1 -C /usr/local/lib/node_modules/npm/node_modules/ip-address \
     && rm -f /tmp/brace-expansion-5.0.9.tgz /tmp/ip-address-10.3.1.tgz
 
+# Ownership proof for the MCP Registry: must match server.json's name.
+LABEL io.modelcontextprotocol.server.name="io.github.ni-c/mcp-hub"
+
 WORKDIR /app
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist

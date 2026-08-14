@@ -45,6 +45,49 @@ jobs:
       - run: npm ci
       - run: npm publish --provenance
 
+  mcp-registry:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required for MCP registry OIDC authentication.
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Sync version from package.json into server.json
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          jq --arg v "$version" \
+            '.version = $v
+             | (.packages[] | .version?) |= $v
+             | (.packages[] | select(.registryType == "oci") | .identifier) |= sub(":[^:]*$"; ":" + $v)' \
+            server.json > server.tmp && mv server.tmp server.json
+          jq -r '.packages[] | "\(.registryType) \(.identifier) \(.version // "-")"' server.json
+      # The OCI image is pushed by ci.yml's publish job, which runs in parallel
+      # to this workflow on the same tag — the registry's ownership check would
+      # race it. Wait until GHCR actually serves the version tag.
+      - name: Wait for the GHCR image tag
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          token="$(curl -fsS 'https://ghcr.io/token?scope=repository:ni-c/mcp-hub:pull&service=ghcr.io' | jq -r .token)"
+          for i in $(seq 1 60); do
+            if curl -fsS -o /dev/null -H "Authorization: Bearer $token" \
+                -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' \
+                "https://ghcr.io/v2/ni-c/mcp-hub/manifests/$version"; then
+              echo "ghcr.io/ni-c/mcp-hub:$version is available"
+              exit 0
+            fi
+            echo "waiting for ghcr.io/ni-c/mcp-hub:$version ($i/60)"
+            sleep 30
+          done
+          echo "Image tag $version never appeared on GHCR — is ci.yml's publish job green?" >&2
+          exit 1
+      - name: Install mcp-publisher
+        run: |
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+      - run: ./mcp-publisher login github-oidc
+      - run: ./mcp-publisher publish
+
   github-release:
     needs: publish
     runs-on: ubuntu-latest

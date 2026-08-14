@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] - 2026-08-14
+
+### Added
+
+- Listed in the official [MCP Registry](https://registry.modelcontextprotocol.io)
+  as `io.github.ni-c/mcp-hub`, with both install paths — the npm package and the
+  GHCR image — described as what they are: a Streamable-HTTP server on `/hub`,
+  not a stdio process. The ownership proofs (`mcpName` in `package.json`, the
+  `io.modelcontextprotocol.server.name` image label) ship with this release,
+  and the release workflow now publishes registry updates automatically.
+
 ## [0.5.0] - 2026-08-14
 
 ### Changed

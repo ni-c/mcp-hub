@@ -1,0 +1,35 @@
+name: Publish to MCP Registry
+
+# Manual fallback: re-publish the current package version to the MCP registry,
+# e.g. after a failed registry job in a release run (re-running that job would
+# check out the immutable tag). The npm package and the GHCR image for the
+# version in package.json must already be published.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mcp-registry:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required for MCP registry OIDC authentication.
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Sync version from package.json into server.json
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          jq --arg v "$version" \
+            '.version = $v
+             | (.packages[] | .version?) |= $v
+             | (.packages[] | select(.registryType == "oci") | .identifier) |= sub(":[^:]*$"; ":" + $v)' \
+            server.json > server.tmp && mv server.tmp server.json
+          jq -r '.packages[] | "\(.registryType) \(.identifier) \(.version // "-")"' server.json
+      - name: Install mcp-publisher
+        run: |
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+      - run: ./mcp-publisher login github-oidc
+      - run: ./mcp-publisher publish

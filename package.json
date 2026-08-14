@@ -1,6 +1,6 @@
 {
   "name": "@ni-c/mcp-hub",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Serve multiple stdio MCP servers from one container: Claude-Code-style mcpServers config, path-based routing, hub meta-tools and a built-in OAuth 2.1 login for Claude Web.",
   "keywords": [
     "mcp",
@@ -60,5 +60,6 @@
     "tsx": "^4.19.0",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
-  }
+  },
+  "mcpName": "io.github.ni-c/mcp-hub"
 }
