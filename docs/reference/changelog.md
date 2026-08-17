@@ -21,10 +21,13 @@ session state, which is exactly what the
 clients reconnecting without closing their sessions cannot leak resources.
 Changing this means solving that leak first.
 
-**`RESOURCE_BOUND_TOKENS` still defaults to `false`.** The secure setting is
-opt-in only because enabling it invalidates existing tokens. It is the right
-setting for every new installation and the default will flip in a future major
-release.
+One consequence is visible on the wire: the hub still announces `listChanged`
+for tools, prompts and resources, because a proxied server passes its child's
+capabilities on and `/hub` gets the flag from the SDK as soon as a tool is
+registered. A client that acts on it simply waits for a notification that never
+arrives. Resource subscriptions used to be announced the same way, which was
+worse — there is no handler, so the call failed — and since 0.6.3 they are no
+longer advertised.
 
 **One password, no users.** There are no accounts, roles or audit trails, and
 none are planned — that is a different product. See

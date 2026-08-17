@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.3] - 2026-08-17
+
+### Fixed
+
+- The per-server proxy no longer advertises resource subscriptions it cannot
+  serve. It passed the child's capabilities through unchanged, so a server that
+  supports `resources/subscribe` made the hub claim it too — while the proxy
+  registers no handler for it, and the call failed with `-32601`. Only the
+  `subscribe` flag is dropped: listing, templates and reading are unaffected.
+
+### Changed
+
+- Known gaps: the entry claiming `RESOURCE_BOUND_TOKENS` still defaults to
+  `false` is gone. Resource binding has been the default since 0.5.0, and every
+  other document already said so — this was the one place still describing the
+  old behaviour and promising a flip that had already happened.
+- Known gaps now state that `listChanged` is announced but never sent. Passing
+  it on is deliberate: delivering server-initiated messages needs the per-client
+  session state the stateless transport exists to avoid, and a client waiting
+  for a notification that never comes is no worse off than one that was never
+  told.
+
 ## [0.6.2] - 2026-08-17
 
 ### Fixed
