@@ -226,14 +226,13 @@ asked; while a login session is still valid, a client you have not seen before
 gets an explicit *Approve / Deny* page instead of a code. Approved clients
 reconnect silently from then on.
 
-List clients or revoke one while the main container is stopped (both commands
-mount the same `/data`; stopping avoids concurrent state writers):
+List clients or revoke one. The CLI shares `/data` with the running hub and
+both sides re-read the state file before they touch it, so this works against a
+live container — a revocation takes effect on the next request:
 
 ```sh
-docker compose stop mcp-hub
-docker compose run --rm --no-deps mcp-hub node /app/dist/admin.js clients list
-docker compose run --rm --no-deps mcp-hub node /app/dist/admin.js clients revoke CLIENT_ID
-docker compose up -d
+docker exec mcp-hub node /app/dist/admin.js clients list
+docker exec mcp-hub node /app/dist/admin.js clients revoke CLIENT_ID
 ```
 
 Revocation removes the approval and all refresh tokens and immediately rejects
@@ -244,10 +243,9 @@ API, Gemini's `mcp_server` tool, plain-header clients — the same CLI mints
 long-lived, resource-bound API tokens:
 
 ```sh
-docker compose run --rm --no-deps mcp-hub \
-  node /app/dist/admin.js tokens create --resource hub --days 90 --label "openai"
-docker compose run --rm --no-deps mcp-hub node /app/dist/admin.js tokens list
-docker compose run --rm --no-deps mcp-hub node /app/dist/admin.js tokens revoke TOKEN_ID
+docker exec mcp-hub node /app/dist/admin.js tokens create --resource hub --days 90 --label "openai"
+docker exec mcp-hub node /app/dist/admin.js tokens list
+docker exec mcp-hub node /app/dist/admin.js tokens revoke TOKEN_ID
 ```
 
 The token is printed once and never stored; `tokens revoke` takes effect

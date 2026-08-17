@@ -37,8 +37,9 @@ describe('API tokens', () => {
     });
     await hub.supervisor.waitUntilSettled();
     server = hub.app.listen(0);
-    // Mint through the same store instance the hub uses — this is exactly what
-    // mcp-hub-admin does against the shared /data volume.
+    // Mints through the store instance the hub itself holds. Note this is NOT
+    // what mcp-hub-admin does — that is a separate process with its own store
+    // against the shared /data volume; see "minted by the admin CLI" below.
     hubToken = await mintApiToken(hub.store, ORIGIN, new URL('/hub', ORIGIN), 30, 'test-hub');
     serverToken = await mintApiToken(hub.store, ORIGIN, new URL('/everything/mcp', ORIGIN), 30, 'test-everything');
   }, 30_000);
@@ -84,6 +85,43 @@ describe('API tokens', () => {
   it('survives a store reload (state.json round trip)', async () => {
     const reloaded = new AuthStore(path.join(dir, 'data'));
     expect(reloaded.getApiToken(hubToken.id)?.label).toBe('test-hub');
+  });
+
+  /**
+   * The real admin-CLI shape: `docker exec` (or `compose run`) starts a second
+   * process, so the mint lands in state.json while the hub keeps serving from
+   * its own copy. Both directions have to work without restarting the hub.
+   */
+  it('accepts a token minted by the admin CLI without a restart', async () => {
+    const cli = new AuthStore(path.join(dir, 'data'));
+    const minted = await mintApiToken(cli, ORIGIN, new URL('/hub', ORIGIN), 30, 'cli-minted');
+
+    await request(hub.app)
+      .post('/hub')
+      .set('Authorization', `Bearer ${minted.token}`)
+      .set('Accept', 'application/json, text/event-stream')
+      .send(jsonRpcPing)
+      .expect(200);
+  });
+
+  it('refuses a token the admin CLI revoked, without a restart', async () => {
+    const doomed = await mintApiToken(hub.store, ORIGIN, new URL('/hub', ORIGIN), 30, 'cli-revoked');
+    await request(hub.app).post('/hub').set('Authorization', `Bearer ${doomed.token}`).set('Accept', 'application/json, text/event-stream').send(jsonRpcPing).expect(200);
+
+    expect(new AuthStore(path.join(dir, 'data')).revokeApiToken(doomed.id)).toBe(true);
+
+    await request(hub.app).post('/hub').set('Authorization', `Bearer ${doomed.token}`).send(jsonRpcPing).expect(401);
+  });
+
+  it('does not resurrect a CLI revocation when the hub next writes', async () => {
+    const doomed = await mintApiToken(hub.store, ORIGIN, new URL('/hub', ORIGIN), 30, 'cli-revoked-2');
+    new AuthStore(path.join(dir, 'data')).revokeApiToken(doomed.id);
+
+    // Any hub-side write rewrites the whole file; refresh token rotation does
+    // this every few minutes in a live deployment.
+    await mintApiToken(hub.store, ORIGIN, new URL('/hub', ORIGIN), 30, 'unrelated');
+
+    await request(hub.app).post('/hub').set('Authorization', `Bearer ${doomed.token}`).send(jsonRpcPing).expect(401);
   });
 
   it('keys the per-client rate limit by token id', async () => {

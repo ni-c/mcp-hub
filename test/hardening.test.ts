@@ -236,3 +236,94 @@ describe('AuthStore', () => {
     expect(store.getRevokedBefore('client-1')).toBe(result.revokedBefore);
   });
 });
+
+/**
+ * The admin CLI is a separate process against the same /data volume, so two
+ * AuthStore instances on one directory is not an exotic case — it is the
+ * documented way to list and revoke. `hub` stands for the long-running server,
+ * `cli` for one mcp-hub-admin invocation.
+ */
+describe('AuthStore across processes', () => {
+  const record = (label: string) => ({
+    label,
+    resource: 'https://hub.test/hub',
+    createdAt: Math.floor(Date.now() / 1000),
+    expiresAt: Math.floor(Date.now() / 1000) + 3600
+  });
+
+  it('sees an API token minted by another process', () => {
+    const dir = tmpDir();
+    const hub = new AuthStore(dir);
+    const cli = new AuthStore(dir);
+
+    cli.saveApiToken('minted-by-cli', record('cli'));
+
+    // Without this the hub answers "Access token has been revoked" for a token
+    // it was never told about, until someone restarts the container.
+    expect(hub.getApiToken('minted-by-cli')?.label).toBe('cli');
+  });
+
+  it('honours an API token revoked by another process', () => {
+    const dir = tmpDir();
+    const hub = new AuthStore(dir);
+    hub.saveApiToken('doomed', record('doomed'));
+
+    expect(new AuthStore(dir).revokeApiToken('doomed')).toBe(true);
+
+    // A revocation that reports success but leaves the token usable is the
+    // worst failure mode this store has.
+    expect(hub.getApiToken('doomed')).toBeUndefined();
+  });
+
+  it('does not resurrect a revoked token on its next unrelated write', () => {
+    const dir = tmpDir();
+    const hub = new AuthStore(dir);
+    hub.saveApiToken('doomed', record('doomed'));
+    new AuthStore(dir).revokeApiToken('doomed');
+
+    // persist() writes the whole file, and the hub persists on every refresh
+    // token rotation — minutes apart in practice.
+    hub.saveApiToken('unrelated', record('unrelated'));
+
+    expect(new AuthStore(dir).getApiToken('doomed')).toBeUndefined();
+    expect(new AuthStore(dir).getApiToken('unrelated')).toBeDefined();
+  });
+
+  it('honours a client revocation performed by another process', () => {
+    const dir = tmpDir();
+    const hub = new AuthStore(dir);
+    hub.saveClient({ client_id: 'c1', redirect_uris: ['https://x.test/cb'] });
+    hub.saveApproval('c1', 'https://x.test/cb');
+    hub.saveRefreshToken('rt', { clientId: 'c1', scopes: [], expiresAt: Math.floor(Date.now() / 1000) + 600 });
+
+    new AuthStore(dir).revokeClientAccess('c1');
+
+    expect(hub.getApproval('c1')).toBeUndefined();
+    expect(hub.getRefreshToken('rt')).toBeUndefined();
+    expect(hub.getRevokedBefore('c1')).toBeDefined();
+  });
+
+  it('keeps its state when a reload cannot be parsed', () => {
+    const dir = tmpDir();
+    const hub = new AuthStore(dir);
+    hub.saveApiToken('live', record('live'));
+    const secret = hub.cookieSecret;
+
+    fs.writeFileSync(path.join(dir, 'state.json'), '{"cookieSecret": "truncated');
+
+    // Unlike the constructor, a reload must not quarantine the file and start
+    // fresh: rotating cookieSecret under a running hub logs out every session.
+    expect(hub.cookieSecret).toBe(secret);
+    expect(hub.getApiToken('live')).toBeDefined();
+    expect(fs.readdirSync(dir).some(f => f.startsWith('state.json.corrupt-'))).toBe(false);
+  });
+
+  it('never leaves a shared temporary file behind', () => {
+    const dir = tmpDir();
+    const hub = new AuthStore(dir);
+    hub.saveApiToken('a', record('a'));
+
+    // A fixed "state.json.tmp" would let two writers scribble over each other.
+    expect(fs.readdirSync(dir).filter(f => f.includes('.tmp'))).toEqual([]);
+  });
+});

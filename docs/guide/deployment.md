@@ -302,14 +302,13 @@ hub's vhost.
 
 ## Revoking a client
 
-Both commands mount the same `/data`. Stop the hub first so there is only one
-writer:
+Both commands share `/data` with the running hub. Each side re-reads the state
+file before it reads or writes, so the hub does not need to be stopped and a
+revocation is visible to it on the next request:
 
 ```sh
-docker compose stop mcp-hub
-docker compose run --rm --no-deps mcp-hub node /app/dist/admin.js clients list
-docker compose run --rm --no-deps mcp-hub node /app/dist/admin.js clients revoke CLIENT_ID
-docker compose up -d
+docker exec mcp-hub node /app/dist/admin.js clients list
+docker exec mcp-hub node /app/dist/admin.js clients revoke CLIENT_ID
 ```
 
 `clients list` prints each registered client with its registered and approved
@@ -324,16 +323,13 @@ directory.
 
 ## API tokens
 
-The same offline CLI mints, lists and revokes the long-lived tokens used by
+The same CLI mints, lists and revokes the long-lived tokens used by
 [API clients that cannot do OAuth](/guide/client-compatibility#camp-2-api-clients-use-an-api-token):
 
 ```sh
-docker compose stop mcp-hub
-docker compose run --rm --no-deps mcp-hub \
-  node /app/dist/admin.js tokens create --resource hub --days 90 --label "openai"
-docker compose run --rm --no-deps mcp-hub node /app/dist/admin.js tokens list
-docker compose run --rm --no-deps mcp-hub node /app/dist/admin.js tokens revoke TOKEN_ID
-docker compose up -d
+docker exec mcp-hub node /app/dist/admin.js tokens create --resource hub --days 90 --label "openai"
+docker exec mcp-hub node /app/dist/admin.js tokens list
+docker exec mcp-hub node /app/dist/admin.js tokens revoke TOKEN_ID
 ```
 
 `tokens create` needs `EXTERNAL_URL` in the environment (compose provides it)

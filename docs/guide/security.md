@@ -83,9 +83,12 @@ a refresh cannot request more scope than the original grant. Each token is
 additionally bound (RFC 8707) to the one resource it was issued for, so a token
 for one server reaches neither another server nor `/hub` and `/health`.
 
-**Revocation works offline.** `mcp-hub-admin clients revoke <id>` removes the
-approval and every refresh token, and sets a marker that rejects already-issued
-access tokens immediately — no waiting for the 15-minute expiry.
+**Revocation takes effect at once.** `mcp-hub-admin clients revoke <id>` removes
+the approval and every refresh token, and sets a marker that rejects
+already-issued access tokens immediately — no waiting for the 15-minute expiry.
+It works whether or not the hub is running: the CLI is a second process on the
+same state file, and both sides re-read it before touching it, so neither can
+serve a stale copy or write one back over the other.
 
 **API tokens are the deliberate exception.** `mcp-hub-admin tokens create`
 mints long-lived tokens for [clients that cannot do

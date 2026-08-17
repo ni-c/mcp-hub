@@ -23,4 +23,6 @@ Avoid `npx -y`, unversioned `uvx`, mutable Git branches and other runtime downlo
 - Treat `/data/jwt-key.pem`, `/data/state.json`, the MCP config and all referenced environment variables as secrets.
 - Restrict outbound network access to the destinations required by configured servers.
 
-Access tokens expire after 15 minutes. Refresh tokens rotate, and reuse of a consumed token revokes its family. Use the offline admin command documented in the README to revoke all grants for a client immediately.
+Access tokens expire after 15 minutes. Refresh tokens rotate, and reuse of a consumed token revokes its family. Use the admin command documented in the README to revoke all grants for a client immediately; it works against a running hub.
+
+`/data/state.json` has more than one writer — the hub and every admin CLI invocation. Each re-reads the file before it reads or writes, and publishes by writing a private temporary file and renaming it, so a reader never sees a partial file and a revocation is never overwritten by a stale copy. The residual risk is a lost update if two processes read-modify-write within the same instant; the CLI is an occasional, interactive command, and no interleaving can corrupt the file.
