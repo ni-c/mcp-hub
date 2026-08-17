@@ -7,6 +7,9 @@ import { VERSION } from './version.js';
 import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
 import type { ServerCapabilities, Implementation, Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { HubConfig, ServerConfig, RemoteServerConfig, ConfigDiff } from './config.js';
+import { SocketTransport } from './transports/socket.js';
+import { DockerTransport } from './transports/docker.js';
+import { DockerClient, parseDockerHost } from './sandbox/docker-client.js';
 
 export type ServerState = 'starting' | 'up' | 'down' | 'stopped';
 
@@ -28,6 +31,21 @@ function buildRemoteTransport(config: RemoteServerConfig): Transport {
     return new SSEClientTransport(url, { requestInit: { headers }, fetch: fetchWithHeaders });
   }
   return new StreamableHTTPClientTransport(url, { requestInit: { headers }, fetch: fetchWithHeaders });
+}
+
+let sharedDockerClient: DockerClient | undefined;
+
+/**
+ * One Docker connection for the whole hub, pointed at DOCKER_HOST — which in
+ * the documented deployment is not the daemon but the policy proxy's socket.
+ */
+export function dockerClient(): DockerClient {
+  return (sharedDockerClient ??= new DockerClient(parseDockerHost(process.env.DOCKER_HOST)));
+}
+
+/** Tests inject a stub here; passing undefined restores the DOCKER_HOST client. */
+export function setDockerClient(client: DockerClient | undefined): void {
+  sharedDockerClient = client;
 }
 
 const BACKOFF_INITIAL_MS = 1_000;
@@ -57,15 +75,35 @@ export class ManagedServer {
   ) {}
 
   private buildTransport(): Transport {
-    if (this.config.kind === 'remote') {
-      return buildRemoteTransport(this.config);
+    switch (this.config.kind) {
+      case 'remote':
+        return buildRemoteTransport(this.config);
+      case 'socket':
+        return new SocketTransport(this.config);
+      case 'docker':
+        return new DockerTransport(this.name, this.config, dockerClient());
+      case 'stdio':
+        return new StdioClientTransport({
+          command: this.config.command,
+          args: this.config.args,
+          env: { ...getDefaultEnvironment(), ...this.config.env },
+          stderr: 'inherit'
+        });
     }
-    return new StdioClientTransport({
-      command: this.config.command,
-      args: this.config.args,
-      env: { ...getDefaultEnvironment(), ...this.config.env },
-      stderr: 'inherit'
-    });
+  }
+
+  /** What "it went away" means for this kind of server, in the operator's words. */
+  private exitReason(): string {
+    switch (this.config.kind) {
+      case 'remote':
+        return 'connection closed';
+      case 'socket':
+        return 'socket closed';
+      case 'docker':
+        return 'container exited';
+      case 'stdio':
+        return 'child process exited';
+    }
   }
 
   async start(): Promise<void> {
@@ -73,7 +111,7 @@ export class ManagedServer {
     this.state = 'starting';
     const transport = this.buildTransport();
     const client = new Client({ name: 'mcp-hub', version: VERSION }, { capabilities: {} });
-    transport.onclose = () => this.onExit(this.config.kind === 'remote' ? 'connection closed' : 'child process exited');
+    transport.onclose = () => this.onExit(this.exitReason());
     try {
       await client.connect(transport);
     } catch (error) {
@@ -198,6 +236,26 @@ export class Supervisor {
 
   async waitUntilSettled(): Promise<void> {
     await Promise.all(this.initialStarts);
+  }
+
+  /**
+   * Remove sandbox containers this hub owns that no longer have a config entry.
+   *
+   * AutoRemove only fires when a container stops, so an unclean hub exit — or
+   * a server deleted from the config while the hub was down — leaves a
+   * container running with nobody holding its stdio. Containers of *active*
+   * servers are left alone here; DockerTransport.start() replaces those by
+   * name anyway.
+   */
+  async reapOrphans(): Promise<void> {
+    const active = new Set([...this.config.entries()].filter(([, cfg]) => cfg.kind === 'docker').map(([name]) => name));
+    if (active.size === 0) return; // never touch Docker for a hub that does not use it
+    const owned = await dockerClient().listOwnedContainers();
+    for (const container of owned) {
+      if (container.server !== undefined && active.has(container.server)) continue;
+      console.log(`mcp-hub: removing orphaned sandbox container ${container.name}`);
+      await dockerClient().removeContainer(container.name);
+    }
   }
 
   get(name: string): ManagedServer | undefined {
