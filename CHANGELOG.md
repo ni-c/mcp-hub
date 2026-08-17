@@ -5,6 +5,60 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Sandboxed servers.** An MCP server that only speaks stdio can now run in its
+  own container without an HTTP listener, a bearer token or a bridge process in
+  its image. Two new kinds carry the protocol on a plain byte stream, using the
+  stdio framing the specification asks custom transports to reuse:
+  - `type: "docker"` — the hub creates the container over the Docker API,
+    attaches to its stdin/stdout and speaks MCP across the container boundary.
+    The sandbox is described in `mcp.json`: image, mounts, ports, network,
+    memory, pids, tmpfs, user. Capabilities are always dropped,
+    `no-new-privileges` is always set, there is never a restart policy, and the
+    default network is `none`.
+  - `type: "unix"` / `type: "tcp"` — the hub connects to a socket a container
+    you started is listening on. Costs the hub no privileges at all, and a Unix
+    socket in a shared volume reaches a sandbox running with `network_mode: none`
+    — which no HTTP upstream can do, because HTTP needs an interface.
+
+  Supervision is unchanged for both: ping, backoff restart, hot reload, `/hub`,
+  `/health`. A sandbox's stderr is prefixed and passed through exactly like a
+  stdio child's.
+
+- **`mcp-hub-docker-proxy`** (`ghcr.io/ni-c/mcp-hub-docker-proxy`, published
+  from the same pipeline under the same tags). The hub is exposed to the
+  internet and the Docker API is root-equivalent, so the hub never gets the
+  daemon socket: this second, much smaller image holds it and enforces a policy
+  read from the same `mcp.json`. It allows only containers named
+  `mcp-sandbox-<server>` for a configured `type: "docker"` entry, compares the
+  whole create request against one rebuilt by the same function the hub used to
+  build it — so the policy cannot drift from the code that sends the request —
+  and refuses `Privileged`, `CapAdd`, `Devices`, `Mounts`, host namespaces and
+  binds under `/`, `/proc`, `/sys`, `/dev`, `/etc`, `/boot`, `/root`, `/run`,
+  `/var/run` and `/var/lib/docker` regardless of what the config says. Nothing
+  is forwarded verbatim: every allowed request is rebuilt from the decision, so
+  a duplicate query parameter or an extra JSON key has nothing to ride on.
+
+- **`secretsFrom`** keeps a sandbox's credentials out of the hub entirely. The
+  config names an env file the *proxy* holds; the proxy appends those variables
+  after it has validated the create request. They never enter the process whose
+  stdio children can read `/proc/1/environ`.
+
+- `/health` now reports each server's `kind`, and for a sandbox the `image` and
+  `container` it runs as.
+
+### Changed
+
+- `DOCKER_HOST` is read by the hub (default `unix:///var/run/docker.sock`). In
+  the documented deployment it points at the policy proxy's socket.
+- For `type: "docker"` entries only `env` values may use `${VAR}`. The image,
+  mounts, ports, network, user and command must be literal: the proxy validates
+  those fields against the config and deliberately holds none of the hub's
+  secrets, so a variable there would be a field it could not check.
+
 ## [0.6.3] - 2026-08-17
 
 ### Fixed

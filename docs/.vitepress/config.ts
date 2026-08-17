@@ -67,6 +67,7 @@ export default defineConfig({
           items: [
             { text: 'Configuration', link: '/guide/configuration' },
             { text: 'Deployment', link: '/guide/deployment' },
+            { text: 'Sandboxing servers', link: '/guide/sandboxing' },
             { text: 'Security', link: '/guide/security' },
             { text: 'FAQ & troubleshooting', link: '/guide/faq' }
           ]

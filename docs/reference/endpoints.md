@@ -43,15 +43,20 @@ unhealthy.
 {
   "status": "degraded",
   "servers": {
-    "paperless":     { "state": "up",   "restarts": 0, "tools": 14, "hub": true },
-    "internal-only": { "state": "down", "restarts": 2, "tools": 0,  "hub": false }
+    "paperless":     { "state": "up",   "kind": "stdio",  "restarts": 0, "tools": 14, "hub": true },
+    "internal-only": { "state": "down", "kind": "remote", "restarts": 2, "tools": 0,  "hub": false },
+    "eve":           { "state": "up",   "kind": "docker", "restarts": 0, "tools": 202, "hub": true,
+                       "image": "eve-mcp:local", "container": "mcp-sandbox-eve" }
   }
 }
 ```
 
-`state` is one of `starting`, `up`, `down`. `restarts` counts supervisor
-restarts since boot. `hub` says whether the server appears in the `/hub`
-aggregate.
+`state` is one of `starting`, `up`, `down`. `kind` is `stdio`, `remote`,
+`docker` or `socket`. `restarts` counts supervisor restarts since boot. `hub`
+says whether the server appears in the `/hub` aggregate. A
+[sandboxed server](/guide/sandboxing) also reports the `image` and `container`
+it runs as — a local tag and a name, not credentials, and the difference
+between "eve is down" and something you can act on.
 
 ## OAuth 2.1
 

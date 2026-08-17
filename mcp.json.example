@@ -12,6 +12,18 @@
       "command": "some-python-mcp",
       "args": [],
       "hub": false
+    },
+    "untrusted": {
+      "type": "docker",
+      "image": "ghcr.io/example/untrusted-mcp:1.2.3",
+      "env": { "SOME_SETTING": "value" },
+      "secretsFrom": "untrusted",
+      "network": "none",
+      "memory": "256m"
+    },
+    "sidecar": {
+      "type": "unix",
+      "socket": "/run/mcp/sidecar.sock"
     }
   }
 }

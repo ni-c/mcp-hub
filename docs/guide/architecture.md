@@ -55,6 +55,8 @@ back out.
   <text x="680" y="202" text-anchor="middle" class="label-mono">stdio child</text>
   <rect class="node" x="612" y="230" width="136" height="42" rx="9" />
   <text x="680" y="256" text-anchor="middle" class="label-mono">remote upstream</text>
+  <rect class="node" x="612" y="284" width="136" height="42" rx="9" />
+  <text x="680" y="310" text-anchor="middle" class="label-mono">sandbox</text>
 
   <path class="edge-accent" d="M128 162 L160 162" marker-end="url(#arrow-arch)" />
   <path class="edge" d="M376 68 L408 68" marker-end="url(#arrow-arch)" />
@@ -63,6 +65,7 @@ back out.
   <path class="edge edge-dashed" d="M562 150 L608 143" marker-end="url(#arrow-arch)" />
   <path class="edge edge-dashed" d="M562 232 L608 197" marker-end="url(#arrow-arch)" />
   <path class="edge" d="M562 307 C 590 307, 592 251, 608 251" marker-end="url(#arrow-arch)" />
+  <path class="edge" d="M562 313 L608 305" marker-end="url(#arrow-arch)" />
 </svg>
 <figcaption>The supervisor owns the connections; the OAuth server, the hub server and the per-request proxies all borrow them.</figcaption>
 </figure>
@@ -75,9 +78,14 @@ configured server plus `/hub`.
 custom provider: password login, per-client approval, EdDSA JWTs, rotating
 refresh tokens, all persisted to one JSON file.
 
-**The supervisor** owns one long-lived MCP client per configured server — a
-child process for stdio entries, an HTTP/SSE client for remote ones — and keeps
-it alive.
+**The supervisor** owns one long-lived MCP client per configured server and
+keeps it alive. What sits under that client is the only thing that differs
+between the four kinds: a child process (`stdio`), an HTTP/SSE client
+(`remote`), a container's attached stdin/stdout (`docker`) or a Unix/TCP socket
+(`socket`). The last two carry the stdio framing over a byte stream, which is
+what lets an untrusted server live in [its own container](/guide/sandboxing)
+without an HTTP listener. Everything above the transport — ping, backoff, hot
+reload, the proxy layer, `/hub`, `/health` — treats them identically.
 
 **The proxy layer** builds a throwaway MCP `Server` per HTTP request that
 forwards requests verbatim to the supervisor's client.

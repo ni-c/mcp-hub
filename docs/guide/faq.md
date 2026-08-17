@@ -132,6 +132,23 @@ resource subscriptions, sampling — are not delivered to clients. This is a
 deliberate trade for not leaking session state on every client reconnect. Tool,
 resource and prompt request/response traffic is unaffected.
 
+### A sandboxed server is refused with `403 … does not match the configuration`
+
+The [docker proxy](/guide/sandboxing#the-policy-proxy) derives its policy from
+`mcp.json`, and both it and the hub poll that file independently. Right after an
+edit, the hub can send a create request built from the new configuration while
+the proxy still holds the old one. The server goes `down` and the supervisor
+retries — it resolves itself within seconds.
+
+If it does not, the two are not reading the same file: check that both
+containers mount the same `mcp.json`, and that they run the same image version.
+
+### A sandboxed server never comes up and the log shows `not JSON`
+
+The server writes to **stdout**, which under stdio is the protocol channel. Its
+logging has to go to stderr; the hub prefixes that with the server name and
+passes it through to its own stderr.
+
 ### A server name is rejected
 
 Names must match `[a-zA-Z0-9_-]+`, and these are reserved because the hub

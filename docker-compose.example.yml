@@ -35,6 +35,11 @@ services:
       # Secrets referenced as ${VAR} in mcp.json, provided via .env:
       PAPERLESS_API_TOKEN: "${PAPERLESS_API_TOKEN}"
 
+      # Only needed for `type: "docker"` servers, and note what it points at:
+      # the policy proxy below, never /var/run/docker.sock. The daemon API is
+      # root-equivalent and this container faces the internet.
+      # DOCKER_HOST: "unix:///run/proxy/docker.sock"
+
     volumes:
       - "./mcp.json:/config/mcp.json:ro"
       # JWT key + OAuth client registrations + refresh tokens. Must survive
@@ -42,6 +47,7 @@ services:
       # The container runs as uid 1000 (non-root), so chown this dir to match:
       #   mkdir -p data && sudo chown -R 1000:1000 data
       - "./data:/data"
+      # - "proxy-sock:/run/proxy"
 
     pids_limit: 300
 
@@ -56,6 +62,34 @@ services:
 
     cap_drop:
       - ALL
+
+  # Uncomment together with the DOCKER_HOST line above to run servers in their
+  # own containers (`type: "docker"`). See https://mcp-hub.ni-c.de/guide/sandboxing
+  #
+  # This is the only container that gets the Docker socket. It reads the same
+  # mcp.json, read-only, and allows exactly the container operations that file
+  # describes: nothing privileged, no host mounts, no other images.
+  #
+  # docker-proxy:
+  #   image: ghcr.io/ni-c/mcp-hub-docker-proxy:latest   # same version as the hub
+  #   container_name: mcp-hub-docker-proxy
+  #   restart: unless-stopped
+  #   group_add: ["999"]            # `getent group docker`
+  #   read_only: true
+  #   cap_drop: [ALL]
+  #   security_opt:
+  #     - no-new-privileges:true
+  #   volumes:
+  #     - "./mcp.json:/config/mcp.json:ro"
+  #     # Credentials for sandboxed servers ("secretsFrom"), chmod 640. They are
+  #     # added to the container after the request is validated, so the hub
+  #     # process never holds them.
+  #     - "./secrets:/run/secrets:ro"
+  #     - "/var/run/docker.sock:/var/run/docker.sock"
+  #     - "proxy-sock:/run/proxy"
+
+# volumes:
+#   proxy-sock:
 
 networks:
   default:
