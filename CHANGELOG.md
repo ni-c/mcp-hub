@@ -5,6 +5,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.2] - 2026-08-17
+
+### Fixed
+
+- Admin CLI changes now reach a running hub. `state.json` has always had a
+  second writer — every `mcp-hub-admin` invocation is its own process on the
+  same volume — but each `AuthStore` trusted the copy it read at startup and
+  `persist()` rewrote the whole file. A token minted by the CLI was therefore
+  refused by the hub as "Access token has been revoked" until the container was
+  restarted; worse, a token or client the CLI revoked stayed valid, and the
+  hub's next write put its stale snapshot back and resurrected it. Since
+  `persist()` runs on every refresh-token rotation, that happened within
+  minutes. Reads now re-read the file when it changed underneath them (inode,
+  mtime and size), and every mutation is a read-modify-write.
+- `checkAlive()` no longer leaks an unhandled rejection when a ping fails
+  because the connection went away. `onExit()` had already cleared the client
+  by the time the catch block read `this.client.close()`, which throws
+  synchronously and so slipped past the attached `.catch()`. Nothing was
+  actually broken — the restart was already scheduled — but the resulting
+  TypeError landed in `LOG_FILE` with a misleading stack and buried real
+  failures.
+
+### Security
+
+- Revocation is now effective against a running hub, which is what the README
+  and the security guide already promised. Both documents had described
+  `tokens revoke` as taking effect immediately while it silently did nothing
+  unless the container was stopped first.
+- `state.json` is written through a per-writer temporary file instead of a
+  fixed `state.json.tmp`, so two processes can no longer write into the same
+  temporary. With an atomic rename a reader can never observe a partial file;
+  the residual risk of concurrent writers is a lost update, not corruption.
+  Documented in SECURITY.md.
+- A reload that cannot be parsed keeps the state already in memory instead of
+  quarantining the file and starting fresh the way the constructor does.
+  Rotating `cookieSecret` under a running hub would log out every session.
+
+### Changed
+
+- Coverage gate: `@vitest/coverage-v8` pinned to the exact vitest version,
+  thresholds set just below the current measurement, and CI keeps the report as
+  an artifact. The repository had no coverage tooling before.
+- The admin-CLI recipes in the README and the deployment guide no longer tell
+  you to stop the container first.
+- `jose` 6.2.8 -> 6.2.9.
+
 ## [0.6.1] - 2026-08-14
 
 ### Fixed
