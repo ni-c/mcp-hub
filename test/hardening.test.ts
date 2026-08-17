@@ -37,6 +37,44 @@ describe('ManagedServer restart reporting', () => {
 
     await server.stop();
   });
+
+  it('survives the client disappearing while a ping is in flight', async () => {
+    const server = new ManagedServer('racy', { kind: 'stdio', command: '/bin/false', args: [], env: {}, hub: true });
+    server.state = 'up';
+    // The realistic sequence: the ping fails *because* the connection went
+    // away, so transport.onclose -> onExit has already cleared the client by
+    // the time the catch block runs. Reading this.client.close() there throws
+    // synchronously, so the attached .catch() never applies and the whole
+    // checkAlive() promise rejects unobserved.
+    server.client = {
+      ping: async () => {
+        server['onExit']('connection closed');
+        throw new Error('Connection closed');
+      },
+      close: async () => {}
+    } as unknown as NonNullable<ManagedServer['client']>;
+
+    await expect(server['checkAlive']()).resolves.toBeUndefined();
+    expect(server.state).toBe('down'); // onExit still scheduled the restart
+
+    await server.stop();
+  });
+
+  it('does not reject when the client goes away during stop()', async () => {
+    const server = new ManagedServer('racy-stop', { kind: 'stdio', command: '/bin/false', args: [], env: {}, hub: true });
+    server.state = 'up';
+    server.client = {
+      ping: async () => {},
+      close: async () => {
+        server['onExit']('child process exited');
+      }
+    } as unknown as NonNullable<ManagedServer['client']>;
+
+    // Supervisor.stop() and applyDiff() await this; a rejection here would
+    // escape into the shutdown and config-reload paths.
+    await expect(server.stop()).resolves.toBeUndefined();
+    expect(server.state).toBe('stopped');
+  });
 });
 
 describe('LoginRateLimiter', () => {

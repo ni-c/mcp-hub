@@ -95,12 +95,15 @@ export class ManagedServer {
   }
 
   private async refreshTools(): Promise<void> {
-    if (!this.client) return;
+    // Hold the client locally: onExit() clears this.client, and a paged list
+    // spans awaits, so re-reading it per page could hit undefined mid-loop.
+    const client = this.client;
+    if (!client) return;
     try {
       const tools: Tool[] = [];
       let cursor: string | undefined;
       do {
-        const page = await this.client.listTools({ cursor });
+        const page = await client.listTools({ cursor });
         tools.push(...page.tools);
         cursor = page.nextCursor;
       } while (cursor);
@@ -111,13 +114,22 @@ export class ManagedServer {
   }
 
   private async checkAlive(): Promise<void> {
-    if (this.state !== 'up' || !this.client) return;
+    // The ping usually fails *because* the connection went away, in which case
+    // transport.onclose -> onExit has already set this.client to undefined by
+    // the time the catch block runs. Reading this.client.close() there throws
+    // synchronously, so the attached .catch() never applies and the rejection
+    // escapes this method — setInterval() discards the promise, so it surfaced
+    // as an unhandled rejection with a misleading stack. Holding the client in
+    // a local makes the whole method immune to that reassignment.
+    const client = this.client;
+    if (this.state !== 'up' || !client) return;
     try {
-      await this.client.ping({ timeout: PING_TIMEOUT_MS });
+      await client.ping({ timeout: PING_TIMEOUT_MS });
     } catch (error) {
       console.error(`[${this.name}] ping failed, restarting: ${(error as Error).message}`);
-      // close() triggers transport.onclose -> onExit -> restart with backoff
-      await this.client.close().catch(() => {});
+      // close() triggers transport.onclose -> onExit -> restart with backoff.
+      // Already-closed transports reject here; onExit has then run regardless.
+      await client.close().catch(() => {});
     }
   }
 
@@ -151,8 +163,13 @@ export class ManagedServer {
     this.stopping = true;
     clearTimeout(this.restartTimer);
     clearInterval(this.pingTimer);
-    if (this.client) {
-      await this.client.close().catch(() => {});
+    // Same local-client rule as checkAlive(). This path happens to be safe
+    // today because the member access precedes the await, but Supervisor.stop()
+    // and applyDiff() await it, so an escaping rejection would land in the
+    // shutdown and config-reload paths. Structural, not incidental.
+    const client = this.client;
+    if (client) {
+      await client.close().catch(() => {});
       this.client = undefined;
     }
     this.state = 'stopped';
