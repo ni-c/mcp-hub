@@ -12,15 +12,19 @@ export default defineConfig({
       // (env parsing, listen, signal handlers) is never entered under test and
       // is the single largest gap in the numbers below — createHub() is in the
       // same file and is exercised by most of the suite.
-      exclude: ['src/admin.ts'],
-      // Measured 2026-08-17: 83.60 / 75.07 / 84.54 / 87.97. Set just below,
+      // docker-proxy/index.ts is the same kind of file as admin.ts: an entry
+      // point whose body runs on import (env, config load, listen, exit). What
+      // it wires together — policy.ts, secrets.ts, server.ts — is covered
+      // directly, including against a real daemon.
+      exclude: ['src/admin.ts', 'src/docker-proxy/index.ts'],
+      // Measured 2026-08-18: 85.62 / 79.22 / 83.72 / 89.45. Set just below,
       // with headroom on functions. Raise them when the measurement rises;
       // answer a drop with tests, never by lowering the gate.
       thresholds: {
-        statements: 82,
-        branches: 73,
-        functions: 79,
-        lines: 86
+        statements: 85,
+        branches: 78,
+        functions: 82,
+        lines: 89
       }
     }
   }

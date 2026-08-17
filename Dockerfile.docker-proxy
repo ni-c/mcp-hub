@@ -1,0 +1,52 @@
+# mcp-hub-docker-proxy: the only component that is given /var/run/docker.sock.
+#
+# It exists so the hub does not need it. The hub is the internet-facing part;
+# handing it the daemon socket would mean a bug there is root on the host. This
+# image contains one HTTP server that reads mcp-hub's own mcp.json and lets
+# through exactly the container operations that file describes.
+#
+# Deliberately smaller than the hub image: no npx, no uv, no python, no git —
+# nothing here spawns anything. It is meant to be read end to end.
+
+# Build stage
+FROM node:26-bookworm-slim@sha256:cd565714d4da3e84bfd341e31448f81d47c6362198f152345297c9c1154e6341 AS build
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --ignore-scripts
+COPY tsconfig.json ./
+COPY src ./src
+RUN npm run build && npm prune --omit=dev --ignore-scripts
+
+FROM node:26-bookworm-slim@sha256:cd565714d4da3e84bfd341e31448f81d47c6362198f152345297c9c1154e6341
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends tini \
+    && rm -rf /var/lib/apt/lists/*
+# The base image bundles npm 10, whose vendored dependencies carry known
+# HIGH/CRITICAL CVEs. This image never runs npm, but an unused vulnerable copy
+# still shows up in every scan of it, so it goes.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
+
+LABEL org.opencontainers.image.source="https://github.com/ni-c/mcp-hub"
+LABEL org.opencontainers.image.description="Policy-enforcing Docker socket proxy for mcp-hub sandbox servers"
+
+WORKDIR /app
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/dist ./dist
+COPY package.json ./
+
+ENV NODE_ENV=production \
+    CONFIG_PATH=/config/mcp.json \
+    LISTEN_SOCKET=/run/proxy/docker.sock \
+    DOCKER_SOCKET=/var/run/docker.sock \
+    SANDBOX_SECRETS_DIR=/run/secrets
+
+# Same unprivileged user as the hub. Access to the daemon socket comes from the
+# `docker` group, added in Compose with group_add — not from running as root.
+RUN mkdir -p /run/proxy && chown -R node:node /run/proxy /app
+USER node
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
+  CMD ["node", "-e", "require('node:fs').statSync(process.env.LISTEN_SOCKET).isSocket()||process.exit(1)"]
+
+ENTRYPOINT ["tini", "--"]
+CMD ["node", "dist/docker-proxy/index.js"]
