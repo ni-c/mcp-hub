@@ -556,6 +556,36 @@ describe('per-server proxy', () => {
       .send({ jsonrpc: '2.0', method: 'ping', id: 1 })
       .expect(404);
   });
+
+  /**
+   * The proxy used to hand the child's capabilities straight to the client.
+   * server-everything advertises resources.subscribe and implements it, but the
+   * proxy registers no Subscribe handler, so a client that believed the
+   * advertisement got -32601 at call time. Announce only what we serve.
+   */
+  it('does not advertise resource subscriptions it cannot serve', async () => {
+    const client = await mcpClient('/everything/mcp', accessToken);
+    const caps = client.getServerCapabilities();
+
+    expect(caps?.resources).toBeDefined();
+    expect(caps?.resources?.subscribe).toBeUndefined();
+
+    // Only the key is gone, not the capability: list and read still work.
+    const resources = await client.listResources();
+    expect(resources.resources.length).toBeGreaterThan(0);
+
+    await client.close();
+  });
+
+  it('refuses a subscribe request, which is why it is no longer advertised', async () => {
+    const response = await request(hub.app)
+      .post('/everything/mcp')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .set('Accept', 'application/json, text/event-stream')
+      .send({ jsonrpc: '2.0', method: 'resources/subscribe', params: { uri: 'test://static/resource/1' }, id: 1 })
+      .expect(200);
+    expect(response.body.error?.code).toBe(-32601);
+  });
 });
 
 describe('/hub aggregate', () => {
