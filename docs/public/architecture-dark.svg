@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  GENERATED FILE — do not edit by hand.
+  Source: docs/assets/architecture.source.svg
+  Regenerate with: npm run assets
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 320" width="800" height="320" role="img" aria-labelledby="flow-title">
+  <title id="flow-title">Request flow from an MCP client through a reverse proxy into mcp-hub and on to its child servers</title>
+
+  <style>
+    .node { stroke-width: 1.25; }
+    .node-accent { stroke-width: 1.5; }
+    .edge { stroke-width: 1.5; fill: none; }
+    .edge-accent { stroke-width: 1.75; fill: none; }
+    .edge-dashed { stroke-dasharray: 5 4; }
+    text { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "DejaVu Sans", sans-serif; font-size: 13px; }
+    .label-title { font-size: 13.5px; font-weight: 600; }
+    .label-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "DejaVu Sans Mono", monospace; font-size: 12px; }
+    .label-muted { font-size: 11.5px; }
+
+    .node { fill: rgba(148, 163, 184, 0.10); stroke: #64748b; }
+    .node-accent { fill: rgba(129, 140, 248, 0.16); stroke: #a5b4fc; }
+    .edge { stroke: #64748b; }
+    .edge-accent { stroke: #a5b4fc; }
+    text { fill: #e2e8f0; }
+    .label-muted { fill: #94a3b8; }
+    marker path { fill: #64748b; stroke: none; }
+    marker.accent path { fill: #a5b4fc; }
+  </style>
+
+  <defs>
+    <marker id="arrow-flow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" />
+    </marker>
+    <marker id="arrow-flow-accent" class="accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" />
+    </marker>
+  </defs>
+
+  <rect class="node" x="4" y="124" width="150" height="72" rx="10" />
+  <text x="79" y="149" text-anchor="middle" class="label-title">MCP client</text>
+  <text x="79" y="167" text-anchor="middle" class="label-muted" font-size="10.5">ChatGPT · Claude</text>
+  <text x="79" y="182" text-anchor="middle" class="label-muted" font-size="10.5">Cursor · Le Chat …</text>
+
+  <rect class="node" x="200" y="124" width="124" height="72" rx="10" />
+  <text x="262" y="153" text-anchor="middle" class="label-title">Reverse proxy</text>
+  <text x="262" y="172" text-anchor="middle" class="label-muted">TLS termination</text>
+
+  <rect class="node-accent" x="368" y="24" width="220" height="272" rx="14" />
+  <text x="478" y="50" text-anchor="middle" class="label-title">mcp-hub</text>
+  <text x="478" y="68" text-anchor="middle" class="label-muted">one Node process</text>
+
+  <rect class="node" x="384" y="84" width="188" height="44" rx="8" />
+  <text x="478" y="111" text-anchor="middle" class="label-mono">OAuth 2.1 AS</text>
+
+  <rect class="node" x="384" y="140" width="188" height="44" rx="8" />
+  <text x="478" y="167" text-anchor="middle" class="label-mono">/hub · /&lt;name&gt;/mcp</text>
+
+  <rect class="node" x="384" y="196" width="188" height="44" rx="8" />
+  <text x="478" y="223" text-anchor="middle" class="label-mono">supervisor</text>
+
+  <text x="478" y="268" text-anchor="middle" class="label-muted">ping · backoff restart · hot reload</text>
+
+  <rect class="node" x="650" y="52" width="146" height="56" rx="10" />
+  <text x="723" y="76" text-anchor="middle" class="label-mono">paperless</text>
+  <text x="723" y="94" text-anchor="middle" class="label-muted">stdio child</text>
+
+  <rect class="node" x="650" y="132" width="146" height="56" rx="10" />
+  <text x="723" y="156" text-anchor="middle" class="label-mono">scraper</text>
+  <text x="723" y="174" text-anchor="middle" class="label-muted">sandbox container</text>
+
+  <rect class="node" x="650" y="212" width="146" height="56" rx="10" />
+  <text x="723" y="236" text-anchor="middle" class="label-mono">homeassistant</text>
+  <text x="723" y="254" text-anchor="middle" class="label-muted">remote http/sse</text>
+
+  <path class="edge-accent" d="M154 160 L194 160" marker-end="url(#arrow-flow-accent)" />
+  <text x="174" y="149" text-anchor="middle" class="label-muted">TLS</text>
+  <path class="edge-accent" d="M324 160 L362 160" marker-end="url(#arrow-flow-accent)" />
+
+  <path class="edge" d="M588 218 C 612 218, 616 80, 632 80 L644 80" marker-end="url(#arrow-flow)" />
+  <path class="edge" d="M588 218 C 612 218, 616 160, 632 160 L644 160" marker-end="url(#arrow-flow)" />
+  <path class="edge edge-dashed" d="M588 218 C 612 218, 616 240, 632 240 L644 240" marker-end="url(#arrow-flow)" />
+</svg>

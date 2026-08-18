@@ -5,6 +5,8 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+<!-- #region changelog -->
+
 ## [Unreleased]
 
 ### Added
@@ -64,6 +66,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mounts, ports, network, user and command must be literal: the proxy validates
   those fields against the config and deliberately holds none of the hub's
   secrets, so a variable there would be a field it could not check.
+## [0.6.4] - 2026-08-18
+
+### Fixed
+
+- The architecture diagram no longer depends on the reader's operating system.
+  It carried a `prefers-color-scheme` block, which resolves against the OS rather
+  than the theme toggle of GitHub or npm — so dark-mode readers on a light OS got
+  the light artwork on a dark page. The README now uses `<picture>`, which is
+  resolved against the page, and the `<img>` that npm falls back to brings its own
+  card instead of a media query.
+
+### Changed
+
+- The diagram is generated from a single source, `docs/assets/architecture.source.svg`,
+  by `npm run assets`. The four rendered copies had already drifted apart; CI now
+  fails if one of them is edited by hand.
+- `docs/public/og.png` is generated at exactly 1280x640, GitHub's recommended size
+  for a social preview, instead of being drawn by hand.
 
 ## [0.6.3] - 2026-08-17
 
@@ -209,6 +229,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `RESOURCE_BOUND_TOKENS=false` — it restores the old behaviour and logs a
   warning on every start. The default also applies to `createHub()` for
   programmatic use.
+
 - **Breaking: `/health` requires a token for `/hub`.** It reports the same
   fleet-wide view as the aggregate — every server's name, state and tool count —
   so a token bound to a single server no longer reads it. Unauthenticated
@@ -295,3 +316,5 @@ routing (`/<name>`, `/<name>/mcp`), the `/hub` aggregate with four meta-tools,
 a built-in OAuth 2.1 authorization server (DCR, PKCE, per-client approval,
 rotating refresh tokens), child supervision with backoff restarts, config hot
 reload, native remote `http`/`sse` upstreams and multi-arch images on GHCR.
+
+<!-- #endregion changelog -->

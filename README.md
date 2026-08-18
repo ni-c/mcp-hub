@@ -16,7 +16,15 @@ protected by a single password, plus long-lived API tokens for clients that
 cannot do OAuth (OpenAI Responses API, xAI API, Gemini API). Per-client
 recipes: [client compatibility](https://mcp-hub.ni-c.de/guide/client-compatibility).
 
-<img src="https://mcp-hub.ni-c.de/architecture.svg" alt="MCP clients connect through a reverse proxy to mcp-hub: one Node process with an OAuth 2.1 authorization server, one path per server plus the /hub aggregate, and a supervisor keeping the stdio children and remote upstreams alive" width="800">
+<!-- <picture> is resolved against the colour scheme of the page showing it, so GitHub
+     picks the variant that matches its own theme toggle. npm strips <picture> and
+     <source> when it sanitises the README and keeps the <img>, which is why that
+     fallback brings its own dark card instead of relying on a media query. -->
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://mcp-hub.ni-c.de/architecture-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="https://mcp-hub.ni-c.de/architecture-light.svg">
+  <img src="https://mcp-hub.ni-c.de/architecture.svg" alt="MCP clients connect through a reverse proxy to mcp-hub: one Node process with an OAuth 2.1 authorization server, one path per server plus the /hub aggregate, and a supervisor keeping the stdio children and remote upstreams alive" width="800">
+</picture>
 
 ![Demo: config in, hub up, servers reachable through one endpoint](https://mcp-hub.ni-c.de/demo.gif)
 

@@ -1,6 +1,6 @@
 {
   "name": "@ni-c/mcp-hub",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "description": "Serve multiple stdio MCP servers from one container: Claude-Code-style mcpServers config, path-based routing, hub meta-tools, and OAuth 2.1 + API tokens for ChatGPT, Claude and any Streamable-HTTP MCP client.",
   "keywords": [
     "mcp",
@@ -44,7 +44,9 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
-    "prepublishOnly": "npm test && npm run build"
+    "prepublishOnly": "npm test && npm run build",
+    "assets": "node scripts/gen-assets.mjs",
+    "assets:check": "node scripts/gen-assets.mjs --check"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
@@ -55,6 +57,7 @@
   },
   "devDependencies": {
     "@modelcontextprotocol/server-everything": "^2026.7.4",
+    "@resvg/resvg-js": "^2.6.2",
     "@types/express": "^5.0.0",
     "@types/node": "^26.2.0",
     "@types/supertest": "^7.2.1",
