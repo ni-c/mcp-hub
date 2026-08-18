@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- #region changelog -->
 
+## [0.8.0] - 2026-08-18
+
+### Added
+
+- **Secrets hot-reload.** The docker-proxy now watches the sandbox secrets
+  directory: when the content of a referenced `<set>.env` changes, it stops the
+  affected sandbox container (after the same daemon-side ownership check as
+  every other container action), and the hub's supervisor recreates it — the
+  replacement create reads the file fresh. Rotating a token is now an edit, not
+  a hub restart. Content is compared by parsed entries, so a `touch` or a
+  comment-only edit triggers nothing; a broken edit (permissions, symlink,
+  parse error, a key colliding with the entry's `env`) is logged and ignored so
+  it cannot crash-loop a running server. Opt out with
+  `SANDBOX_SECRETS_WATCH=false`. The hub is unchanged and
+  `DOCKER_POLICY_VERSION` stays at 1 — 0.7.0 hubs interoperate.
+
 ## [0.7.0] - 2026-08-18
 
 ### Added

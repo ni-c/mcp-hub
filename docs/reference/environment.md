@@ -45,6 +45,7 @@ The proxy image (`ghcr.io/ni-c/mcp-hub-docker-proxy`) reads its own set:
 | `LISTEN_SOCKET` | `/run/proxy/docker.sock` | Unix socket the hub connects to. Shared with the hub through a volume. |
 | `DOCKER_SOCKET` | `/var/run/docker.sock` | The real daemon. |
 | `SANDBOX_SECRETS_DIR` | `/run/secrets` | Where `"secretsFrom": "x"` looks for `x.env`. Files must be regular, non-symlink, at most 64 KiB, mode 640 or stricter, with at most 100 unique non-NUL entries. |
+| `SANDBOX_SECRETS_WATCH` | `true` | Watch referenced secret files and recreate the affected sandbox when their content changes. Set to `false` to apply secret changes only on the next container create. |
 | `SOCKET_MODE` | `0660` | Permissions of `LISTEN_SOCKET`. Group access is how the hub gets in; world-writable would hand the policy to anyone on the host. |
 | `LOG_FILE` | *(unset)* | Same mirroring as the hub's, useful because refusals are logged as `DENY`. |
 

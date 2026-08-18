@@ -217,6 +217,16 @@ permissions, NUL bytes, duplicate keys and sets above 100 variables are refused.
 A key that collides with the entry's own `env` keys is refused too. Invalid
 secrets prevent startup and config reload rather than failing only on create.
 
+**Rotating a secret is an edit, not a restart.** The proxy watches the secrets
+directory: when the *content* of a referenced file changes, it stops the
+affected sandbox container, and the hub's supervisor recreates it — the
+replacement create reads the file fresh, like every create does. A `touch` or a
+comment-only edit changes nothing and triggers nothing. A broken edit (bad
+permissions, a symlink, a parse error, a key that collides with `env`) is
+logged and ignored, so it cannot crash-loop a running server; fix the file and
+the next valid content applies. Set `SANDBOX_SECRETS_WATCH=false` on the proxy
+to opt out — changes then apply on the next container create only.
+
 ## Socket servers
 
 If you would rather not give any component the Docker socket, run the container
@@ -274,3 +284,4 @@ happens to speak MCP.
 | `permission denied … /var/run/docker.sock` in the proxy | `group_add` is missing or has the wrong gid. |
 | Server flaps `up` / `down (container exited)` | The server exits on its own. Its stderr is in the hub's log, prefixed with the server name. |
 | Handshake never completes, log shows `not JSON` | The server writes to stdout. Under stdio that is the protocol channel. |
+| A rotated secret is not picked up | Check the proxy log: `ignoring broken secrets update` means the edit was invalid and the old values stay; no line at all means the content did not actually change (comments and whitespace do not count), or `SANDBOX_SECRETS_WATCH=false` is set. |

@@ -4,7 +4,9 @@ import path from 'node:path';
 import { ConfigWatcher, loadConfig, warnMutableDockerImages, type HubConfig } from '../config.js';
 import { installFileLogging } from '../logfile.js';
 import { VERSION } from '../version.js';
-import { createDockerProxy } from './server.js';
+import { containerName } from '../sandbox/container-spec.js';
+import { createDockerProxy, recreateSandbox } from './server.js';
+import { SecretsWatcher } from './secrets-watcher.js';
 import { SecretStore, validateConfigSecrets } from './secrets.js';
 
 /**
@@ -65,9 +67,36 @@ watcher.on('change', (_next, diff) => {
   console.log(
     `mcp-hub-docker-proxy: policy reloaded (added: ${diff.added.join(',') || '-'} removed: ${diff.removed.join(',') || '-'} changed: ${diff.changed.join(',') || '-'})`
   );
+  secretsWatcher.refresh();
 });
 watcher.on('error', error => console.error(`mcp-hub-docker-proxy: ignoring broken config update: ${(error as Error).message}`));
 watcher.start();
+
+// A secrets edit recreates the affected sandbox: the hub cannot react to it
+// (it never sees these files — that is the point of secretsFrom), and the
+// values are only applied at container create. Without this, a rotated token
+// would sit unused until the next hub restart.
+const secretsWatcher = new SecretsWatcher(secrets, secretsDir, () => watcher.current);
+secretsWatcher.on('change', (set: string, servers: string[]) => {
+  for (const server of servers) {
+    console.log(
+      `mcp-hub-docker-proxy: secrets for "${set}" changed, recreating ${containerName(server)} (the hub restarts it with the new values)`
+    );
+    recreateSandbox({ dockerSocket }, server)
+      .then(result => {
+        if (result === 'absent') {
+          console.log(`mcp-hub-docker-proxy: no running container for "${server}" — the next create picks up the new values`);
+        }
+      })
+      .catch(error => console.error(`mcp-hub-docker-proxy: cannot recreate ${containerName(server)}: ${(error as Error).message}`));
+  }
+});
+secretsWatcher.on('error', (error: Error) => console.error(`mcp-hub-docker-proxy: ignoring broken secrets update: ${error.message}`));
+if (env('SANDBOX_SECRETS_WATCH', 'true') !== 'false') {
+  secretsWatcher.start();
+} else {
+  console.log('mcp-hub-docker-proxy: SANDBOX_SECRETS_WATCH=false — secrets changes apply on the next container create only');
+}
 
 const server = createDockerProxy({ dockerSocket, config: () => watcher.current, secretsDir });
 
@@ -97,6 +126,7 @@ server.listen(listenSocket, () => {
 const shutdown = (signal: string) => {
   console.log(`mcp-hub-docker-proxy: received ${signal}, shutting down`);
   watcher.stop();
+  secretsWatcher.stop();
   server.close();
   try {
     fs.unlinkSync(listenSocket);
