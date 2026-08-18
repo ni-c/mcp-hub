@@ -45,6 +45,128 @@ claude mcp add -t http hub https://mcp.example.net/hub
 
 Claude Code opens a browser for the OAuth flow on first use, the same way.
 
+## ChatGPT
+
+Enable Settings → **Security and login** → *Developer mode*, then go to
+Settings → **Plugins** → *Browse plugins* and press **+**.
+
+In the left column of the dialog: give the connector a *Name*, leave
+*Connection* on **Server URL** and enter the endpoint **including its path**,
+then set *Authentication* to **OAuth** and tick the risk acknowledgement.
+
+::: warning The path is not optional
+`https://mcp.example.net/` is not an MCP endpoint. ChatGPT falls back to
+probing `/mcp`, and all you see is
+`{"error":"invalid_token","error_description":"Missing Authorization header"}`.
+Use `https://mcp.example.net/hub` or `https://mcp.example.net/<name>/mcp`.
+:::
+
+Open **Advanced OAuth settings** and fill in the five fields under *OAuth
+endpoints*. ChatGPT keeps *Dynamic Client Registration (DCR)* greyed out until
+a registration URL is present in the form, so entering them by hand is what
+unlocks the registration method you want. CIMD is not supported by the hub —
+ChatGPT reports it as unavailable on its own.
+
+| Field | Value |
+|---|---|
+| Auth URL | `https://mcp.example.net/authorize` |
+| Token URL | `https://mcp.example.net/token` |
+| Registration URL | `https://mcp.example.net/register` |
+| Authorization server base | `https://mcp.example.net` (no trailing slash) |
+| Resource | the connector URL, e.g. `https://mcp.example.net/hub` |
+
+*Resource* has to be a canonical resource identifier — `/hub` or
+`/<name>/mcp`, the same value the RFC 9728 document names. Anything else is
+rejected with `invalid_target`.
+
+Two settings stay untouched: leave *Base scopes* and *Default scopes* empty
+(the hub advertises no `scopes_supported`, and requesting one fails with
+`invalid_scope`), and leave **OIDC disabled** — the hub only mirrors its RFC
+8414 document at the [OIDC discovery path](/reference/endpoints#discovery-documents),
+it is not an OpenID Connect provider.
+
+Press *Create*, and ChatGPT registers itself, opens the hub's login page and
+asks for the password. From then on the connector reconnects on its own.
+
+::: tip Sign in appears to do nothing?
+On hubs older than 0.7.0 the interactive pages sent a `form-action 'self'`
+CSP, which browsers also apply to the redirect that carries the code back to
+the client. The password was accepted and the redirect silently dropped, so
+the window just sat there. Upgrade the hub.
+:::
+
+## Codex CLI
+
+```sh
+codex mcp add hub \
+  --url https://mcp.example.net/hub \
+  --oauth-resource https://mcp.example.net/hub
+```
+
+Passing `--url` instead of a command selects streamable HTTP, which is the only
+transport Codex will run an OAuth login against.
+
+`--oauth-resource` is required here: the hub binds every token to one resource
+(RFC 8707), and an authorization request without it is refused with
+`invalid_target`. The value is the canonical identifier — `…/hub` or
+`…/<name>/mcp`.
+
+`codex mcp add` writes the entry to `~/.codex/config.toml` and starts the login
+right away (*"Detected OAuth support. Starting OAuth flow…"*), so the browser
+lands on the hub's password page. If it prints *"MCP server may or may not
+require login"* instead, run `codex mcp login hub`. The result:
+
+```toml
+[mcp_servers.hub]
+url = "https://mcp.example.net/hub"
+oauth_resource = "https://mcp.example.net/hub"
+```
+
+Older Codex builds have no `--oauth-resource` flag — add that line by hand,
+then `codex mcp login hub`.
+
+Codex requests whatever scopes it discovers and retries without them if the
+provider objects; since the hub advertises none, neither happens. Its callback
+is a loopback URL on a port it picks per flow, which the hub accepts.
+
+`codex mcp list` shows an *Auth* column, `codex mcp get hub` the full entry,
+and `codex mcp logout hub` drops the stored credentials.
+
+## Gemini CLI
+
+```sh
+gemini mcp add --transport http --scope user hub https://mcp.example.net/hub
+```
+
+`--transport http` matters: in Gemini's configuration `url` means SSE and
+`httpUrl` means streamable HTTP, so without the flag the entry is written for a
+transport the hub does not serve. `--scope user` puts it in
+`~/.gemini/settings.json`; the default, `project`, writes `.gemini/settings.json`
+in the current directory.
+
+```json
+{
+  "mcpServers": {
+    "hub": {
+      "httpUrl": "https://mcp.example.net/hub"
+    }
+  }
+}
+```
+
+Gemini compares resource identifiers strictly, so use exactly the URL the
+path-scoped metadata names — `https://mcp.example.net/paperless/mcp`, not the
+short `…/paperless` form, and `…/hub` for the aggregate.
+
+OAuth is discovered from the hub's `401` challenge, so the `oauth` block with
+`clientId`, `authorizationUrl` and `tokenUrl` stays out of the configuration.
+If the flow does not start on its own, or a token has expired, run `/mcp auth
+hub` inside the CLI; `/mcp auth` alone lists the servers waiting for a login.
+
+Two knobs are worth knowing: `timeout` (600000 ms by default) bounds each
+request, and `trust: true` has nothing to do with authenticating against the
+hub — it only stops Gemini from asking you to confirm tool calls.
+
 ## Other clients
 
 Anything that implements the MCP authorization spec works. The hub publishes
@@ -54,7 +176,11 @@ the standard discovery documents, so a client only needs the endpoint URL:
   which authorization server to use, path-scoped so `/paperless/mcp` gets its
   own resource identifier
 - `/.well-known/oauth-authorization-server[/<path>]` — RFC 8414 metadata for
-  the hub's own authorization server
+  the hub's own authorization server, also served at
+  `/.well-known/openid-configuration` for clients that probe there first
+
+Clients that want the endpoints typed in rather than discovered will find every
+path, with what guards it, under [HTTP endpoints](/reference/endpoints).
 
 Dynamic client registration (`/register`) is open, as the MCP specification
 intends. Registration alone grants nothing: a client only receives an
