@@ -1,0 +1,9 @@
+{
+  "$comment": "Copy for docs/public/og.png, the GitHub social preview and the OpenGraph card. Rendered by scripts/gen-assets.mjs. Tagline and badges are split by hand because the renderer does not wrap text.",
+  "title": "mcp-hub",
+  "tagline": [
+    "One endpoint for every MCP server you run — path routing,",
+    "a built-in OAuth 2.1 server, and a supervisor that keeps them up."
+  ],
+  "badges": ["one container", "OAuth 2.1", "MIT", "Node ≥22"]
+}
