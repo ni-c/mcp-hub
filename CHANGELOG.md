@@ -5,6 +5,8 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+<!-- #region changelog -->
+
 ## [0.6.4] - 2026-08-18
 
 ### Fixed
@@ -255,3 +257,5 @@ routing (`/<name>`, `/<name>/mcp`), the `/hub` aggregate with four meta-tools,
 a built-in OAuth 2.1 authorization server (DCR, PKCE, per-client approval,
 rotating refresh tokens), child supervision with backoff restarts, config hot
 reload, native remote `http`/`sse` upstreams and multi-arch images on GHCR.
+
+<!-- #endregion changelog -->

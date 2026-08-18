@@ -8,7 +8,12 @@ repository, which is also the source for the
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-<!--@include: ../../CHANGELOG.md{8,}-->
+<!-- Included from CHANGELOG.md by name, not by line range: a range silently drops
+     whatever moved out of it, so growing the file's header would quietly delete the
+     newest release from this page while the build stays green. The markers live in
+     CHANGELOG.md as `#region changelog` / `#endregion changelog`, and the Docs
+     workflow asserts that the current version reaches the rendered page. -->
+<!--@include: ../../CHANGELOG.md#changelog-->
 
 ## Known gaps
 

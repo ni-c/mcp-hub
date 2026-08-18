@@ -50,6 +50,24 @@ jobs:
       - run: npm run build
         working-directory: docs
 
+      # Every release in CHANGELOG.md must reach the rendered page. VitePress does
+      # not fail the build when the @include produces nothing, and it silently falls
+      # back to the whole file when a region name stops matching — so check the
+      # result, per version, against the heading anchors VitePress derives from them.
+      - name: Check every release reaches the changelog page
+        run: |
+          page=docs/.vitepress/dist/reference/changelog.html
+          missing=""
+          for v in $(grep -oE '^## \[[0-9][^]]*\]' CHANGELOG.md | tr -d '#[] '); do
+            grep -q "id=\"_$(echo "$v" | tr . -)" "$page" || missing="$missing $v"
+          done
+          if [ -n "$missing" ]; then
+            echo "Missing from $page:$missing" >&2
+            echo "The '#region changelog' include in CHANGELOG.md is broken." >&2
+            exit 1
+          fi
+          echo "changelog page carries all $(grep -cE '^## \[' CHANGELOG.md) releases"
+
       # Publish without a third-party action: one orphan commit force-pushed to
       # gh-pages keeps the branch a single revision and adds no supply-chain
       # surface. public/CNAME and public/.nojekyll are part of the build output,
