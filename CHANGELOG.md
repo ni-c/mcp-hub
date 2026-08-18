@@ -94,6 +94,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on every config reload. Digests are strongly recommended; tags stay supported.
 - Base images are pinned to `node:24-bookworm-slim` by digest.
 
+### Fixed
+
+- The login and consent pages name the client's redirect origin in their
+  `form-action`, so signing in actually completes. Browsers apply the directive
+  to every hop of a form submission, and the last hop is the redirect that
+  carries the authorization code back to the client — with a bare `'self'`
+  Chrome and Firefox blocked it silently, leaving the window sitting on the
+  password prompt with nothing happening on click or Enter. The origin comes
+  from the redirect_uri the SDK has already matched against the client's
+  registration, so the widening is per-request and never wider than the flow.
+
 ### Security
 
 - The proxy verifies container ownership with the daemon before every start,

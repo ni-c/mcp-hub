@@ -223,6 +223,38 @@ describe('OAuth', () => {
     expect(response.headers['referrer-policy']).toBe('no-referrer');
   });
 
+  // A form submission is checked against form-action at every hop, and the last
+  // hop is the redirect back to the client. Without the client's origin the
+  // browser blocks it and the login window silently does nothing.
+  it('lets the interactive pages redirect to the client that was authorized', async () => {
+    const clientId = await registerClient('form-action');
+
+    const consent = await authorizeWithSession(clientId, sessionCookie()).expect(200);
+    expect(consent.headers['content-security-policy']).toContain("form-action 'self' http://localhost:33418;");
+
+    const { challenge } = pkcePair();
+    const login = await request(hub.app)
+      .get('/authorize')
+      .query({
+        client_id: clientId,
+        redirect_uri: REDIRECT_URI,
+        response_type: 'code',
+        code_challenge: challenge,
+        code_challenge_method: 'S256'
+      })
+      .expect(200);
+    expect(login.headers['content-security-policy']).toContain("form-action 'self' http://localhost:33418;");
+
+    // The retry after a wrong password has to reach the same redirect.
+    const requestToken = login.text.match(/name="request" value="([^"]+)"/)?.[1];
+    const retry = await request(hub.app).post('/login').type('form').send({ password: 'nope', request: requestToken }).expect(401);
+    expect(retry.headers['content-security-policy']).toContain("form-action 'self' http://localhost:33418;");
+
+    // Nothing else on the hub is widened.
+    const metadata = await request(hub.app).get('/.well-known/oauth-authorization-server').expect(200);
+    expect(metadata.headers['content-security-policy']).toContain("form-action 'self';");
+  });
+
   it('rejects a wrong password and logs the attempt', async () => {
     const registration = await request(hub.app)
       .post('/register')
