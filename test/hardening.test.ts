@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ManagedServer } from '../src/supervisor.js';
 import { AuthStore, MAX_UNAPPROVED_CLIENTS } from '../src/auth/store.js';
@@ -325,5 +326,73 @@ describe('AuthStore across processes', () => {
 
     // A fixed "state.json.tmp" would let two writers scribble over each other.
     expect(fs.readdirSync(dir).filter(f => f.includes('.tmp'))).toEqual([]);
+  });
+
+  const runWriter = (dir: string, mode: 'create' | 'revoke', prefix: string) =>
+    new Promise<void>((resolve, reject) => {
+      const source = `
+        import { AuthStore } from './src/auth/store.ts';
+        const [dir, mode, prefix] = process.argv.slice(1);
+        const store = new AuthStore(dir);
+        const now = Math.floor(Date.now() / 1000);
+        if (mode === 'revoke') store.revokeApiToken('doomed');
+        else for (let i = 0; i < 50; i++) store.saveApiToken(prefix + i, { label: prefix, resource: 'https://hub.test/hub', createdAt: now, expiresAt: now + 3600 });
+      `;
+      const child = spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', source, dir, mode, prefix], {
+        cwd: path.resolve('.'),
+        stdio: ['ignore', 'ignore', 'pipe']
+      });
+      let stderr = '';
+      child.stderr.on('data', chunk => (stderr += chunk));
+      child.on('error', reject);
+      child.on('exit', code => (code === 0 ? resolve() : reject(new Error(`child exited ${code}: ${stderr}`))));
+    });
+
+  it('serializes simultaneous writers in separate OS processes', async () => {
+    const dir = tmpDir();
+    new AuthStore(dir);
+    await Promise.all([runWriter(dir, 'create', 'left-'), runWriter(dir, 'create', 'right-')]);
+    const tokens = new AuthStore(dir).listApiTokens();
+    expect(Object.keys(tokens).filter(id => id.startsWith('left-'))).toHaveLength(50);
+    expect(Object.keys(tokens).filter(id => id.startsWith('right-'))).toHaveLength(50);
+  });
+
+  it('does not resurrect a revocation racing an unrelated OS-process writer', async () => {
+    const dir = tmpDir();
+    const store = new AuthStore(dir);
+    store.saveApiToken('doomed', record('doomed'));
+    await Promise.all([runWriter(dir, 'revoke', 'unused'), runWriter(dir, 'create', 'kept-')]);
+    const reloaded = new AuthStore(dir);
+    expect(reloaded.getApiToken('doomed')).toBeUndefined();
+    expect(Object.keys(reloaded.listApiTokens()).filter(id => id.startsWith('kept-'))).toHaveLength(50);
+  });
+
+  it('breaks a lock whose owner file was never written', () => {
+    const dir = tmpDir();
+    new AuthStore(dir);
+    // The lock directory is created before the owner file: a process killed
+    // between the two leaves a lock nobody can attribute. Without the age
+    // fallback this wedges the data directory permanently.
+    const lock = path.join(dir, '.auth-state.lock');
+    fs.mkdirSync(lock);
+    const stale = new Date(Date.now() - 60_000);
+    fs.utimesSync(lock, stale, stale);
+
+    const store = new AuthStore(dir);
+    store.saveApiToken('after', record('after'));
+    expect(new AuthStore(dir).getApiToken('after')).toBeDefined();
+  });
+
+  it('rewrites a state file that vanished under a running store', () => {
+    const dir = tmpDir();
+    const hub = new AuthStore(dir);
+    hub.saveApiToken('live', record('live'));
+    fs.rmSync(path.join(dir, 'state.json'));
+
+    // Refusing here would break every refresh-token rotation until restart.
+    hub.saveApiToken('after', record('after'));
+    const reloaded = new AuthStore(dir);
+    expect(reloaded.getApiToken('live')).toBeDefined();
+    expect(reloaded.getApiToken('after')).toBeDefined();
   });
 });
