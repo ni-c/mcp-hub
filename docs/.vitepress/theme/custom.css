@@ -173,3 +173,17 @@
 .vp-doc .custom-block-title {
   text-transform: none;
 }
+
+/**
+ * The terminal recording is sized by whatever the tape recorded, so it only lines
+ * up with the diagram above it by luck — anything narrower than the content column
+ * stops short of the right edge. Pin it to the column and give it the same rounded
+ * frame as the diagram so the two read as a pair.
+ */
+.vp-doc img[src$='demo.gif'] {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 12px;
+}
