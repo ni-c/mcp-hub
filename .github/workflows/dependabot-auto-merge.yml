@@ -1,14 +1,14 @@
 name: Dependabot auto-merge
 
 # Queues low-risk Dependabot updates for merge once CI is green, so routine
-# patch and minor bumps do not need a manual click each week.
+# patch bumps of direct development dependencies do not need a manual click.
 #
 # Safety rests on two things:
 #   * `main` requires the CI checks, so `--auto` waits for tests, CodeQL and
 #     the Trivy container scan instead of merging immediately.
 #   * The condition is written positively: only updates Dependabot explicitly
-#     labels patch or minor are queued. Majors — and anything whose update type
-#     cannot be determined — stay manual rather than slipping through.
+#     labels as a patch to a direct development dependency are queued. Runtime,
+#     transitive, minor, major and unclassified updates remain manual.
 #
 # /docs is excluded on purpose. Its build runs in docs.yml, which is path
 # filtered and therefore cannot be a required check on every PR — so auto-merge
@@ -35,9 +35,9 @@ jobs:
 
       - name: Queue for merge
         if: |
-          steps.metadata.outputs.directory != '/docs' &&
-          (steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
-           steps.metadata.outputs.update-type == 'version-update:semver-minor')
+          steps.metadata.outputs.directory == '/' &&
+          steps.metadata.outputs.dependency-type == 'direct:development' &&
+          steps.metadata.outputs.update-type == 'version-update:semver-patch'
         run: gh pr merge --auto --squash "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
