@@ -186,6 +186,17 @@ MCP request bodies are parsed only *after* the bearer token has been verified,
 and are then bounded by `MCP_BODY_LIMIT`, the per-client request rate and the
 per-client concurrency limit.
 
+Child responses are bounded too: forwarded results stop at 8 MiB, tool discovery
+at 100 pages, 10,000 tools and 16 MiB of metadata. Tool calls have a five-minute
+deadline, and it is absolute by default — progress notifications do not extend
+it, because a child that emits one every few seconds could otherwise hold a
+request, and one of the client's concurrency slots, open forever. A deployment
+with genuinely long-running tools can raise `MCP_CALL_TIMEOUT_MS` or set
+`MCP_RESET_TIMEOUT_ON_PROGRESS=true`; both trade that bound for convenience and
+need `HTTP_REQUEST_TIMEOUT_MS` and the reverse proxy raised to match. A sandbox
+that sends an oversized or corrupt Docker frame has its stream closed, container
+cleaned up and restart delayed by the normal supervisor backoff.
+
 ## What the hub does not protect against
 
 - **A compromised stdio server.** See the trust model — this is the big one.
@@ -201,10 +212,14 @@ per-client concurrency limit.
 ## Supply chain
 
 Base images and GitHub Actions are pinned by digest or commit SHA. Every push
-is gated by CodeQL and a Trivy scan (`HIGH`/`CRITICAL`, failing the build)
-before an image is published; images carry an SBOM and `mode=max` provenance.
+is gated by CodeQL, a required Trivy secret scan and Trivy image scans
+(`HIGH`/`CRITICAL`, failing the build) before an image is published; images
+carry an SBOM and `mode=max` provenance.
 npm releases are published through Trusted Publishing (OIDC) with provenance
-attestation. Dependabot tracks npm, Docker and Actions dependencies weekly.
+attestation. The registry publisher is version- and checksum-pinned. Release
+tags must match `package.json` and point to a commit reachable from `main`.
+Dependabot tracks npm, Docker and Actions dependencies weekly; only patch
+updates to direct development dependencies are eligible for automatic merge.
 
 The runtime image replaces the bundled npm with a current version and patches
 the two vendored packages that still ship known-vulnerable releases, so a scan

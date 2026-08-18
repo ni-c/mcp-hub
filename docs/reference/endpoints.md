@@ -46,7 +46,7 @@ unhealthy.
     "paperless":     { "state": "up",   "kind": "stdio",  "restarts": 0, "tools": 14, "hub": true },
     "internal-only": { "state": "down", "kind": "remote", "restarts": 2, "tools": 0,  "hub": false },
     "scraper":           { "state": "up",   "kind": "docker", "restarts": 0, "tools": 84, "hub": true,
-                       "image": "scraper-mcp:1.4.2", "container": "mcp-sandbox-scraper" }
+                       "image": "scraper-mcp@sha256:…", "container": "mcp-sandbox-scraper" }
   }
 }
 ```

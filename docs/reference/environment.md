@@ -35,7 +35,7 @@ Only relevant with `type: "docker"` entries — see [sandboxing](/guide/sandboxi
 
 | Variable | Default | Description |
 |---|---|---|
-| `DOCKER_HOST` | `unix:///var/run/docker.sock` | Where the hub sends container operations. In the documented deployment this is the **policy proxy's** socket, e.g. `unix:///run/proxy/docker.sock` — the hub itself should never have the daemon socket. `tcp://host:port` also works. |
+| `DOCKER_HOST` | *(required with Docker servers)* | The **policy proxy's** socket, e.g. `unix:///run/proxy/docker.sock`. Missing values and direct `/var/run/docker.sock` access fail closed; other endpoints must pass the versioned proxy handshake. |
 
 The proxy image (`ghcr.io/ni-c/mcp-hub-docker-proxy`) reads its own set:
 
@@ -44,7 +44,7 @@ The proxy image (`ghcr.io/ni-c/mcp-hub-docker-proxy`) reads its own set:
 | `CONFIG_PATH` | `/config/mcp.json` | The same file the hub reads, mounted read-only. It *is* the policy. Parsed without `${VAR}` expansion — the proxy holds none of the hub's secrets. |
 | `LISTEN_SOCKET` | `/run/proxy/docker.sock` | Unix socket the hub connects to. Shared with the hub through a volume. |
 | `DOCKER_SOCKET` | `/var/run/docker.sock` | The real daemon. |
-| `SANDBOX_SECRETS_DIR` | `/run/secrets` | Where `"secretsFrom": "x"` looks for `x.env`. Refused if world-readable. |
+| `SANDBOX_SECRETS_DIR` | `/run/secrets` | Where `"secretsFrom": "x"` looks for `x.env`. Files must be regular, non-symlink, at most 64 KiB, mode 640 or stricter, with at most 100 unique non-NUL entries. |
 | `SOCKET_MODE` | `0660` | Permissions of `LISTEN_SOCKET`. Group access is how the hub gets in; world-writable would hand the policy to anyone on the host. |
 | `LOG_FILE` | *(unset)* | Same mirroring as the hub's, useful because refusals are logged as `DENY`. |
 
@@ -55,11 +55,15 @@ The proxy image (`ghcr.io/ni-c/mcp-hub-docker-proxy`) reads its own set:
 | `MCP_BODY_LIMIT` | `1mb` | Maximum JSON body for authenticated MCP requests. Any Express/`bytes` size string. |
 | `MCP_REQUESTS_PER_MINUTE` | `120` | MCP requests per minute **per OAuth client**. Positive integer. |
 | `MCP_MAX_CONCURRENT_REQUESTS` | `4` | In-flight MCP requests per OAuth client. Positive integer. |
+| `MCP_CALL_TIMEOUT_MS` | `300000` | Deadline for one forwarded tool call or request. Raise it only for a deployment that genuinely runs long tools; a stuck call holds one of the concurrency slots above. |
+| `MCP_RESET_TIMEOUT_ON_PROGRESS` | `false` | Whether a progress notification restarts that deadline. `true` is convenient for long tools and gives up the absolute bound: a child that emits progress forever keeps the call open forever. |
 | `HTTP_HEADERS_TIMEOUT_MS` | `10000` | Node's header timeout. |
-| `HTTP_REQUEST_TIMEOUT_MS` | `310000` | Complete request timeout — slightly above the 5-minute tool-call timeout. Your reverse proxy must allow at least as long. |
+| `HTTP_REQUEST_TIMEOUT_MS` | `310000` | Complete request timeout — slightly above the default tool-call timeout. Your reverse proxy must allow at least as long, and raising `MCP_CALL_TIMEOUT_MS` means raising this and the proxy with it. |
 
-An invalid value for any of the integer variables aborts startup with a clear
-message rather than silently falling back.
+An invalid value for any of the integer variables read at startup aborts with a
+clear message rather than silently falling back. The two call-timeout variables
+are the exception: they are read by the request path itself, so an unusable
+value logs and keeps the hardened default instead of taking the hub down.
 
 ## Paths
 

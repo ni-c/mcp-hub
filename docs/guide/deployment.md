@@ -179,7 +179,7 @@ The published image contains Node, `npx`, `uv`/`uvx`, Python 3 and `git`, but
 no MCP servers. Install the ones you need at exact versions in your own layer:
 
 ```dockerfile
-FROM ghcr.io/ni-c/mcp-hub:0.6.0
+FROM ghcr.io/ni-c/mcp-hub:0.6.0   # pin @sha256:<digest> in production
 USER root
 RUN npm install -g paperless-mcp@1.2.3 \
  && uv tool install --python 3.12 some-python-mcp==0.4.1
@@ -337,6 +337,7 @@ and prints the token exactly once — only its metadata record is stored, which
 is what makes it listable and revocable. Revocation takes effect immediately:
 the record is gone, so verification refuses the JWT even before it expires.
 
-Stopping the hub first is not just about concurrent writers: the hub reads
-`state.json` once at startup, so a token minted while it runs is not accepted
-until the next restart.
+Hub and CLI mutations are serialized by a cross-process lock and reload the
+latest `state.json` while holding it. Tokens created or revoked while the hub
+runs therefore take effect without restarting it, and concurrent mutations do
+not lose tokens or resurrect revocations.

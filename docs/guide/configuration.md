@@ -122,10 +122,12 @@ container you started is listening on:
 ```json
 "scraper": {
   "type": "docker",
-  "image": "scraper-mcp:1.4.2",
+  "image": "registry.example/scraper-mcp@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   "volumes": ["/srv/scraper/data:/data"],
   "network": "scraper-net",
-  "memory": "384m"
+  "memory": "384m",
+  "pidsLimit": 128,
+  "cpus": 0.75
 },
 "scary": { "type": "unix", "socket": "/run/mcp/scary.sock" },
 "far-away": { "type": "tcp", "host": "sandbox-host", "port": 9000 }
