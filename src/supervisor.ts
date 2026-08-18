@@ -9,7 +9,7 @@ import type { ServerCapabilities, Implementation, Tool } from '@modelcontextprot
 import type { HubConfig, ServerConfig, RemoteServerConfig, ConfigDiff } from './config.js';
 import { SocketTransport } from './transports/socket.js';
 import { DockerTransport } from './transports/docker.js';
-import { DockerClient, parseDockerHost } from './sandbox/docker-client.js';
+import { DockerClient, parseSandboxDockerHost } from './sandbox/docker-client.js';
 
 export type ServerState = 'starting' | 'up' | 'down' | 'stopped';
 
@@ -40,7 +40,7 @@ let sharedDockerClient: DockerClient | undefined;
  * the documented deployment is not the daemon but the policy proxy's socket.
  */
 export function dockerClient(): DockerClient {
-  return (sharedDockerClient ??= new DockerClient(parseDockerHost(process.env.DOCKER_HOST)));
+  return (sharedDockerClient ??= new DockerClient(parseSandboxDockerHost(process.env.DOCKER_HOST)));
 }
 
 /** Tests inject a stub here; passing undefined restores the DOCKER_HOST client. */

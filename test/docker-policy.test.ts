@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { parseConfig, type DockerServerConfig, type HubConfig } from '../src/config.js';
 import { buildCreateRequest } from '../src/sandbox/container-spec.js';
 import { authorize, diffCreateBody, hardDenials, type Decision } from '../src/docker-proxy/policy.js';
-import { SecretStore, parseEnvFile, SecretError } from '../src/docker-proxy/secrets.js';
+import { MAX_SECRET_ENTRIES, MAX_SECRET_FILE_BYTES, SecretStore, parseEnvFile, SecretError, validateConfigSecrets } from '../src/docker-proxy/secrets.js';
 
 /**
  * The policy is the only thing standing between a compromised hub and a root
@@ -320,6 +320,9 @@ describe('secrets', () => {
   it('rejects nonsense instead of guessing', () => {
     expect(() => parseEnvFile('JUST_A_WORD\n')).toThrow(SecretError);
     expect(() => parseEnvFile('1BAD=x\n')).toThrow(/invalid variable name/);
+    expect(() => parseEnvFile('A=1\nA=2\n')).toThrow(/duplicates/);
+    expect(() => parseEnvFile('A=before\0after\n')).toThrow(/NUL/);
+    expect(() => parseEnvFile(Array.from({ length: MAX_SECRET_ENTRIES + 1 }, (_, i) => `K${i}=x`).join('\n'))).toThrow(/more than/);
   });
 
   it('refuses to leave its directory', () => {
@@ -331,6 +334,20 @@ describe('secrets', () => {
     const open = path.join(dir, 'open.env');
     fs.writeFileSync(open, 'X=1\n', { mode: 0o644 });
     expect(() => secrets.load('open')).toThrow(/world-readable/);
+  });
+
+  it('refuses symlinks, oversized files and group-writable files', () => {
+    const target = path.join(dir, 'target.env');
+    fs.writeFileSync(target, 'X=1\n', { mode: 0o600 });
+    fs.symlinkSync(target, path.join(dir, 'linked.env'));
+    expect(() => secrets.load('linked')).toThrow(/symlink/);
+
+    fs.writeFileSync(path.join(dir, 'huge.env'), `X=${'x'.repeat(MAX_SECRET_FILE_BYTES)}\n`, { mode: 0o600 });
+    expect(() => secrets.load('huge')).toThrow(/exceeds/);
+
+    fs.writeFileSync(path.join(dir, 'writable.env'), 'X=1\n', { mode: 0o660 });
+    fs.chmodSync(path.join(dir, 'writable.env'), 0o660);
+    expect(() => secrets.load('writable')).toThrow(/unsafe permissions/);
   });
 
   it('reports a collision between a secret and a config env key', () => {
@@ -348,5 +365,6 @@ describe('secrets', () => {
     // Silently letting one win would make it unclear which value the container
     // actually got — for a credential, that is the worst outcome.
     expect(denial(decision)).toMatch(/collides/);
+    expect(() => validateConfigSecrets(clashing, secrets)).toThrow(/collides/);
   });
 });

@@ -2,7 +2,7 @@
 import express from 'express';
 import type { Request, Response, NextFunction } from 'express';
 import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
-import { loadConfig, ConfigWatcher } from './config.js';
+import { loadConfig, ConfigWatcher, warnMutableDockerImages } from './config.js';
 import { Supervisor } from './supervisor.js';
 import { serverRequestHandler, handleMcpRequest } from './proxy.js';
 import { buildHubServer } from './hub.js';
@@ -46,6 +46,7 @@ export async function createHub(options: HubOptions) {
   // the safe behaviour must be the one you get without asking for it.
   const requireResource = options.requireResourceBoundTokens ?? true;
   const config = loadConfig(options.configPath);
+  warnMutableDockerImages(config);
   if (options.defaultResource !== undefined) {
     const name = options.defaultResource;
     if (name !== 'hub' && !config.has(name)) {
@@ -63,6 +64,7 @@ export async function createHub(options: HubOptions) {
 
   const watcher = new ConfigWatcher(options.configPath, config);
   watcher.on('change', (next, diff) => {
+    warnMutableDockerImages(next);
     console.log(`mcp-hub: config changed (added: ${diff.added.join(',') || '-'} removed: ${diff.removed.join(',') || '-'} changed: ${diff.changed.join(',') || '-'})`);
     void supervisor.applyDiff(next, diff);
   });

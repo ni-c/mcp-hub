@@ -56,9 +56,12 @@ export interface DockerServerConfig {
   ports: string[];
   /** Docker network name; `none` (default) means no network interface at all. */
   network: string;
-  /** Bytes. */
-  memory?: number;
-  pidsLimit?: number;
+  /** Bytes. Defaults to 512 MiB. */
+  memory: number;
+  /** Defaults to 256 processes. */
+  pidsLimit: number;
+  /** Fractional CPU count accepted; defaults to one CPU. */
+  cpus: number;
   readOnly: boolean;
   /** `/path` or `/path:options` */
   tmpfs: string[];
@@ -95,6 +98,9 @@ const SECRETS_NAME_PATTERN = /^[a-zA-Z0-9_-]+$/;
 const VOLUME_SOURCE_PATTERN = /^(?:\/[^:]*|[a-zA-Z0-9][a-zA-Z0-9_.-]*)$/;
 const PORT_PATTERN = /^(?:(\d{1,3}(?:\.\d{1,3}){3}):)?(\d{1,5}):(\d{1,5})(?:\/(tcp|udp))?$/;
 const MEMORY_PATTERN = /^(\d+)([bkmg])?$/i;
+export const DEFAULT_DOCKER_MEMORY = 512 * 1024 * 1024;
+export const DEFAULT_DOCKER_PIDS_LIMIT = 256;
+export const DEFAULT_DOCKER_CPUS = 1;
 
 export class ConfigError extends Error {}
 
@@ -235,6 +241,15 @@ function parseDockerServer(name: string, entry: Record<string, unknown>, expand:
   if (entry.pidsLimit !== undefined && (!Number.isSafeInteger(entry.pidsLimit) || (entry.pidsLimit as number) < 1)) {
     throw new ConfigError(`Server "${name}": "pidsLimit" must be a positive integer`);
   }
+  if (
+    entry.cpus !== undefined &&
+    (typeof entry.cpus !== 'number' ||
+      !Number.isFinite(entry.cpus) ||
+      entry.cpus <= 0 ||
+      !Number.isSafeInteger(Math.round(entry.cpus * 1_000_000_000)))
+  ) {
+    throw new ConfigError(`Server "${name}": "cpus" must be a positive number`);
+  }
   for (const forbidden of ['privileged', 'capAdd', 'securityOpt', 'devices', 'restart']) {
     if (entry[forbidden] !== undefined) {
       throw new ConfigError(
@@ -255,8 +270,9 @@ function parseDockerServer(name: string, entry: Record<string, unknown>, expand:
     volumes,
     ports,
     network: requireLiteral(name, 'network', network),
-    ...(entry.memory !== undefined ? { memory: parseMemory(name, entry.memory) } : {}),
-    ...(entry.pidsLimit !== undefined ? { pidsLimit: entry.pidsLimit as number } : {}),
+    memory: entry.memory !== undefined ? parseMemory(name, entry.memory) : DEFAULT_DOCKER_MEMORY,
+    pidsLimit: entry.pidsLimit !== undefined ? (entry.pidsLimit as number) : DEFAULT_DOCKER_PIDS_LIMIT,
+    cpus: entry.cpus !== undefined ? entry.cpus : DEFAULT_DOCKER_CPUS,
     readOnly: entry.readOnly !== false,
     tmpfs,
     ...(entry.user !== undefined ? { user: requireLiteral(name, 'user', entry.user) } : {}),
@@ -371,6 +387,16 @@ export function loadConfig(filePath: string, env: NodeJS.ProcessEnv = process.en
   return parseConfig(fs.readFileSync(filePath, 'utf8'), env, options);
 }
 
+export function warnMutableDockerImages(config: HubConfig, component = 'mcp-hub'): void {
+  for (const [name, entry] of config) {
+    if (entry.kind !== 'docker' || entry.image.includes('@sha256:')) continue;
+    console.warn(
+      `${component}: docker server "${name}" uses mutable image reference "${entry.image}"; ` +
+        'this is supported for compatibility, but a sha256 digest is strongly recommended'
+    );
+  }
+}
+
 export interface ConfigDiff {
   added: string[];
   removed: string[];
@@ -401,7 +427,8 @@ export class ConfigWatcher extends EventEmitter {
     public current: HubConfig,
     private readonly env: NodeJS.ProcessEnv = process.env,
     private readonly pollIntervalMs = 3_000,
-    private readonly parseOptions?: ParseOptions
+    private readonly parseOptions?: ParseOptions,
+    private readonly validate?: (config: HubConfig) => void
   ) {
     super();
   }
@@ -430,6 +457,7 @@ export class ConfigWatcher extends EventEmitter {
     let next: HubConfig;
     try {
       next = loadConfig(this.filePath, this.env, this.parseOptions);
+      this.validate?.(next);
     } catch (error) {
       // Keep running with the previous config; a broken edit must not take the hub down.
       this.emit('error', error);

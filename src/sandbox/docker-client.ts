@@ -1,6 +1,7 @@
 import http from 'node:http';
 import type { Duplex } from 'node:stream';
 import { OWNER_LABEL, OWNER_VALUE, serverNameFromContainer } from './container-spec.js';
+import { DOCKER_POLICY_NAME, DOCKER_POLICY_PATH, DOCKER_POLICY_VERSION, type DockerPolicyHandshake } from './policy-protocol.js';
 
 /**
  * The slice of the Docker Engine API the hub needs, over a Unix socket or TCP.
@@ -46,6 +47,20 @@ export function parseDockerHost(value?: string): DockerEndpoint {
   throw new Error(`DOCKER_HOST must be a unix:// path or a tcp:// address, got "${value}"`);
 }
 
+/**
+ * Docker sandboxing is safe only through the matching policy proxy. An absent
+ * variable used to fall back to the root-equivalent daemon socket; refuse that
+ * configuration before making any request.
+ */
+export function parseSandboxDockerHost(value?: string): DockerEndpoint {
+  if (!value) throw new Error('DOCKER_HOST is required for docker servers and must point to the mcp-hub Docker policy proxy');
+  const endpoint = parseDockerHost(value);
+  if (endpoint.socketPath === DEFAULT_SOCKET) {
+    throw new Error('DOCKER_HOST points directly at /var/run/docker.sock; use the mcp-hub Docker policy proxy socket');
+  }
+  return endpoint;
+}
+
 function compareApiVersions(a: string, b: string): number {
   const [aMajor = 0, aMinor = 0] = a.split('.').map(Number);
   const [bMajor = 0, bMinor = 0] = b.split('.').map(Number);
@@ -63,6 +78,7 @@ export function splitImageRef(ref: string): { fromImage: string; tag: string } {
 
 export class DockerClient {
   private apiVersion?: string;
+  private policyVerified = false;
 
   constructor(private readonly endpoint: DockerEndpoint = { socketPath: DEFAULT_SOCKET }) {}
 
@@ -77,10 +93,33 @@ export class DockerClient {
    */
   private async version(): Promise<string> {
     if (this.apiVersion) return this.apiVersion;
+    await this.verifyPolicyProxy();
     const info = await this.send<{ ApiVersion?: string }>('GET', '/version', { versioned: false });
     const daemon = info?.ApiVersion ?? MAX_API_VERSION;
     this.apiVersion = compareApiVersions(daemon, MAX_API_VERSION) < 0 ? daemon : MAX_API_VERSION;
     return this.apiVersion;
+  }
+
+  async verifyPolicyProxy(): Promise<void> {
+    if (this.policyVerified) return;
+    let handshake: DockerPolicyHandshake;
+    try {
+      handshake = await this.send<DockerPolicyHandshake>('GET', DOCKER_POLICY_PATH, { versioned: false });
+    } catch (error) {
+      throw new DockerError(
+        `Docker endpoint ${this.describe()} is not a reachable mcp-hub policy proxy: ${(error as Error).message}`,
+        (error as DockerError).status
+      );
+    }
+    if (handshake?.name !== DOCKER_POLICY_NAME || handshake.daemon !== 'ok') {
+      throw new DockerError(`Docker endpoint ${this.describe()} did not return a valid policy handshake`);
+    }
+    if (handshake.policyVersion !== DOCKER_POLICY_VERSION) {
+      throw new DockerError(
+        `Docker policy version mismatch: hub requires ${DOCKER_POLICY_VERSION}, proxy provides ${String(handshake.policyVersion)}`
+      );
+    }
+    this.policyVerified = true;
   }
 
   private async path(path: string, query?: Record<string, string>): Promise<string> {

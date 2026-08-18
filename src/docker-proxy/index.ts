@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import path from 'node:path';
-import { ConfigWatcher, loadConfig, type HubConfig } from '../config.js';
+import { ConfigWatcher, loadConfig, warnMutableDockerImages, type HubConfig } from '../config.js';
 import { installFileLogging } from '../logfile.js';
 import { VERSION } from '../version.js';
 import { createDockerProxy } from './server.js';
-import { SecretStore } from './secrets.js';
+import { SecretStore, validateConfigSecrets } from './secrets.js';
 
 /**
  * mcp-hub-docker-proxy: the only component that touches /var/run/docker.sock.
@@ -46,18 +46,22 @@ try {
 // world-readable secret file is an operator mistake, and finding out about it
 // when a sandbox refuses to start is finding out too late.
 const secrets = new SecretStore(secretsDir);
+try {
+  validateConfigSecrets(config, secrets);
+} catch (error) {
+  console.error(`mcp-hub-docker-proxy: invalid sandbox secrets: ${(error as Error).message}`);
+  process.exit(1);
+}
+warnMutableDockerImages(config, 'mcp-hub-docker-proxy');
 for (const [name, entry] of config) {
   if (entry.kind !== 'docker' || entry.secretsFrom === undefined) continue;
-  try {
-    const keys = Object.keys(secrets.load(entry.secretsFrom));
-    console.log(`mcp-hub-docker-proxy: ${name} gets ${keys.length} variable(s) from ${entry.secretsFrom}.env`);
-  } catch (error) {
-    console.error(`mcp-hub-docker-proxy: ${name}: ${(error as Error).message}`);
-  }
+  const keys = Object.keys(secrets.load(entry.secretsFrom));
+  console.log(`mcp-hub-docker-proxy: ${name} gets ${keys.length} variable(s) from ${entry.secretsFrom}.env`);
 }
 
-const watcher = new ConfigWatcher(configPath, config, process.env, 3_000, { expand: false });
+const watcher = new ConfigWatcher(configPath, config, process.env, 3_000, { expand: false }, next => validateConfigSecrets(next, secrets));
 watcher.on('change', (_next, diff) => {
+  warnMutableDockerImages(_next, 'mcp-hub-docker-proxy');
   console.log(
     `mcp-hub-docker-proxy: policy reloaded (added: ${diff.added.join(',') || '-'} removed: ${diff.removed.join(',') || '-'} changed: ${diff.changed.join(',') || '-'})`
   );

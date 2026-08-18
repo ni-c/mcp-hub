@@ -116,8 +116,9 @@ export function buildCreateRequest(server: string, config: DockerServerConfig): 
       // stdout carries the protocol, so a log driver that keeps every byte of
       // it would fill the disk with a transcript of the session.
       LogConfig: { Type: 'json-file', Config: { 'max-size': '1m', 'max-file': '1' } },
-      ...(config.memory !== undefined ? { Memory: config.memory } : {}),
-      ...(config.pidsLimit !== undefined ? { PidsLimit: config.pidsLimit } : {})
+      Memory: config.memory,
+      PidsLimit: config.pidsLimit,
+      NanoCpus: Math.round(config.cpus * 1_000_000_000)
     },
     ...(Object.keys(exposed).length > 0 ? { ExposedPorts: exposed } : {}),
     ...(config.command !== undefined ? { Cmd: config.command } : {}),

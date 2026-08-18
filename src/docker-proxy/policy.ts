@@ -23,7 +23,15 @@ import { SecretError, SecretStore } from './secrets.js';
  */
 
 export type Decision =
-  | { allow: true; method: string; path: string; body?: Record<string, unknown>; upgrade?: boolean }
+  | {
+      allow: true;
+      method: string;
+      path: string;
+      body?: Record<string, unknown>;
+      upgrade?: boolean;
+      /** Container identity the proxy must verify directly with the daemon. */
+      container?: { id: string; server: string };
+    }
   | { allow: false; status: number; reason: string };
 
 export interface PolicyContext {
@@ -234,17 +242,23 @@ export function authorize(method: string, rawUrl: string, body: unknown, context
         allow: true,
         method,
         path: `${version}/containers/${encodeURIComponent(id)}/attach?stream=1&stdin=1&stdout=1&stderr=1`,
-        upgrade: true
+        upgrade: true,
+        container: { id, server }
       };
     }
-    return { allow: true, method, path: `${version}/containers/${encodeURIComponent(id)}/${action}` };
+    return { allow: true, method, path: `${version}/containers/${encodeURIComponent(id)}/${action}`, container: { id, server } };
   }
 
   const containerDelete = /^\/containers\/([^/]+)$/.exec(path);
   if (containerDelete && method === 'DELETE') {
     const id = decodeURIComponent(containerDelete[1]);
     if (!SANDBOX_ID.test(id)) return deny(`container "${id}" is outside the mcp-sandbox- namespace`);
-    return { allow: true, method, path: `${version}/containers/${encodeURIComponent(id)}?force=1&v=0` };
+    return {
+      allow: true,
+      method,
+      path: `${version}/containers/${encodeURIComponent(id)}?force=1&v=0`,
+      container: { id, server: serverNameFromContainer(id)! }
+    };
   }
 
   if (method === 'GET' && path === '/containers/json') {

@@ -3,7 +3,8 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { DockerClient, DockerError, parseDockerHost, splitImageRef } from '../src/sandbox/docker-client.js';
+import { DockerClient, DockerError, parseDockerHost, parseSandboxDockerHost, splitImageRef } from '../src/sandbox/docker-client.js';
+import { DOCKER_POLICY_NAME, DOCKER_POLICY_PATH, DOCKER_POLICY_VERSION } from '../src/sandbox/policy-protocol.js';
 import { DockerTransport } from '../src/transports/docker.js';
 import type { DockerServerConfig } from '../src/config.js';
 
@@ -15,6 +16,9 @@ const config: DockerServerConfig = {
   volumes: [],
   ports: [],
   network: 'none',
+  memory: 512 * 1024 * 1024,
+  pidsLimit: 256,
+  cpus: 1,
   readOnly: true,
   tmpfs: ['/tmp'],
   hub: true
@@ -31,6 +35,12 @@ describe('parseDockerHost', () => {
 
   it('refuses what it cannot honour instead of guessing', () => {
     expect(() => parseDockerHost('ssh://host')).toThrow(/unix:\/\/ path or a tcp:\/\//);
+  });
+
+  it('requires the policy proxy for sandbox use', () => {
+    expect(() => parseSandboxDockerHost(undefined)).toThrow(/DOCKER_HOST is required/);
+    expect(() => parseSandboxDockerHost('unix:///var/run/docker.sock')).toThrow(/directly/);
+    expect(parseSandboxDockerHost('unix:///run/proxy/docker.sock')).toEqual({ socketPath: '/run/proxy/docker.sock' });
   });
 });
 
@@ -52,6 +62,7 @@ describe('DockerClient against a scripted daemon', () => {
   let client: DockerClient;
   const seen: string[] = [];
   let apiVersion = '1.55';
+  let policyVersion = DOCKER_POLICY_VERSION;
 
   beforeAll(async () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-hub-client-'));
@@ -65,6 +76,9 @@ describe('DockerClient against a scripted daemon', () => {
           response.writeHead(status, { 'Content-Type': contentType, 'Content-Length': Buffer.byteLength(body) });
           response.end(body);
         };
+        if (url === DOCKER_POLICY_PATH) {
+          return send(200, JSON.stringify({ name: DOCKER_POLICY_NAME, policyVersion, daemon: 'ok' }));
+        }
         if (url === '/version') return send(200, JSON.stringify({ ApiVersion: apiVersion }));
         if (url.includes('/images/absent%3A1.0/json')) return send(404, JSON.stringify({ message: 'no such image' }));
         if (url.includes('/images/present/json')) return send(200, '{}');
@@ -103,6 +117,12 @@ describe('DockerClient against a scripted daemon', () => {
     await older.imageExists('present');
     expect(seen.some(entry => entry.includes('/v1.41/images/present/json'))).toBe(true);
     apiVersion = '1.55';
+  });
+
+  it('fails closed when the proxy policy version differs', async () => {
+    policyVersion = DOCKER_POLICY_VERSION + 1;
+    await expect(new DockerClient({ socketPath }).ping()).rejects.toThrow(/policy version mismatch/i);
+    policyVersion = DOCKER_POLICY_VERSION;
   });
 
   it('reports a missing image as absent, not as an error', async () => {

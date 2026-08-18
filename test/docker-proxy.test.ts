@@ -10,6 +10,7 @@ import { parseConfig, type DockerServerConfig, type HubConfig } from '../src/con
 import { createDockerProxy } from '../src/docker-proxy/server.js';
 import { DockerClient } from '../src/sandbox/docker-client.js';
 import { DockerTransport } from '../src/transports/docker.js';
+import { OWNER_LABEL, OWNER_VALUE, SERVER_LABEL } from '../src/sandbox/container-spec.js';
 
 /**
  * The proxy in front of a stand-in daemon.
@@ -48,6 +49,7 @@ let proxy: http.Server;
 let config: HubConfig;
 const requests: DaemonRequest[] = [];
 const children: ChildProcess[] = [];
+let labelsOwned = true;
 
 function frame(stream: number, payload: Buffer): Buffer {
   const header = Buffer.alloc(8);
@@ -73,8 +75,18 @@ function startFakeDaemon(): http.Server {
         response.end(payload);
       };
       const url = (request.url ?? '').split('?')[0].replace(/^\/v\d+\.\d+/, '');
+      if (url === '/_ping') {
+        response.writeHead(200, { 'Content-Type': 'text/plain', 'Content-Length': '2' });
+        response.end('OK');
+        return;
+      }
       if (url === '/version') return send(200, { ApiVersion: '1.44' });
       if (url.endsWith('/json') && url.startsWith('/images/')) return send(200, { Id: 'sha256:1' });
+      if (url.startsWith('/containers/') && url.endsWith('/json')) {
+        return send(200, {
+          Config: { Labels: { [OWNER_LABEL]: labelsOwned ? OWNER_VALUE : 'foreign', [SERVER_LABEL]: 'everything' } }
+        });
+      }
       if (url === '/containers/create') return send(201, { Id: 'container-1' });
       if (url.endsWith('/start')) return send(204, {});
       if (url === '/containers/json') return send(200, []);
@@ -206,6 +218,14 @@ describe('a sandboxed server through the proxy', () => {
     });
 
     expect(response).not.toBe('upgraded');
+  });
+
+  it('refuses an action when daemon-side ownership labels do not match', async () => {
+    labelsOwned = false;
+    const response = await rawRequest('POST', '/v1.44/containers/mcp-sandbox-everything/start');
+    labelsOwned = true;
+    expect(response.status).toBe(403);
+    expect(response.body).toContain('exact mcp-hub owner and server labels');
   });
 
   it('rejects an oversized body instead of buffering it', async () => {
