@@ -70,7 +70,13 @@ version in your image; do not download mutable packages at runtime:
       "url": "http://homeassistant:8123/api/mcp",
       "headers": { "Authorization": "Bearer ${HA_TOKEN}" }
     },
-    "private-thing": { "command": "some-mcp", "args": [], "hub": false }
+    "private-thing": { "command": "some-mcp", "args": [], "hub": false },
+    "untrusted": {
+      "type": "docker",
+      "image": "ghcr.io/example/untrusted-mcp:1.2.3",
+      "network": "none",
+      "memory": "256m"
+    }
   }
 }
 ```
@@ -88,9 +94,23 @@ working. Reserved names: `mcp`, `hub`, `authorize`, `token`, `register`,
 `login`, `consent`, `health`, `livez`, `revoke`.
 
 All stdio children share the hub's Unix user and can read its mounted files.
-Only install fully trusted stdio servers. Put servers with a different trust
-level in separate containers/hosts and connect them as remote HTTP/SSE servers;
-see [SECURITY.md](SECURITY.md).
+Only install fully trusted stdio servers. A server with a different trust level
+belongs in its own container — and it does not have to speak HTTP to get there:
+
+- `type: "docker"` — the hub creates the container and talks **stdio across the
+  container boundary** over the Docker API. No HTTP listener, no bearer token,
+  no bridge process in the image. The hub itself never gets the Docker socket:
+  a separate `mcp-hub-docker-proxy` container holds it and allows only the
+  container operations `mcp.json` describes — nothing privileged, no host
+  mounts, no other images. Credentials can live with the proxy (`secretsFrom`)
+  so the hub process never holds them.
+- `type: "unix"` / `"tcp"` — you start the container, the hub connects to a
+  socket. Costs the hub no privileges at all, and a Unix socket reaches a
+  sandbox running with `network_mode: none`.
+
+Both carry the newline-delimited JSON-RPC the specification asks custom
+transports to reuse. See [sandboxing](https://mcp-hub.ni-c.de/guide/sandboxing)
+and [SECURITY.md](SECURITY.md).
 
 For a custom image, pin every package to an exact version:
 

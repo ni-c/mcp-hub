@@ -27,7 +27,8 @@
   "main": "dist/index.js",
   "bin": {
     "mcp-hub": "dist/index.js",
-    "mcp-hub-admin": "dist/admin.js"
+    "mcp-hub-admin": "dist/admin.js",
+    "mcp-hub-docker-proxy": "dist/docker-proxy/index.js"
   },
   "files": [
     "dist",

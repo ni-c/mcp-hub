@@ -53,6 +53,12 @@ export async function createHub(options: HubOptions) {
     }
   }
   const supervisor = new Supervisor(config);
+  // Deliberately not awaited: an unreachable Docker endpoint must not hold up
+  // the HTTP listener or the stdio children, and reaping only ever touches
+  // containers whose server is no longer configured.
+  void supervisor
+    .reapOrphans()
+    .catch(error => console.error(`mcp-hub: could not reap sandbox containers: ${(error as Error).message}`));
   supervisor.start(); // children come up in the background; paths answer 503 until then
 
   const watcher = new ConfigWatcher(options.configPath, config);

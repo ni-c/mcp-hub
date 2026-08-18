@@ -39,5 +39,16 @@ none are planned — that is a different product. See
 [Comparison](/guide/comparison#hosted-or-commercial-mcp-gateways).
 
 **No isolation between stdio servers.** They share the hub's user by design.
-Servers with differing trust levels belong in separate containers, connected as
-[remote upstreams](/guide/configuration#remote-servers).
+That is what [sandboxing](/guide/sandboxing) is for: a server you do not trust
+belongs in its own container, reached over the Docker API or a socket rather
+than as a child process. The stdio kind itself will not gain isolation — a
+child process in the hub's container is what it is.
+
+**A sandboxed server is recreated on every hub start.** There is no reattaching
+to a container that is already running, so a server with a long startup pays it
+again after a hub restart. Reuse would mean a second code path plus drift
+detection, and a container whose stdio nobody holds is worse than a slow start.
+
+**The docker proxy is a single point of failure for sandboxes.** If it is down,
+`type: "docker"` servers cannot start; stdio, remote and socket servers are
+unaffected. It is deliberately small for that reason.

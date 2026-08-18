@@ -72,8 +72,8 @@
     <text x="723" y="94" text-anchor="middle" class="label-muted">stdio child</text>
 
     <rect class="node" x="650" y="132" width="146" height="56" rx="10" />
-    <text x="723" y="156" text-anchor="middle" class="label-mono">calendar</text>
-    <text x="723" y="174" text-anchor="middle" class="label-muted">stdio child</text>
+    <text x="723" y="156" text-anchor="middle" class="label-mono">scraper</text>
+    <text x="723" y="174" text-anchor="middle" class="label-muted">sandbox container</text>
 
     <rect class="node" x="650" y="212" width="146" height="56" rx="10" />
     <text x="723" y="236" text-anchor="middle" class="label-mono">homeassistant</text>

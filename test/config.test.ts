@@ -50,8 +50,8 @@ describe('parseConfig', () => {
   });
 
   it('supports the hub:false opt-out extension', () => {
-    const config = parseConfig(JSON.stringify({ mcpServers: { eve: { command: 'x', hub: false } } }), env);
-    expect(config.get('eve')?.hub).toBe(false);
+    const config = parseConfig(JSON.stringify({ mcpServers: { scraper: { command: 'x', hub: false } } }), env);
+    expect(config.get('scraper')?.hub).toBe(false);
   });
 
   it('accepts explicit type stdio', () => {

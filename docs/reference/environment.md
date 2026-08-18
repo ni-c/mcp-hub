@@ -29,6 +29,25 @@ it. Use it only for a throwaway test.
 | `RESOURCE_BOUND_TOKENS` | `true` | RFC 8707 resource binding: a token is valid only for `/hub` (which covers `/health`) or the one `/<name>/mcp` it was issued for. `false`/`0` restores the pre-0.5 behaviour where unbound tokens reach every path — a migration mode that logs a warning on every start. |
 | `DEFAULT_RESOURCE` | *(unset)* | Server name (or `hub`) to bind a token to when the OAuth client sends **no** `resource` parameter at all (older Codex logins, Google ADK, Gemini Enterprise). Unset → such requests are refused with `invalid_target`. The token is still bound either way — never global. |
 
+## Sandboxed servers
+
+Only relevant with `type: "docker"` entries — see [sandboxing](/guide/sandboxing).
+
+| Variable | Default | Description |
+|---|---|---|
+| `DOCKER_HOST` | `unix:///var/run/docker.sock` | Where the hub sends container operations. In the documented deployment this is the **policy proxy's** socket, e.g. `unix:///run/proxy/docker.sock` — the hub itself should never have the daemon socket. `tcp://host:port` also works. |
+
+The proxy image (`ghcr.io/ni-c/mcp-hub-docker-proxy`) reads its own set:
+
+| Variable | Default | Description |
+|---|---|---|
+| `CONFIG_PATH` | `/config/mcp.json` | The same file the hub reads, mounted read-only. It *is* the policy. Parsed without `${VAR}` expansion — the proxy holds none of the hub's secrets. |
+| `LISTEN_SOCKET` | `/run/proxy/docker.sock` | Unix socket the hub connects to. Shared with the hub through a volume. |
+| `DOCKER_SOCKET` | `/var/run/docker.sock` | The real daemon. |
+| `SANDBOX_SECRETS_DIR` | `/run/secrets` | Where `"secretsFrom": "x"` looks for `x.env`. Refused if world-readable. |
+| `SOCKET_MODE` | `0660` | Permissions of `LISTEN_SOCKET`. Group access is how the hub gets in; world-writable would hand the policy to anyone on the host. |
+| `LOG_FILE` | *(unset)* | Same mirroring as the hub's, useful because refusals are logged as `DENY`. |
+
 ## Limits and timeouts
 
 | Variable | Default | Description |

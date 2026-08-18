@@ -86,6 +86,26 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: '1'
+      # The docker proxy is built and scanned in this same job rather than as
+      # another matrix dimension: the matrix decides the job names, and those
+      # names are the required status checks on main. Splitting them would
+      # leave every pull request waiting for a check that no longer exists.
+      - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: Dockerfile.docker-proxy
+          load: true
+          platforms: ${{ matrix.platform }}
+          tags: mcp-hub-docker-proxy:audit-${{ matrix.tag }}
+          cache-from: type=gha,scope=scan-proxy-${{ matrix.tag }}
+          cache-to: type=gha,mode=max,scope=scan-proxy-${{ matrix.tag }}
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.73.0
+          image-ref: mcp-hub-docker-proxy:audit-${{ matrix.tag }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
 
   publish:
     needs: [test, codeql, container-scan]
@@ -119,6 +139,30 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          sbom: true
+          provenance: mode=max
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      # Same tags for the proxy: the two images read the same mcp.json with the
+      # same parser, so running mismatched versions is a configuration bug
+      # waiting to happen. Publishing them in lockstep makes that hard to do.
+      - id: meta-proxy
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ghcr.io/ni-c/mcp-hub-docker-proxy
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+      - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: Dockerfile.docker-proxy
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta-proxy.outputs.tags }}
+          labels: ${{ steps.meta-proxy.outputs.labels }}
           sbom: true
           provenance: mode=max
           cache-from: type=gha

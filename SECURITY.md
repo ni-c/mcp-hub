@@ -10,6 +10,8 @@ Only the latest release and the current `main` branch receive security fixes.
 
 mcp-hub is an authorization gateway, not a sandbox for MCP servers. Every configured stdio server runs as the same operating-system user as the hub. It can therefore access the hub's mounted files and process environment, including OAuth state and credentials, and can attempt network access allowed to the container. Only run fully trusted stdio packages in the hub container.
 
+Servers you do not trust belong in their own container. `type: "docker"` and `type: "unix"`/`"tcp"` entries do that while keeping the MCP protocol on a byte stream, so the sandboxed server needs no HTTP listener and no bridge process. The hub is never given `/var/run/docker.sock`: `type: "docker"` is served by the separate `mcp-hub-docker-proxy` image, which holds the socket and permits only the container operations `mcp.json` describes — never a privileged container, a host mount or a foreign image. Run both images at the same version, keep the proxy's secret files at mode 640, and treat that proxy as part of the trusted computing base.
+
 Untrusted or differently trusted servers must run in separate containers or hosts with their own filesystem, credentials and network policy. Connect them to mcp-hub as remote HTTP/SSE servers.
 
 Avoid `npx -y`, unversioned `uvx`, mutable Git branches and other runtime downloads. Install reviewed, exactly versioned server packages while building a custom image, scan that image, and keep the runtime root filesystem read-only.

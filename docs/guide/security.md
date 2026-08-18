@@ -32,9 +32,29 @@ The consequences are worth stating plainly:
   access tokens and reach every other server in the hub.
 - Only run stdio packages you have reviewed and trust.
 - Servers with a different trust level belong in **separate containers or
-  hosts**, with their own filesystem, credentials and network policy. Connect
-  those to the hub as [remote HTTP/SSE servers](/guide/configuration#remote-servers);
-  a remote upstream has no access to the hub's process or files.
+  hosts**, with their own filesystem, credentials and network policy.
+
+For those, [sandboxing](/guide/sandboxing) is the direct route: `type: "docker"`
+has the hub create the container and speak stdio to it over the Docker API,
+`type: "unix"` connects to a container you started yourself. Both keep the
+protocol on a byte stream, so the sandboxed server needs no HTTP listener, no
+bearer token and no bridge process in its image — and with a Unix socket it can
+run with `network_mode: none`, which an HTTP upstream can never do. Connecting
+a server that already speaks HTTP as a
+[remote upstream](/guide/configuration#remote-servers) remains equally valid;
+it has no access to the hub's process or files either.
+
+**The hub never gets the Docker socket.** `type: "docker"` is served by a
+separate `mcp-hub-docker-proxy` container, which holds the daemon socket and
+allows only the container operations `mcp.json` describes — no privileged
+containers, no host mounts, no foreign images, whatever the hub asks for. The
+daemon API is root-equivalent, and the hub is the part exposed to the internet;
+those two must not meet. See [the policy proxy](/guide/sandboxing#the-policy-proxy).
+
+A sandboxed server's credentials can be kept out of the hub entirely with
+`secretsFrom`: the proxy holds the env file and adds the variables after it has
+validated the request, so they never enter the process whose children can read
+`/proc/1/environ`.
 
 Avoid `npx -y`, unversioned `uvx`, mutable Git branches and any other runtime
 download. Install reviewed, exactly-versioned server packages while building a
@@ -56,6 +76,10 @@ runtime root filesystem read-only.
 - [ ] `/data/jwt-key.pem`, `/data/state.json`, the MCP config and every
       referenced environment variable treated as secrets
 - [ ] Outbound network access restricted to what the configured servers need
+- [ ] `/var/run/docker.sock` mounted **only** into `mcp-hub-docker-proxy`, never
+      into the hub, and both images on the same version
+- [ ] Sandbox secret files (`secretsFrom`) `chmod 640` and mounted into the
+      proxy only
 
 ## Authentication and authorization
 

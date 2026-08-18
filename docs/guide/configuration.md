@@ -112,6 +112,30 @@ restarts on failure can fight each other: if the bridge rotates its token and
 then crashes before persisting it, the restart loops. Prefer an upstream that
 accepts a long-lived token in a header where you have the choice.
 
+## Sandboxed servers
+
+A server you have not reviewed should not run in the hub's container at all.
+Two kinds put it in its own container without giving up stdio — the hub either
+creates the container itself over the Docker API, or connects to a socket a
+container you started is listening on:
+
+```json
+"scraper": {
+  "type": "docker",
+  "image": "scraper-mcp:1.4.2",
+  "volumes": ["/srv/scraper/data:/data"],
+  "network": "scraper-net",
+  "memory": "384m"
+},
+"scary": { "type": "unix", "socket": "/run/mcp/scary.sock" },
+"far-away": { "type": "tcp", "host": "sandbox-host", "port": 9000 }
+```
+
+Both speak the same newline-delimited JSON-RPC as stdio, so there is no HTTP
+listener, no bearer token and no bridge process in the image. The fields, the
+policy proxy that keeps the Docker socket away from the hub, and the Compose
+wiring are described under [sandboxing](/guide/sandboxing).
+
 ## Environment expansion
 
 `${VAR}` anywhere in `command`, `args`, `env` values, `url` or `headers` is
@@ -184,7 +208,9 @@ The config is validated strictly at load. Common messages:
 | `Server name "…" is reserved` | see the reserved list above |
 | `Server "…" is missing a "command" string` | a stdio entry without `command` |
 | `Server "…": "command" and "url" are mutually exclusive` | an entry that is half stdio, half remote |
-| `Server "…": unknown type "…"` | `type` is not `stdio`, `http`, `sse` |
+| `Server "…": unknown type "…"` | `type` is not `stdio`, `http`, `sse`, `docker`, `unix`, `tcp` |
+| `Server "…": "image" must not use ${VAR}` | only `env` values expand for docker servers ([why](/guide/sandboxing#docker-servers)) |
+| `Server "…": "privileged" is not supported` | the sandbox flags are fixed, not configurable |
 | `Undefined environment variable in config: ${VAR}` | the variable is not set in the container |
 
 At startup these are fatal — the hub refuses to run on a config it cannot
