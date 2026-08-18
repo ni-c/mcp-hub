@@ -4,6 +4,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { VERSION } from './version.js';
+import { MAX_TOOL_LIST_PAGES, MAX_TOOLS, MAX_TOOL_METADATA_BYTES, jsonSize } from './mcp-limits.js';
 import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
 import type { ServerCapabilities, Implementation, Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { HubConfig, ServerConfig, RemoteServerConfig, ConfigDiff } from './config.js';
@@ -53,6 +54,26 @@ const BACKOFF_MAX_MS = 5 * 60_000;
 const BACKOFF_RESET_AFTER_MS = 5 * 60_000;
 const PING_INTERVAL_MS = 60_000;
 const PING_TIMEOUT_MS = 30_000;
+
+export async function listAllTools(client: Pick<Client, 'listTools'>): Promise<Tool[]> {
+  const tools: Tool[] = [];
+  let cursor: string | undefined;
+  let pages = 0;
+  let metadataBytes = 0;
+  const seenCursors = new Set<string>();
+  do {
+    if (++pages > MAX_TOOL_LIST_PAGES) throw new Error(`tools/list exceeded ${MAX_TOOL_LIST_PAGES} pages`);
+    const page = await client.listTools({ cursor });
+    metadataBytes += jsonSize(page.tools);
+    if (metadataBytes > MAX_TOOL_METADATA_BYTES) throw new Error(`tools/list metadata exceeded ${MAX_TOOL_METADATA_BYTES} bytes`);
+    tools.push(...page.tools);
+    if (tools.length > MAX_TOOLS) throw new Error(`tools/list exceeded ${MAX_TOOLS} tools`);
+    cursor = page.nextCursor;
+    if (cursor && seenCursors.has(cursor)) throw new Error('tools/list repeated a pagination cursor');
+    if (cursor) seenCursors.add(cursor);
+  } while (cursor);
+  return tools;
+}
 
 export class ManagedServer {
   state: ServerState = 'starting';
@@ -138,14 +159,7 @@ export class ManagedServer {
     const client = this.client;
     if (!client) return;
     try {
-      const tools: Tool[] = [];
-      let cursor: string | undefined;
-      do {
-        const page = await client.listTools({ cursor });
-        tools.push(...page.tools);
-        cursor = page.nextCursor;
-      } while (cursor);
-      this.tools = tools;
+      this.tools = await listAllTools(client);
     } catch (error) {
       console.error(`[${this.name}] failed to list tools: ${(error as Error).message}`);
     }

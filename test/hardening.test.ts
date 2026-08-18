@@ -2,12 +2,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { afterEach, describe, expect, it } from 'vitest';
-import { ManagedServer } from '../src/supervisor.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ManagedServer, listAllTools } from '../src/supervisor.js';
 import { AuthStore, MAX_UNAPPROVED_CLIENTS } from '../src/auth/store.js';
 import { LoginRateLimiter } from '../src/auth/routes.js';
 import { ClientRequestGate } from '../src/limits.js';
 import type { NextFunction, Request, Response } from 'express';
+import { ABSOLUTE_CALL_OPTIONS, ABSOLUTE_CALL_TIMEOUT_MS, MAX_FORWARDED_RESULT_BYTES, assertForwardedResultSize } from '../src/mcp-limits.js';
 
 const tmpDirs: string[] = [];
 
@@ -394,5 +395,51 @@ describe('AuthStore across processes', () => {
     const reloaded = new AuthStore(dir);
     expect(reloaded.getApiToken('live')).toBeDefined();
     expect(reloaded.getApiToken('after')).toBeDefined();
+  });
+});
+
+describe('MCP response and discovery budgets', () => {
+  it('caps pagination even when an upstream always returns another cursor', async () => {
+    let page = 0;
+    const client = {
+      listTools: async () => ({ tools: [], nextCursor: `page-${++page}` })
+    } as never;
+    await expect(listAllTools(client)).rejects.toThrow(/100 pages/);
+  });
+
+  it('caps tool count and metadata independently', async () => {
+    const many = Array.from({ length: 10_001 }, (_, i) => ({ name: `t${i}`, inputSchema: { type: 'object' as const } }));
+    await expect(listAllTools({ listTools: async () => ({ tools: many }) } as never)).rejects.toThrow(/10000 tools/);
+    const huge = [{ name: 'huge', description: 'x'.repeat(17 * 1024 * 1024), inputSchema: { type: 'object' as const } }];
+    await expect(listAllTools({ listTools: async () => ({ tools: huge }) } as never)).rejects.toThrow(/metadata/);
+  });
+
+  it('rejects forwarded results above 8 MiB and keeps the timeout absolute', () => {
+    expect(() => assertForwardedResultSize({ content: 'x'.repeat(MAX_FORWARDED_RESULT_BYTES) })).toThrow(/forwarding limit/);
+    expect(ABSOLUTE_CALL_TIMEOUT_MS).toBe(5 * 60_000);
+    expect(ABSOLUTE_CALL_OPTIONS.resetTimeoutOnProgress).toBe(false);
+  });
+
+  // The options are read once at module load, so each case needs a fresh import.
+  const limitsWith = async (env: Record<string, string>) => {
+    vi.resetModules();
+    for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value);
+    try {
+      return await import('../src/mcp-limits.js');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  };
+
+  it('lets a deployment raise the deadline and opt back into progress extending it', async () => {
+    const limits = await limitsWith({ MCP_CALL_TIMEOUT_MS: '1800000', MCP_RESET_TIMEOUT_ON_PROGRESS: 'true' });
+    expect(limits.ABSOLUTE_CALL_OPTIONS.timeout).toBe(30 * 60_000);
+    expect(limits.ABSOLUTE_CALL_OPTIONS.resetTimeoutOnProgress).toBe(true);
+  });
+
+  it('falls back to the hardened defaults instead of exiting on nonsense', async () => {
+    const limits = await limitsWith({ MCP_CALL_TIMEOUT_MS: 'soon', MCP_RESET_TIMEOUT_ON_PROGRESS: 'maybe' });
+    expect(limits.ABSOLUTE_CALL_OPTIONS.timeout).toBe(limits.DEFAULT_CALL_TIMEOUT_MS);
+    expect(limits.ABSOLUTE_CALL_OPTIONS.resetTimeoutOnProgress).toBe(false);
   });
 });

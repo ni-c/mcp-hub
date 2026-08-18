@@ -21,8 +21,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import type { ServerCapabilities } from '@modelcontextprotocol/sdk/types.js';
 import type { ManagedServer } from './supervisor.js';
-
-const CALL_TIMEOUT_MS = 5 * 60_000;
+import { ABSOLUTE_CALL_OPTIONS, assertForwardedResultSize } from './mcp-limits.js';
 
 /**
  * The child's capabilities minus what this proxy does not actually serve.
@@ -60,10 +59,9 @@ function buildProxyServer(managed: ManagedServer): Server {
   const forward = <T extends { method: string; params?: unknown }>(request: T, resultSchema: Parameters<NonNullable<ManagedServer['client']>['request']>[1]) => {
     const client = managed.client;
     if (!client) throw new Error(`Server "${managed.name}" is not running`);
-    return client.request(request as Parameters<NonNullable<ManagedServer['client']>['request']>[0], resultSchema, {
-      timeout: CALL_TIMEOUT_MS,
-      resetTimeoutOnProgress: true
-    });
+    return client
+      .request(request as Parameters<NonNullable<ManagedServer['client']>['request']>[0], resultSchema, ABSOLUTE_CALL_OPTIONS)
+      .then(assertForwardedResultSize);
   };
   const caps = managed.capabilities ?? {};
   if (caps.tools) {

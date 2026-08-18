@@ -9,9 +9,10 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
 import { StreamTransport } from '../src/transports/stream.js';
 import { SocketTransport } from '../src/transports/socket.js';
-import { DockerFrameDecoder } from '../src/transports/docker.js';
+import { DockerFrameDecoder, DockerTransport } from '../src/transports/docker.js';
+import type { DockerClient } from '../src/sandbox/docker-client.js';
 import { ManagedServer } from '../src/supervisor.js';
-import type { SocketServerConfig } from '../src/config.js';
+import type { DockerServerConfig, SocketServerConfig } from '../src/config.js';
 
 const EVERYTHING = path.resolve('node_modules/@modelcontextprotocol/server-everything/dist/index.js');
 
@@ -142,6 +143,36 @@ describe('DockerFrameDecoder', () => {
     decoder.push(header);
 
     expect(errors[0]?.message).toMatch(/exceeds/);
+  });
+
+  it('closes a corrupted attach stream so cleanup and restart can run', async () => {
+    const stream = new PassThrough();
+    let removals = 0;
+    const client = {
+      imageExists: async () => true,
+      removeContainer: async () => { removals++; },
+      createContainer: async () => 'id',
+      attach: async () => stream,
+      startContainer: async () => undefined
+    } as unknown as DockerClient;
+    const config: DockerServerConfig = {
+      kind: 'docker', image: 'x@sha256:abc', pull: 'never', env: {}, volumes: [], ports: [], network: 'none',
+      memory: 512 * 1024 * 1024, pidsLimit: 256, cpus: 1, readOnly: true, tmpfs: ['/tmp'], hub: true
+    };
+    const transport = new DockerTransport('broken', config, client, () => {});
+    let closes = 0;
+    transport.onclose = () => closes++;
+    await transport.start();
+    const header = Buffer.alloc(8);
+    header[0] = 1;
+    header.writeUInt32BE(0xffffffff, 4);
+
+    stream.write(header);
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(stream.destroyed).toBe(true);
+    expect(closes).toBe(1);
+    expect(removals).toBeGreaterThanOrEqual(2); // stale cleanup plus corrupt-stream cleanup
   });
 });
 

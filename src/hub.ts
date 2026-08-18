@@ -3,8 +3,7 @@ import { z } from 'zod';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { Supervisor } from './supervisor.js';
 import { VERSION } from './version.js';
-
-const CALL_TIMEOUT_MS = 5 * 60_000;
+import { ABSOLUTE_CALL_OPTIONS, assertForwardedResultSize } from './mcp-limits.js';
 
 function text(value: unknown): CallToolResult {
   return { content: [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value, null, 2) }] };
@@ -101,11 +100,12 @@ export function buildHubServer(supervisor: Supervisor): McpServer {
       if (!managed) return toolError(`Unknown server "${server}". Use list_servers to see available servers.`);
       if (managed.state !== 'up' || !managed.client) return toolError(`Server "${server}" is ${managed.state}, try again later.`);
       try {
-        const result = await managed.client.callTool({ name: tool, arguments: (args ?? {}) as Record<string, unknown> }, undefined, {
-          timeout: CALL_TIMEOUT_MS,
-          resetTimeoutOnProgress: true
-        });
-        return result as CallToolResult;
+        const result = await managed.client.callTool(
+          { name: tool, arguments: (args ?? {}) as Record<string, unknown> },
+          undefined,
+          ABSOLUTE_CALL_OPTIONS
+        );
+        return assertForwardedResultSize(result) as CallToolResult;
       } catch (error) {
         return toolError(`Tool call failed: ${(error as Error).message}`);
       }
