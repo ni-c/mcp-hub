@@ -24,6 +24,14 @@ export const SERVER_LABEL = 'io.mcp-hub.server';
 export const OWNER_VALUE = 'mcp-hub';
 /** Watchtower would otherwise try to update images the hub pins deliberately. */
 export const WATCHTOWER_LABEL = 'com.centurylinklabs.watchtower.enable';
+/**
+ * Blanked, not set: an image built with `docker compose build` carries its
+ * project label, and a container inherits every label of its image. A sandbox
+ * would therefore look like part of that Compose project, and a `docker compose
+ * down` in the directory the image was built in would collect a container the
+ * hub owns and is holding the stdio of. An empty value matches no project.
+ */
+export const COMPOSE_PROJECT_LABEL = 'com.docker.compose.project';
 
 const PORT_PATTERN = /^(?:(\d{1,3}(?:\.\d{1,3}){3}):)?(\d{1,5}):(\d{1,5})(?:\/(tcp|udp))?$/;
 
@@ -88,7 +96,8 @@ export function buildCreateRequest(server: string, config: DockerServerConfig): 
     Labels: {
       [OWNER_LABEL]: OWNER_VALUE,
       [SERVER_LABEL]: server,
-      [WATCHTOWER_LABEL]: 'false'
+      [WATCHTOWER_LABEL]: 'false',
+      [COMPOSE_PROJECT_LABEL]: ''
     },
     HostConfig: {
       // The hub removes the container itself on close; AutoRemove covers the

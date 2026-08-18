@@ -50,6 +50,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `/health` now reports each server's `kind`, and for a sandbox the `image` and
   `container` it runs as.
 
+- Sandbox containers are taken out of any Compose project their image carried.
+  An image built with `docker compose build` is stamped with that project, a
+  container inherits its image's labels, and `docker compose down` in the
+  directory the image was built in would then collect a container the hub owns
+  and is holding the stdio of.
+
 ### Changed
 
 - `DOCKER_HOST` is read by the hub (default `unix:///var/run/docker.sock`). In

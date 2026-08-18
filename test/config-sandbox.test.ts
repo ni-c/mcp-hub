@@ -165,6 +165,18 @@ describe('container spec', () => {
     expect(body.Env).toEqual(['HOME=/data']);
   });
 
+  it('takes the container out of any Compose project it inherited', () => {
+    const labels = buildCreateRequest('eve', config).body.Labels as Record<string, string>;
+
+    // The image is usually built with `docker compose build`, which stamps its
+    // project on it, and container labels start as the image's. Without this,
+    // `docker compose down` where the image was built would tear down a
+    // container the hub owns and is holding the stdio of.
+    expect(labels['com.docker.compose.project']).toBe('');
+    expect(labels['io.mcp-hub.owner']).toBe('mcp-hub');
+    expect(labels['com.centurylinklabs.watchtower.enable']).toBe('false');
+  });
+
   it('defaults a port without an address to loopback', () => {
     const loopback = parseOne({ type: 'docker', image: 'x:1', network: 'n', ports: ['8686:8000'] }) as DockerServerConfig;
     const host = buildCreateRequest('x', loopback).body.HostConfig as Record<string, unknown>;
