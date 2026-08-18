@@ -1,6 +1,6 @@
 {
   "name": "@ni-c/mcp-hub",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "description": "Serve multiple stdio MCP servers from one container: Claude-Code-style mcpServers config, path-based routing, hub meta-tools, and OAuth 2.1 + API tokens for ChatGPT, Claude and any Streamable-HTTP MCP client.",
   "keywords": [
     "mcp",
