@@ -103,7 +103,8 @@ belongs in its own container — and it does not have to speak HTTP to get there
   a separate `mcp-hub-docker-proxy` container holds it and allows only the
   container operations `mcp.json` describes — nothing privileged, no host
   mounts, no other images. Credentials can live with the proxy (`secretsFrom`)
-  so the hub process never holds them.
+  so the hub process never holds them — and rotating one is just an edit: the
+  proxy watches the file and recreates the sandbox with the new values.
 - `type: "unix"` / `"tcp"` — you start the container, the hub connects to a
   socket. Costs the hub no privileges at all, and a Unix socket reaches a
   sandbox running with `network_mode: none`.

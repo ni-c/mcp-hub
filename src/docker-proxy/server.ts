@@ -3,7 +3,7 @@ import type { Duplex } from 'node:stream';
 import type { HubConfig } from '../config.js';
 import { authorize, type Decision, type PolicyContext } from './policy.js';
 import { SecretStore } from './secrets.js';
-import { OWNER_LABEL, OWNER_VALUE, SERVER_LABEL } from '../sandbox/container-spec.js';
+import { containerName, OWNER_LABEL, OWNER_VALUE, SERVER_LABEL } from '../sandbox/container-spec.js';
 import { DOCKER_POLICY_NAME, DOCKER_POLICY_PATH, DOCKER_POLICY_VERSION, type DockerPolicyHandshake } from '../sandbox/policy-protocol.js';
 
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -56,7 +56,13 @@ function readBody(request: http.IncomingMessage): Promise<Buffer | { tooLarge: t
   });
 }
 
-function daemonRequest(options: ProxyOptions, method: string, path: string, maxBytes: number, timeoutMs: number): Promise<{ status: number; body: Buffer }> {
+function daemonRequest(
+  options: Pick<ProxyOptions, 'dockerSocket'>,
+  method: string,
+  path: string,
+  maxBytes: number,
+  timeoutMs: number
+): Promise<{ status: number; body: Buffer }> {
   return new Promise((resolve, reject) => {
     const request = http.request({ socketPath: options.dockerSocket, method, path, headers: { Host: 'docker' } }, response => {
       const chunks: Buffer[] = [];
@@ -85,6 +91,21 @@ async function policyHandshake(options: ProxyOptions): Promise<DockerPolicyHands
   return { name: DOCKER_POLICY_NAME, policyVersion: DOCKER_POLICY_VERSION, daemon: 'ok' };
 }
 
+/** Daemon-side truth about who a container belongs to, from its inspect body. */
+function ownershipFromInspect(body: Buffer, id: string, server: string): { ok: true } | { ok: false; reason: string } {
+  let labels: Record<string, unknown> | undefined;
+  try {
+    const parsed = JSON.parse(body.toString('utf8')) as { Config?: { Labels?: Record<string, unknown> } };
+    labels = parsed.Config?.Labels;
+  } catch {
+    return { ok: false, reason: `inspect response for container "${id}" is not valid JSON` };
+  }
+  if (labels?.[OWNER_LABEL] !== OWNER_VALUE || labels?.[SERVER_LABEL] !== server) {
+    return { ok: false, reason: `container "${id}" does not have the exact mcp-hub owner and server labels` };
+  }
+  return { ok: true };
+}
+
 async function verifyContainer(
   options: ProxyOptions,
   decision: Extract<Decision, { allow: true }>
@@ -104,17 +125,33 @@ async function verifyContainer(
       reason: `cannot inspect container "${decision.container.id}" (status ${inspected.status})`
     };
   }
-  let labels: Record<string, unknown> | undefined;
-  try {
-    const parsed = JSON.parse(inspected.body.toString('utf8')) as { Config?: { Labels?: Record<string, unknown> } };
-    labels = parsed.Config?.Labels;
-  } catch {
-    return { status: 403, reason: `inspect response for container "${decision.container.id}" is not valid JSON` };
-  }
-  if (labels?.[OWNER_LABEL] !== OWNER_VALUE || labels?.[SERVER_LABEL] !== decision.container.server) {
-    return { status: 403, reason: `container "${decision.container.id}" does not have the exact mcp-hub owner and server labels` };
-  }
+  const ownership = ownershipFromInspect(inspected.body, decision.container.id, decision.container.server);
+  if (!ownership.ok) return { status: 403, reason: ownership.reason };
   return undefined;
+}
+
+/**
+ * Stops a sandbox container so the hub's supervisor recreates it — the way a
+ * secrets change reaches a running server. The values are not pushed anywhere:
+ * the replacement create simply reads the file fresh, like every create does.
+ *
+ * Ownership is verified daemon-side first, exactly like every other container
+ * action this proxy performs. `AutoRemove` disposes of the stopped container.
+ */
+export async function recreateSandbox(options: Pick<ProxyOptions, 'dockerSocket'>, server: string): Promise<'stopped' | 'absent'> {
+  const name = containerName(server);
+  const inspected = await daemonRequest(options, 'GET', `/containers/${encodeURIComponent(name)}/json`, MAX_INSPECT_BYTES, POLICY_CHECK_TIMEOUT_MS);
+  if (inspected.status === 404) return 'absent';
+  if (inspected.status !== 200) throw new Error(`cannot inspect container "${name}" (status ${inspected.status})`);
+  const ownership = ownershipFromInspect(inspected.body, name, server);
+  if (!ownership.ok) throw new Error(ownership.reason);
+  // t=5 mirrors the hub's own teardown grace period; the timeout adds room for it.
+  const stopped = await daemonRequest(options, 'POST', `/containers/${encodeURIComponent(name)}/stop?t=5`, 1024, 30_000);
+  if (stopped.status === 404) return 'absent';
+  if (stopped.status !== 204 && stopped.status !== 304) {
+    throw new Error(`cannot stop container "${name}" (status ${stopped.status})`);
+  }
+  return 'stopped';
 }
 
 /**
