@@ -46,7 +46,7 @@ export function containerName(server: string): string {
   return `${CONTAINER_PREFIX}${server}`;
 }
 
-/** `mcp-sandbox-eve` -> `eve`; undefined for anything outside our namespace. */
+/** `mcp-sandbox-scraper` -> `scraper`; undefined for anything outside our namespace. */
 export function serverNameFromContainer(container: string): string | undefined {
   const name = container.startsWith('/') ? container.slice(1) : container;
   if (!name.startsWith(CONTAINER_PREFIX)) return undefined;

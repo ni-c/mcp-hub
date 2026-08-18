@@ -120,11 +120,11 @@ creates the container itself over the Docker API, or connects to a socket a
 container you started is listening on:
 
 ```json
-"eve": {
+"scraper": {
   "type": "docker",
-  "image": "eve-mcp:local",
-  "volumes": ["/srv/eve/data:/data"],
-  "network": "eve-net",
+  "image": "scraper-mcp:1.4.2",
+  "volumes": ["/srv/scraper/data:/data"],
+  "network": "scraper-net",
   "memory": "384m"
 },
 "scary": { "type": "unix", "socket": "/run/mcp/scary.sock" },

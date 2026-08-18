@@ -74,7 +74,7 @@ describe('DockerClient against a scripted daemon', () => {
         }
         if (request.method === 'DELETE' && url.includes('conflict')) return send(409, JSON.stringify({ message: 'removal in progress' }));
         if (request.method === 'DELETE') return send(404, JSON.stringify({ message: 'no such container' }));
-        if (url.includes('/containers/json')) return send(200, JSON.stringify([{ Id: 'abc', Names: ['/mcp-sandbox-eve'] }, { Id: 'def', Names: ['/stray'] }]));
+        if (url.includes('/containers/json')) return send(200, JSON.stringify([{ Id: 'abc', Names: ['/mcp-sandbox-scraper'] }, { Id: 'def', Names: ['/stray'] }]));
         if (url.includes('/containers/create')) return send(400, JSON.stringify({ message: 'invalid reference format' }));
         return send(500, 'not json at all', 'text/plain');
       });
@@ -125,7 +125,7 @@ describe('DockerClient against a scripted daemon', () => {
   it('maps only its own containers back to server names', async () => {
     const owned = await client.listOwnedContainers();
     expect(owned).toEqual([
-      { id: 'abc', name: 'mcp-sandbox-eve', server: 'eve' },
+      { id: 'abc', name: 'mcp-sandbox-scraper', server: 'scraper' },
       { id: 'def', name: 'stray', server: undefined }
     ]);
   });
@@ -135,7 +135,7 @@ describe('DockerClient against a scripted daemon', () => {
   });
 
   it('refuses to start a sandbox whose image is missing under pull: never', async () => {
-    const transport = new DockerTransport('eve', config, client, () => {});
+    const transport = new DockerTransport('scraper', config, client, () => {});
 
     // The alternative — pulling silently — would run whatever the registry
     // serves at that moment, which is the thing sandboxing is supposed to stop.
@@ -143,7 +143,7 @@ describe('DockerClient against a scripted daemon', () => {
   });
 
   it('pulls when the config allows it, and reports why it failed', async () => {
-    const transport = new DockerTransport('eve', { ...config, pull: 'missing' }, client, () => {});
+    const transport = new DockerTransport('scraper', { ...config, pull: 'missing' }, client, () => {});
     await expect(transport.start()).rejects.toThrow(/manifest unknown/);
   });
 });

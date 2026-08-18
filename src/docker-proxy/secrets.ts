@@ -5,7 +5,7 @@ import path from 'node:path';
  * Environment files the *proxy* owns.
  *
  * This is what keeps a sandbox's credentials out of the hub: the hub's config
- * only names a secret set (`"secretsFrom": "eve"`), and the proxy appends the
+ * only names a secret set (`"secretsFrom": "scraper"`), and the proxy appends the
  * actual variables to the create request after it has validated it. The hub
  * process — and therefore every stdio child running under the same uid, which
  * can read /proc/1/environ — never sees them.

@@ -31,15 +31,15 @@ translation, no second dialect.
 ## Docker servers
 
 ```json
-"eve": {
+"scraper": {
   "type": "docker",
-  "image": "eve-mcp:local",
-  "command": ["python3", "esi.py"],
+  "image": "scraper-mcp:1.4.2",
+  "command": ["python3", "-m", "scraper_mcp"],
   "env": { "HOME": "/data" },
-  "secretsFrom": "eve",
-  "volumes": ["/srv/eve/data:/data"],
+  "secretsFrom": "scraper",
+  "volumes": ["/srv/scraper/data:/data"],
   "ports": ["127.0.0.1:8686:8000"],
-  "network": "eve-net",
+  "network": "scraper-net",
   "memory": "384m",
   "pidsLimit": 128
 }
@@ -114,7 +114,7 @@ container operations that file describes.
 │ no sock │                │ policy from  │               └───┬────┘
 └─────────┘                │   mcp.json   │                   │
      ▲                     └──────────────┘          ┌────────▼────────┐
-     └────────── stdio over the attach stream ───────│ mcp-sandbox-eve │
+     └────────── stdio over the attach stream ───────│ mcp-sandbox-scraper │
                                                      └─────────────────┘
 ```
 
@@ -192,13 +192,13 @@ would put them back in the process every stdio child can read. So it does not
 have to:
 
 ```json
-"eve": { "type": "docker", "image": "eve-mcp:local", "secretsFrom": "eve" }
+"scraper": { "type": "docker", "image": "scraper-mcp:1.4.2", "secretsFrom": "scraper" }
 ```
 
 ```
-secrets/eve.env      # chmod 640, mounted into the proxy only
-  EVE_CLIENT_ID=...
-  EVE_CLIENT_SECRET=...
+secrets/scraper.env      # chmod 640, mounted into the proxy only
+  SCRAPER_API_KEY=...
+  SCRAPER_API_SECRET=...
 ```
 
 The proxy appends those variables to the create request **after** it has

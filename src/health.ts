@@ -18,7 +18,7 @@ export function healthHandler(supervisor: Supervisor) {
           restarts: s.restarts,
           tools: s.tools.length,
           hub: s.config.hub,
-          // The image is the one detail that turns "eve is down" into something
+          // The image is the one detail that turns "scraper is down" into something
           // actionable for a sandbox; it is a local tag, not a credential.
           ...(s.config.kind === 'docker' ? { image: s.config.image, container: containerName(s.name) } : {})
         }

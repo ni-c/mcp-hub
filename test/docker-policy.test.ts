@@ -15,14 +15,14 @@ import { SecretStore, parseEnvFile, SecretError } from '../src/docker-proxy/secr
 
 const CONFIG_JSON = JSON.stringify({
   mcpServers: {
-    eve: {
+    scraper: {
       type: 'docker',
-      image: 'eve-mcp:local',
+      image: 'scraper-mcp:1.4.2',
       env: { HOME: '/data' },
-      secretsFrom: 'eve',
-      volumes: ['/srv/eve:/data'],
+      secretsFrom: 'scraper',
+      volumes: ['/srv/scraper:/data'],
       ports: ['127.0.0.1:8686:8000'],
-      network: 'eve-net',
+      network: 'scraper-net',
       memory: '384m'
     },
     pullable: { type: 'docker', image: 'ghcr.io/example/thing:1.2.3', pull: 'missing' },
@@ -39,12 +39,12 @@ function context() {
 }
 
 /** A request exactly as DockerTransport builds it. */
-function legitimateCreate(server = 'eve') {
+function legitimateCreate(server = 'scraper') {
   const entry = config.get(server) as DockerServerConfig;
   return buildCreateRequest(server, entry);
 }
 
-function createWith(mutate: (body: Record<string, unknown>) => void, server = 'eve'): Decision {
+function createWith(mutate: (body: Record<string, unknown>) => void, server = 'scraper'): Decision {
   const { name, body } = legitimateCreate(server);
   mutate(body);
   return authorize('POST', `/v1.44/containers/create?name=${name}`, body, context());
@@ -57,7 +57,7 @@ function denial(decision: Decision): string {
 
 beforeAll(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-hub-policy-'));
-  fs.writeFileSync(path.join(dir, 'eve.env'), '# EVE SSO\nEVE_CLIENT_ID=abc\nexport EVE_CLIENT_SECRET="s3cr3t"\n', { mode: 0o640 });
+  fs.writeFileSync(path.join(dir, 'scraper.env'), '# API credentials\nSCRAPER_API_KEY=abc\nexport SCRAPER_API_SECRET="s3cr3t"\n', { mode: 0o640 });
   // The proxy parses without expansion; it holds none of the hub's variables.
   config = parseConfig(CONFIG_JSON, {} as NodeJS.ProcessEnv, { expand: false });
   secrets = new SecretStore(dir);
@@ -74,11 +74,11 @@ describe('the request the hub actually sends', () => {
     expect(decision.allow).toBe(true);
     const allowed = decision as { path: string; body: Record<string, unknown> };
     // The caller's API version is kept; everything else about the path is ours.
-    expect(allowed.path).toBe('/v1.44/containers/create?name=mcp-sandbox-eve');
+    expect(allowed.path).toBe('/v1.44/containers/create?name=mcp-sandbox-scraper');
     // The hub's env keys survive; the SSO credentials are added by the proxy,
     // which is the only party that has them.
-    expect(allowed.body.Env).toEqual(['HOME=/data', 'EVE_CLIENT_ID=abc', 'EVE_CLIENT_SECRET=s3cr3t']);
-    expect((allowed.body.HostConfig as Record<string, unknown>).Binds).toEqual(['/srv/eve:/data']);
+    expect(allowed.body.Env).toEqual(['HOME=/data', 'SCRAPER_API_KEY=abc', 'SCRAPER_API_SECRET=s3cr3t']);
+    expect((allowed.body.HostConfig as Record<string, unknown>).Binds).toEqual(['/srv/scraper:/data']);
   });
 
   it('works for a server without secrets too', () => {
@@ -102,7 +102,7 @@ describe('host takeover attempts', () => {
   });
 
   it('refuses the host filesystem, however it is spelled', () => {
-    for (const bind of ['/:/host', '/etc:/etc', '/var/run/docker.sock:/var/run/docker.sock', '/srv/eve/../../:/data', '/proc:/proc', '/root:/r']) {
+    for (const bind of ['/:/host', '/etc:/etc', '/var/run/docker.sock:/var/run/docker.sock', '/srv/scraper/../../:/data', '/proc:/proc', '/root:/r']) {
       const decision = createWith(body => ((body.HostConfig as Record<string, unknown>).Binds = [bind]));
       expect(denial(decision)).toMatch(/bind source|does not match/);
     }
@@ -150,7 +150,7 @@ describe('host takeover attempts', () => {
     });
     expect(denial(ports)).toMatch(/does not match/);
 
-    const binds = createWith(body => ((body.HostConfig as Record<string, unknown>).Binds = ['/srv/eve:/data', 'other:/other']));
+    const binds = createWith(body => ((body.HostConfig as Record<string, unknown>).Binds = ['/srv/scraper:/data', 'other:/other']));
     expect(denial(binds)).toMatch(/does not match/);
   });
 
@@ -194,7 +194,7 @@ describe('host takeover attempts', () => {
   it('refuses a create with no name or with smuggled query parameters', () => {
     const { body } = legitimateCreate();
     expect(denial(authorize('POST', '/containers/create', body, context()))).toMatch(/explicit \?name=/);
-    expect(denial(authorize('POST', '/containers/create?name=mcp-sandbox-eve&platform=linux/arm64', body, context()))).toMatch(/only \?name=/);
+    expect(denial(authorize('POST', '/containers/create?name=mcp-sandbox-scraper&platform=linux/arm64', body, context()))).toMatch(/only \?name=/);
   });
 });
 
@@ -227,24 +227,24 @@ describe('routes', () => {
     ['GET', '/_ping', true],
     ['GET', '/version', true],
     ['GET', '/v1.44/version', true],
-    ['POST', '/containers/mcp-sandbox-eve/start', true],
-    ['POST', '/containers/mcp-sandbox-eve/attach?stream=1&stdin=1', true],
-    ['POST', '/containers/mcp-sandbox-eve/stop', true],
-    ['DELETE', '/containers/mcp-sandbox-eve?force=1', true],
+    ['POST', '/containers/mcp-sandbox-scraper/start', true],
+    ['POST', '/containers/mcp-sandbox-scraper/attach?stream=1&stdin=1', true],
+    ['POST', '/containers/mcp-sandbox-scraper/stop', true],
+    ['DELETE', '/containers/mcp-sandbox-scraper?force=1', true],
     ['DELETE', '/containers/mcp-sandbox-gone?force=1', true], // reaping a removed server
     ['GET', '/containers/json?all=1', true],
-    ['GET', '/images/eve-mcp:local/json', true],
+    ['GET', '/images/scraper-mcp:1.4.2/json', true],
     ['POST', '/containers/mcp-hub/start', false],
     ['POST', '/containers/mcp-sandbox-other/start', false],
-    ['POST', '/containers/mcp-sandbox-eve/exec', false],
-    ['GET', '/containers/mcp-sandbox-eve/json', false],
+    ['POST', '/containers/mcp-sandbox-scraper/exec', false],
+    ['GET', '/containers/mcp-sandbox-scraper/json', false],
     ['POST', '/build', false],
     ['POST', '/volumes/create', false],
     ['POST', '/networks/create', false],
     ['GET', '/images/alpine/json', false],
     ['GET', '/info', false],
     ['GET', '/secrets', false],
-    ['POST', '/containers/mcp-sandbox-eve/update', false],
+    ['POST', '/containers/mcp-sandbox-scraper/update', false],
     ['DELETE', '/containers/mcp-hub', false],
     ['GET', '/../info', false]
   ];
@@ -255,10 +255,10 @@ describe('routes', () => {
 
   it('rebuilds the attach query instead of trusting it', () => {
     // logs=1 would replay the whole container log into the protocol stream.
-    const decision = authorize('POST', '/containers/mcp-sandbox-eve/attach?logs=1&stream=1', undefined, context());
+    const decision = authorize('POST', '/containers/mcp-sandbox-scraper/attach?logs=1&stream=1', undefined, context());
     expect(decision.allow).toBe(true);
-    expect((decision as { path: string }).path).toBe('/containers/mcp-sandbox-eve/attach?stream=1&stdin=1&stdout=1&stderr=1');
-    expect((authorize('POST', '/v1.44/containers/mcp-sandbox-eve/attach', undefined, context()) as { path: string }).path).toMatch(
+    expect((decision as { path: string }).path).toBe('/containers/mcp-sandbox-scraper/attach?stream=1&stdin=1&stdout=1&stderr=1');
+    expect((authorize('POST', '/v1.44/containers/mcp-sandbox-scraper/attach', undefined, context()) as { path: string }).path).toMatch(
       /^\/v1\.44\/containers/
     );
     expect((decision as { upgrade?: boolean }).upgrade).toBe(true);
@@ -271,14 +271,14 @@ describe('routes', () => {
 
   it('allows pulling only what a "pull": "missing" entry names', () => {
     expect(authorize('POST', '/images/create?fromImage=ghcr.io/example/thing&tag=1.2.3', undefined, context()).allow).toBe(true);
-    // eve is pull: never, so even its own image may not be fetched.
-    expect(denial(authorize('POST', '/images/create?fromImage=eve-mcp&tag=local', undefined, context()))).toMatch(/not allowed/);
+    // scraper is pull: never, so even its own image may not be fetched.
+    expect(denial(authorize('POST', '/images/create?fromImage=scraper-mcp&tag=local', undefined, context()))).toMatch(/not allowed/);
     expect(denial(authorize('POST', '/images/create?fromImage=alpine&tag=latest', undefined, context()))).toMatch(/not allowed/);
     expect(denial(authorize('POST', '/images/create?fromImage=ghcr.io/example/thing&tag=latest', undefined, context()))).toMatch(/not allowed/);
   });
 
   it('does not accept a wrong method on an allowed path', () => {
-    expect(authorize('GET', '/containers/mcp-sandbox-eve/start', undefined, context()).allow).toBe(false);
+    expect(authorize('GET', '/containers/mcp-sandbox-scraper/start', undefined, context()).allow).toBe(false);
     expect(authorize('POST', '/containers/json', undefined, context()).allow).toBe(false);
   });
 });
@@ -336,12 +336,12 @@ describe('secrets', () => {
   it('reports a collision between a secret and a config env key', () => {
     fs.writeFileSync(path.join(dir, 'clash.env'), 'HOME=/elsewhere\n', { mode: 0o600 });
     const clashing = parseConfig(
-      JSON.stringify({ mcpServers: { eve: { type: 'docker', image: 'x:1', env: { HOME: '/data' }, secretsFrom: 'clash' } } }),
+      JSON.stringify({ mcpServers: { scraper: { type: 'docker', image: 'x:1', env: { HOME: '/data' }, secretsFrom: 'clash' } } }),
       {} as NodeJS.ProcessEnv,
       { expand: false }
     );
-    const entry = clashing.get('eve') as DockerServerConfig;
-    const { name, body } = buildCreateRequest('eve', entry);
+    const entry = clashing.get('scraper') as DockerServerConfig;
+    const { name, body } = buildCreateRequest('scraper', entry);
 
     const decision = authorize('POST', `/containers/create?name=${name}`, body, { config: clashing, secrets });
 

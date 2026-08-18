@@ -4,7 +4,7 @@ import { buildCreateRequest, containerName, serverNameFromContainer } from '../s
 
 const env = { EVE_TOKEN: 'secret-value' } as NodeJS.ProcessEnv;
 
-function parseOne(entry: Record<string, unknown>, name = 'eve') {
+function parseOne(entry: Record<string, unknown>, name = 'scraper') {
   return parseConfig(JSON.stringify({ mcpServers: { [name]: entry } }), env).get(name)!;
 }
 
@@ -14,7 +14,7 @@ function expectError(entry: Record<string, unknown>, fragment: string) {
 
 describe('docker servers', () => {
   it('fills in a sandbox by default', () => {
-    const config = parseOne({ type: 'docker', image: 'eve-mcp:local' }) as DockerServerConfig;
+    const config = parseOne({ type: 'docker', image: 'scraper-mcp:1.4.2' }) as DockerServerConfig;
 
     expect(config.kind).toBe('docker');
     // The defaults are the security promise: no network, read-only root, no
@@ -29,14 +29,14 @@ describe('docker servers', () => {
   it('accepts the full sandbox description', () => {
     const config = parseOne({
       type: 'docker',
-      image: 'eve-mcp:local',
+      image: 'scraper-mcp:1.4.2',
       pull: 'missing',
-      command: ['python3', 'esi.py'],
+      command: ['python3', '-m', 'scraper_mcp'],
       env: { HOME: '/data', EVE_TOKEN: '${EVE_TOKEN}' },
-      secretsFrom: 'eve',
+      secretsFrom: 'scraper',
       volumes: ['/srv/scraper/data:/data', 'cache:/cache:ro'],
       ports: ['127.0.0.1:8686:8000'],
-      network: 'eve-net',
+      network: 'scraper-net',
       memory: '384m',
       pidsLimit: 128,
       readOnly: false,
@@ -46,16 +46,16 @@ describe('docker servers', () => {
 
     expect(config.memory).toBe(384 * 1024 * 1024);
     expect(config.env.EVE_TOKEN).toBe('secret-value'); // env values do expand
-    expect(config.secretsFrom).toBe('eve');
+    expect(config.secretsFrom).toBe('scraper');
     expect(config.hub).toBe(false);
   });
 
   it('keeps ${VAR} unexpanded when the proxy parses the same file', () => {
-    const json = JSON.stringify({ mcpServers: { eve: { type: 'docker', image: 'eve:1', env: { T: '${EVE_TOKEN}' } } } });
+    const json = JSON.stringify({ mcpServers: { scraper: { type: 'docker', image: 'scraper:1', env: { T: '${EVE_TOKEN}' } } } });
 
     // The proxy holds none of the hub's secrets, so it must be able to read
     // the config without them — and it compares env keys, never values.
-    const asProxy = parseConfig(json, {} as NodeJS.ProcessEnv, { expand: false }).get('eve') as DockerServerConfig;
+    const asProxy = parseConfig(json, {} as NodeJS.ProcessEnv, { expand: false }).get('scraper') as DockerServerConfig;
 
     expect(asProxy.env.T).toBe('${EVE_TOKEN}');
     expect(() => parseConfig(json, {} as NodeJS.ProcessEnv)).toThrowError(ConfigError);
@@ -123,28 +123,28 @@ describe('socket servers', () => {
 describe('container spec', () => {
   const config = parseOne({
     type: 'docker',
-    image: 'eve-mcp:local',
+    image: 'scraper-mcp:1.4.2',
     env: { HOME: '/data' },
-    volumes: ['/srv/eve:/data'],
+    volumes: ['/srv/scraper:/data'],
     ports: ['127.0.0.1:8686:8000'],
-    network: 'eve-net',
+    network: 'scraper-net',
     memory: '384m',
     pidsLimit: 128
   }) as DockerServerConfig;
 
   it('names containers in one namespace, both ways', () => {
-    expect(containerName('eve')).toBe('mcp-sandbox-eve');
-    expect(serverNameFromContainer('/mcp-sandbox-eve')).toBe('eve');
+    expect(containerName('scraper')).toBe('mcp-sandbox-scraper');
+    expect(serverNameFromContainer('/mcp-sandbox-scraper')).toBe('scraper');
     expect(serverNameFromContainer('paperless')).toBeUndefined();
     expect(serverNameFromContainer('mcp-sandbox-')).toBeUndefined();
     expect(serverNameFromContainer('mcp-sandbox-a/b')).toBeUndefined();
   });
 
   it('describes a locked-down container', () => {
-    const { name, body } = buildCreateRequest('eve', config);
+    const { name, body } = buildCreateRequest('scraper', config);
     const host = body.HostConfig as Record<string, unknown>;
 
-    expect(name).toBe('mcp-sandbox-eve');
+    expect(name).toBe('mcp-sandbox-scraper');
     // stdio across the container boundary needs exactly this shape.
     expect(body).toMatchObject({ OpenStdin: true, AttachStdin: true, AttachStdout: true, Tty: false });
     expect(host).toMatchObject({
@@ -154,10 +154,10 @@ describe('container spec', () => {
       SecurityOpt: ['no-new-privileges:true'],
       ReadonlyRootfs: true,
       AutoRemove: true,
-      NetworkMode: 'eve-net',
+      NetworkMode: 'scraper-net',
       Memory: 384 * 1024 * 1024,
       PidsLimit: 128,
-      Binds: ['/srv/eve:/data'],
+      Binds: ['/srv/scraper:/data'],
       RestartPolicy: { Name: '' }
     });
     expect(host.PortBindings).toEqual({ '8000/tcp': [{ HostIp: '127.0.0.1', HostPort: '8686' }] });
@@ -166,7 +166,7 @@ describe('container spec', () => {
   });
 
   it('takes the container out of any Compose project it inherited', () => {
-    const labels = buildCreateRequest('eve', config).body.Labels as Record<string, string>;
+    const labels = buildCreateRequest('scraper', config).body.Labels as Record<string, string>;
 
     // The image is usually built with `docker compose build`, which stamps its
     // project on it, and container labels start as the image's. Without this,
