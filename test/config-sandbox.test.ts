@@ -22,6 +22,9 @@ describe('docker servers', () => {
     expect(config.network).toBe('none');
     expect(config.readOnly).toBe(true);
     expect(config.pull).toBe('never');
+    expect(config.memory).toBe(512 * 1024 * 1024);
+    expect(config.pidsLimit).toBe(256);
+    expect(config.cpus).toBe(1);
     expect(config.tmpfs).toEqual(['/tmp']);
     expect(config.hub).toBe(true);
   });
@@ -39,12 +42,14 @@ describe('docker servers', () => {
       network: 'scraper-net',
       memory: '384m',
       pidsLimit: 128,
+      cpus: 0.75,
       readOnly: false,
       user: '1000:1000',
       hub: false
     }) as DockerServerConfig;
 
     expect(config.memory).toBe(384 * 1024 * 1024);
+    expect(config.cpus).toBe(0.75);
     expect(config.env.EVE_TOKEN).toBe('secret-value'); // env values do expand
     expect(config.secretsFrom).toBe('scraper');
     expect(config.hub).toBe(false);
@@ -88,6 +93,8 @@ describe('docker servers', () => {
     expectError({ type: 'docker', image: 'x:1', network: 'n', ports: ['99999:8000'] }, 'out of range');
     expectError({ type: 'docker', image: 'x:1', memory: 'lots' }, 'must look like');
     expectError({ type: 'docker', image: 'x:1', pidsLimit: 0 }, 'positive integer');
+    expectError({ type: 'docker', image: 'x:1', cpus: 0 }, 'positive number');
+    expectError({ type: 'docker', image: 'x:1', cpus: Number.MAX_VALUE }, 'positive number');
     expectError({ type: 'docker', image: 'x:1', secretsFrom: '../../etc/shadow' }, 'secretsFrom');
     expectError({ type: 'docker' }, 'need an "image" string');
   });
@@ -157,6 +164,7 @@ describe('container spec', () => {
       NetworkMode: 'scraper-net',
       Memory: 384 * 1024 * 1024,
       PidsLimit: 128,
+      NanoCpus: 1_000_000_000,
       Binds: ['/srv/scraper:/data'],
       RestartPolicy: { Name: '' }
     });

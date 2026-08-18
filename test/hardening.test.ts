@@ -1,12 +1,14 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
-import { ManagedServer } from '../src/supervisor.js';
+import { spawn } from 'node:child_process';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ManagedServer, listAllTools } from '../src/supervisor.js';
 import { AuthStore, MAX_UNAPPROVED_CLIENTS } from '../src/auth/store.js';
 import { LoginRateLimiter } from '../src/auth/routes.js';
 import { ClientRequestGate } from '../src/limits.js';
 import type { NextFunction, Request, Response } from 'express';
+import { ABSOLUTE_CALL_OPTIONS, ABSOLUTE_CALL_TIMEOUT_MS, MAX_FORWARDED_RESULT_BYTES, assertForwardedResultSize } from '../src/mcp-limits.js';
 
 const tmpDirs: string[] = [];
 
@@ -325,5 +327,119 @@ describe('AuthStore across processes', () => {
 
     // A fixed "state.json.tmp" would let two writers scribble over each other.
     expect(fs.readdirSync(dir).filter(f => f.includes('.tmp'))).toEqual([]);
+  });
+
+  const runWriter = (dir: string, mode: 'create' | 'revoke', prefix: string) =>
+    new Promise<void>((resolve, reject) => {
+      const source = `
+        import { AuthStore } from './src/auth/store.ts';
+        const [dir, mode, prefix] = process.argv.slice(1);
+        const store = new AuthStore(dir);
+        const now = Math.floor(Date.now() / 1000);
+        if (mode === 'revoke') store.revokeApiToken('doomed');
+        else for (let i = 0; i < 50; i++) store.saveApiToken(prefix + i, { label: prefix, resource: 'https://hub.test/hub', createdAt: now, expiresAt: now + 3600 });
+      `;
+      const child = spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', source, dir, mode, prefix], {
+        cwd: path.resolve('.'),
+        stdio: ['ignore', 'ignore', 'pipe']
+      });
+      let stderr = '';
+      child.stderr.on('data', chunk => (stderr += chunk));
+      child.on('error', reject);
+      child.on('exit', code => (code === 0 ? resolve() : reject(new Error(`child exited ${code}: ${stderr}`))));
+    });
+
+  it('serializes simultaneous writers in separate OS processes', async () => {
+    const dir = tmpDir();
+    new AuthStore(dir);
+    await Promise.all([runWriter(dir, 'create', 'left-'), runWriter(dir, 'create', 'right-')]);
+    const tokens = new AuthStore(dir).listApiTokens();
+    expect(Object.keys(tokens).filter(id => id.startsWith('left-'))).toHaveLength(50);
+    expect(Object.keys(tokens).filter(id => id.startsWith('right-'))).toHaveLength(50);
+  });
+
+  it('does not resurrect a revocation racing an unrelated OS-process writer', async () => {
+    const dir = tmpDir();
+    const store = new AuthStore(dir);
+    store.saveApiToken('doomed', record('doomed'));
+    await Promise.all([runWriter(dir, 'revoke', 'unused'), runWriter(dir, 'create', 'kept-')]);
+    const reloaded = new AuthStore(dir);
+    expect(reloaded.getApiToken('doomed')).toBeUndefined();
+    expect(Object.keys(reloaded.listApiTokens()).filter(id => id.startsWith('kept-'))).toHaveLength(50);
+  });
+
+  it('breaks a lock whose owner file was never written', () => {
+    const dir = tmpDir();
+    new AuthStore(dir);
+    // The lock directory is created before the owner file: a process killed
+    // between the two leaves a lock nobody can attribute. Without the age
+    // fallback this wedges the data directory permanently.
+    const lock = path.join(dir, '.auth-state.lock');
+    fs.mkdirSync(lock);
+    const stale = new Date(Date.now() - 60_000);
+    fs.utimesSync(lock, stale, stale);
+
+    const store = new AuthStore(dir);
+    store.saveApiToken('after', record('after'));
+    expect(new AuthStore(dir).getApiToken('after')).toBeDefined();
+  });
+
+  it('rewrites a state file that vanished under a running store', () => {
+    const dir = tmpDir();
+    const hub = new AuthStore(dir);
+    hub.saveApiToken('live', record('live'));
+    fs.rmSync(path.join(dir, 'state.json'));
+
+    // Refusing here would break every refresh-token rotation until restart.
+    hub.saveApiToken('after', record('after'));
+    const reloaded = new AuthStore(dir);
+    expect(reloaded.getApiToken('live')).toBeDefined();
+    expect(reloaded.getApiToken('after')).toBeDefined();
+  });
+});
+
+describe('MCP response and discovery budgets', () => {
+  it('caps pagination even when an upstream always returns another cursor', async () => {
+    let page = 0;
+    const client = {
+      listTools: async () => ({ tools: [], nextCursor: `page-${++page}` })
+    } as never;
+    await expect(listAllTools(client)).rejects.toThrow(/100 pages/);
+  });
+
+  it('caps tool count and metadata independently', async () => {
+    const many = Array.from({ length: 10_001 }, (_, i) => ({ name: `t${i}`, inputSchema: { type: 'object' as const } }));
+    await expect(listAllTools({ listTools: async () => ({ tools: many }) } as never)).rejects.toThrow(/10000 tools/);
+    const huge = [{ name: 'huge', description: 'x'.repeat(17 * 1024 * 1024), inputSchema: { type: 'object' as const } }];
+    await expect(listAllTools({ listTools: async () => ({ tools: huge }) } as never)).rejects.toThrow(/metadata/);
+  });
+
+  it('rejects forwarded results above 8 MiB and keeps the timeout absolute', () => {
+    expect(() => assertForwardedResultSize({ content: 'x'.repeat(MAX_FORWARDED_RESULT_BYTES) })).toThrow(/forwarding limit/);
+    expect(ABSOLUTE_CALL_TIMEOUT_MS).toBe(5 * 60_000);
+    expect(ABSOLUTE_CALL_OPTIONS.resetTimeoutOnProgress).toBe(false);
+  });
+
+  // The options are read once at module load, so each case needs a fresh import.
+  const limitsWith = async (env: Record<string, string>) => {
+    vi.resetModules();
+    for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value);
+    try {
+      return await import('../src/mcp-limits.js');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  };
+
+  it('lets a deployment raise the deadline and opt back into progress extending it', async () => {
+    const limits = await limitsWith({ MCP_CALL_TIMEOUT_MS: '1800000', MCP_RESET_TIMEOUT_ON_PROGRESS: 'true' });
+    expect(limits.ABSOLUTE_CALL_OPTIONS.timeout).toBe(30 * 60_000);
+    expect(limits.ABSOLUTE_CALL_OPTIONS.resetTimeoutOnProgress).toBe(true);
+  });
+
+  it('falls back to the hardened defaults instead of exiting on nonsense', async () => {
+    const limits = await limitsWith({ MCP_CALL_TIMEOUT_MS: 'soon', MCP_RESET_TIMEOUT_ON_PROGRESS: 'maybe' });
+    expect(limits.ABSOLUTE_CALL_OPTIONS.timeout).toBe(limits.DEFAULT_CALL_TIMEOUT_MS);
+    expect(limits.ABSOLUTE_CALL_OPTIONS.resetTimeoutOnProgress).toBe(false);
   });
 });

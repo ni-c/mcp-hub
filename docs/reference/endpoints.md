@@ -46,7 +46,7 @@ unhealthy.
     "paperless":     { "state": "up",   "kind": "stdio",  "restarts": 0, "tools": 14, "hub": true },
     "internal-only": { "state": "down", "kind": "remote", "restarts": 2, "tools": 0,  "hub": false },
     "scraper":           { "state": "up",   "kind": "docker", "restarts": 0, "tools": 84, "hub": true,
-                       "image": "scraper-mcp:1.4.2", "container": "mcp-sandbox-scraper" }
+                       "image": "scraper-mcp@sha256:…", "container": "mcp-sandbox-scraper" }
   }
 }
 ```
@@ -82,6 +82,14 @@ Rate limits are listed on the [security page](/guide/security#rate-limits).
 | `/.well-known/oauth-authorization-server/<suffix>` | none | same document, path-inserted form |
 | `/.well-known/oauth-protected-resource` | none | RFC 9728 protected-resource metadata |
 | `/.well-known/oauth-protected-resource/<suffix>` | none | path-scoped variant |
+| `/.well-known/openid-configuration` | none | alias serving the same RFC 8414 document |
+| `/.well-known/openid-configuration/<suffix>` | none | same alias, path-inserted form |
+
+The hub is **not** an OpenID Connect provider — there is no `userinfo`
+endpoint and no `id_token`. The alias exists because several clients, ChatGPT
+among them, probe the OIDC path before the RFC 8414 one, and the document
+answers every field they read there. Enabling a client's OIDC option on top of
+it does not work.
 
 The path-scoped resource document is what makes
 [resource-bound tokens](/guide/clients#resource-bound-tokens) work without

@@ -15,7 +15,7 @@
     },
     "untrusted": {
       "type": "docker",
-      "image": "ghcr.io/example/untrusted-mcp:1.2.3",
+      "image": "ghcr.io/example/untrusted-mcp@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       "env": { "SOME_SETTING": "value" },
       "secretsFrom": "untrusted",
       "network": "none",

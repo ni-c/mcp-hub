@@ -73,7 +73,7 @@ version in your image; do not download mutable packages at runtime:
     "private-thing": { "command": "some-mcp", "args": [], "hub": false },
     "untrusted": {
       "type": "docker",
-      "image": "ghcr.io/example/untrusted-mcp:1.2.3",
+      "image": "ghcr.io/example/untrusted-mcp@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
       "network": "none",
       "memory": "256m"
     }
@@ -115,7 +115,7 @@ and [SECURITY.md](SECURITY.md).
 For a custom image, pin every package to an exact version:
 
 ```dockerfile
-FROM ghcr.io/ni-c/mcp-hub:0.6.0
+FROM ghcr.io/ni-c/mcp-hub:0.6.0   # pin @sha256:<digest> in production
 USER root
 RUN npm install -g your-mcp-package@1.2.3
 USER node

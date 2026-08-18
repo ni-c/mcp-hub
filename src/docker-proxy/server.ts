@@ -3,9 +3,13 @@ import type { Duplex } from 'node:stream';
 import type { HubConfig } from '../config.js';
 import { authorize, type Decision, type PolicyContext } from './policy.js';
 import { SecretStore } from './secrets.js';
+import { OWNER_LABEL, OWNER_VALUE, SERVER_LABEL } from '../sandbox/container-spec.js';
+import { DOCKER_POLICY_NAME, DOCKER_POLICY_PATH, DOCKER_POLICY_VERSION, type DockerPolicyHandshake } from '../sandbox/policy-protocol.js';
 
 const MAX_BODY_BYTES = 1024 * 1024;
 const UPSTREAM_TIMEOUT_MS = 15 * 60_000;
+const POLICY_CHECK_TIMEOUT_MS = 5_000;
+const MAX_INSPECT_BYTES = 1024 * 1024;
 
 export interface ProxyOptions {
   /** Where the real daemon listens. */
@@ -50,6 +54,67 @@ function readBody(request: http.IncomingMessage): Promise<Buffer | { tooLarge: t
     request.on('end', () => settle(Buffer.concat(chunks)));
     request.on('error', reject);
   });
+}
+
+function daemonRequest(options: ProxyOptions, method: string, path: string, maxBytes: number, timeoutMs: number): Promise<{ status: number; body: Buffer }> {
+  return new Promise((resolve, reject) => {
+    const request = http.request({ socketPath: options.dockerSocket, method, path, headers: { Host: 'docker' } }, response => {
+      const chunks: Buffer[] = [];
+      let size = 0;
+      response.on('data', (chunk: Buffer) => {
+        size += chunk.length;
+        if (size > maxBytes) {
+          response.destroy(new Error(`daemon response exceeds ${maxBytes} bytes`));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      response.on('end', () => resolve({ status: response.statusCode ?? 0, body: Buffer.concat(chunks) }));
+    });
+    request.setTimeout(timeoutMs, () => request.destroy(new Error('timed out')));
+    request.on('error', reject);
+    request.end();
+  });
+}
+
+async function policyHandshake(options: ProxyOptions): Promise<DockerPolicyHandshake> {
+  const ping = await daemonRequest(options, 'GET', '/_ping', 1024, POLICY_CHECK_TIMEOUT_MS);
+  if (ping.status !== 200 || ping.body.toString('utf8').trim() !== 'OK') {
+    throw new Error(`Docker daemon ping failed with status ${ping.status}`);
+  }
+  return { name: DOCKER_POLICY_NAME, policyVersion: DOCKER_POLICY_VERSION, daemon: 'ok' };
+}
+
+async function verifyContainer(
+  options: ProxyOptions,
+  decision: Extract<Decision, { allow: true }>
+): Promise<{ status: number; reason: string } | undefined> {
+  if (!decision.container) return undefined;
+  const version = /^\/v\d+\.\d+/.exec(decision.path)?.[0] ?? '';
+  const inspected = await daemonRequest(
+    options,
+    'GET',
+    `${version}/containers/${encodeURIComponent(decision.container.id)}/json`,
+    MAX_INSPECT_BYTES,
+    POLICY_CHECK_TIMEOUT_MS
+  );
+  if (inspected.status !== 200) {
+    return {
+      status: inspected.status === 404 ? 404 : 403,
+      reason: `cannot inspect container "${decision.container.id}" (status ${inspected.status})`
+    };
+  }
+  let labels: Record<string, unknown> | undefined;
+  try {
+    const parsed = JSON.parse(inspected.body.toString('utf8')) as { Config?: { Labels?: Record<string, unknown> } };
+    labels = parsed.Config?.Labels;
+  } catch {
+    return { status: 403, reason: `inspect response for container "${decision.container.id}" is not valid JSON` };
+  }
+  if (labels?.[OWNER_LABEL] !== OWNER_VALUE || labels?.[SERVER_LABEL] !== decision.container.server) {
+    return { status: 403, reason: `container "${decision.container.id}" does not have the exact mcp-hub owner and server labels` };
+  }
+  return undefined;
 }
 
 /**
@@ -100,9 +165,24 @@ export function createDockerProxy(options: ProxyOptions): http.Server {
           return;
         }
       }
+      if (request.method === 'GET' && request.url === DOCKER_POLICY_PATH && raw.length === 0) {
+        try {
+          const handshake = Buffer.from(JSON.stringify(await policyHandshake(options)), 'utf8');
+          response.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': String(handshake.length) });
+          response.end(handshake);
+        } catch (error) {
+          refuse(response, 503, `policy proxy cannot reach Docker daemon: ${(error as Error).message}`);
+        }
+        return;
+      }
       const decision = decide(request.method ?? 'GET', request.url ?? '/', body);
       if (!decision.allow) {
         refuse(response, decision.status, decision.reason);
+        return;
+      }
+      const ownershipError = await verifyContainer(options, decision);
+      if (ownershipError) {
+        refuse(response, ownershipError.status, ownershipError.reason);
         return;
       }
       const payload = decision.body === undefined ? undefined : Buffer.from(JSON.stringify(decision.body), 'utf8');
@@ -141,6 +221,7 @@ export function createDockerProxy(options: ProxyOptions): http.Server {
   // `attach` is an HTTP upgrade: the daemon answers 101 and the connection
   // becomes the container's stdio. Both sides are hijacked and spliced.
   server.on('upgrade', (request, clientSocket: Duplex, head: Buffer) => {
+    void (async () => {
     const decision = decide(request.method ?? 'GET', request.url ?? '/', undefined);
     // An upgrade is answered on the raw socket, and a refused one must not
     // leave the caller holding a half-open connection: write, then destroy.
@@ -150,6 +231,11 @@ export function createDockerProxy(options: ProxyOptions): http.Server {
       );
     if (!decision.allow || !decision.upgrade) {
       hangUp(decision.allow ? 403 : decision.status, decision.allow ? 'this endpoint does not support upgrades' : decision.reason);
+      return;
+    }
+    const ownershipError = await verifyContainer(options, decision);
+    if (ownershipError) {
+      hangUp(ownershipError.status, ownershipError.reason);
       return;
     }
     const upstream = http.request({
@@ -191,6 +277,10 @@ export function createDockerProxy(options: ProxyOptions): http.Server {
       hangUp(502, `docker daemon unreachable: ${(error as Error).message}`);
     });
     upstream.end();
+    })().catch(error => {
+      console.error(`docker-proxy: attach authorization failed: ${(error as Error).message}`);
+      clientSocket.destroy();
+    });
   });
 
   return server;

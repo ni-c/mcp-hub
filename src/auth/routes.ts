@@ -4,6 +4,7 @@ import bcrypt from 'bcryptjs';
 import { mcpAuthRouter, createOAuthMetadata } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { HubOAuthProvider, SESSION_TTL_MS } from './provider.js';
 import { renderLoginPage } from './login-page.js';
+import { allowFormActionTo, contentSecurityPolicy } from './headers.js';
 
 const LOGIN_MAX_ATTEMPTS = 10;
 const LOGIN_WINDOW_MS = 15 * 60_000;
@@ -104,7 +105,7 @@ export function createAuthRoutes(options: AuthRoutesOptions): Router {
   // password entry. This application has no legitimate framing use case.
   router.use((_req, res, next) => {
     res.set('Cache-Control', 'no-store');
-    res.set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
+    res.set('Content-Security-Policy', contentSecurityPolicy());
     res.set('X-Frame-Options', 'DENY');
     res.set('X-Content-Type-Options', 'nosniff');
     res.set('Referrer-Policy', 'no-referrer');
@@ -173,6 +174,8 @@ export function createAuthRoutes(options: AuthRoutesOptions): Router {
     if (typeof password !== 'string' || !checkPassword(password)) {
       rateLimiter.recordFailure(ip);
       console.warn(`mcp-hub: authentication failure from ${ip}`);
+      // The retry form has to reach the same redirect as the first attempt.
+      allowFormActionTo(res, pending.redirectUri);
       res.status(401).type('html').send(renderLoginPage(request!, pending.redirectUri, undefined, 'Wrong password', pending.resource));
       return;
     }

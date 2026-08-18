@@ -1,7 +1,7 @@
 services:
   mcp-hub:
     build: .
-    image: mcp-hub:latest
+    image: mcp-hub:local
     container_name: mcp-hub
     mem_limit: 1g
     read_only: true
@@ -38,7 +38,7 @@ services:
       # Only needed for `type: "docker"` servers, and note what it points at:
       # the policy proxy below, never /var/run/docker.sock. The daemon API is
       # root-equivalent and this container faces the internet.
-      # DOCKER_HOST: "unix:///run/proxy/docker.sock"
+      # DOCKER_HOST: "unix:///run/proxy/docker.sock" # required; direct daemon access is refused
 
     volumes:
       - "./mcp.json:/config/mcp.json:ro"
@@ -71,7 +71,7 @@ services:
   # describes: nothing privileged, no host mounts, no other images.
   #
   # docker-proxy:
-  #   image: ghcr.io/ni-c/mcp-hub-docker-proxy:latest   # same version as the hub
+  #   image: ghcr.io/ni-c/mcp-hub-docker-proxy:<version>@sha256:<digest>
   #   container_name: mcp-hub-docker-proxy
   #   restart: unless-stopped
   #   group_add: ["999"]            # `getent group docker`
@@ -81,7 +81,8 @@ services:
   #     - no-new-privileges:true
   #   volumes:
   #     - "./mcp.json:/config/mcp.json:ro"
-  #     # Credentials for sandboxed servers ("secretsFrom"), chmod 640. They are
+  #     # Credentials for sandboxed servers ("secretsFrom"), chmod 640, regular
+  #     # non-symlink files, at most 64 KiB and 100 unique variables. They are
   #     # added to the container after the request is validated, so the hub
   #     # process never holds them.
   #     - "./secrets:/run/secrets:ro"

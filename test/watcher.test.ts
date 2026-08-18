@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ConfigWatcher, loadConfig, type HubConfig, type ConfigDiff } from '../src/config.js';
+import { SecretStore, validateConfigSecrets } from '../src/docker-proxy/secrets.js';
 
 let tmpDir: string;
 let configPath: string;
@@ -53,5 +54,27 @@ describe('ConfigWatcher', () => {
     write({ a: { command: 'changed' } });
     const { diff } = await pending;
     expect(diff.changed).toEqual(['a']);
+  });
+
+  it('keeps the previous policy when a reload references invalid secrets', async () => {
+    watcher.stop();
+    fs.writeFileSync(path.join(tmpDir, 'good.env'), 'TOKEN=ok\n', { mode: 0o600 });
+    write({ sandbox: { type: 'docker', image: 'x@sha256:abc', secretsFrom: 'good' } });
+    const initial = loadConfig(configPath, {} as NodeJS.ProcessEnv, { expand: false });
+    const secrets = new SecretStore(tmpDir);
+    watcher = new ConfigWatcher(
+      configPath,
+      initial,
+      {} as NodeJS.ProcessEnv,
+      50,
+      { expand: false },
+      next => validateConfigSecrets(next, secrets)
+    );
+    watcher.start();
+    const error = new Promise<Error>(resolve => watcher.once('error', resolve));
+
+    write({ sandbox: { type: 'docker', image: 'changed@sha256:def', secretsFrom: 'missing' } });
+    await expect(error).resolves.toHaveProperty('message', expect.stringContaining('does not exist'));
+    expect((watcher.current.get('sandbox') as { image: string }).image).toBe('x@sha256:abc');
   });
 });

@@ -60,7 +60,7 @@ describe.skipIf(!hasDocker)('a real container over the Docker API', () => {
   });
 
   afterAll(async () => {
-    await new DockerClient({ socketPath: DOCKER_SOCKET }).removeContainer('mcp-sandbox-dockertest').catch(() => {});
+    await new DockerClient({ socketPath: proxySocket }).removeContainer('mcp-sandbox-dockertest').catch(() => {});
     proxy.closeAllConnections();
     await new Promise<void>(resolve => proxy.close(() => resolve()));
     fs.rmSync(dir, { recursive: true, force: true });
@@ -77,20 +77,10 @@ describe.skipIf(!hasDocker)('a real container over the Docker API', () => {
   };
 
   it(
-    'creates, attaches, echoes and cleans up',
+    'refuses a direct Docker daemon that has no policy handshake',
     async () => {
       const client = new DockerClient({ socketPath: DOCKER_SOCKET });
-      const { transport, messages } = await echoOnce(client);
-
-      // `cat` sends back exactly what it received, so a round trip proves the
-      // full path: stdin write -> container -> stdout frame -> demux -> parse.
-      expect(messages).toEqual([ping]);
-      const running = await client.listOwnedContainers();
-      expect(running.map(entry => entry.server)).toContain('dockertest');
-
-      await transport.close();
-      const afterClose = await client.listOwnedContainers();
-      expect(afterClose.map(entry => entry.server)).not.toContain('dockertest');
+      await expect(client.ping()).rejects.toThrow(/not a reachable mcp-hub policy proxy/);
     },
     120_000
   );
@@ -137,7 +127,7 @@ describe.skipIf(!hasDocker)('a real container over the Docker API', () => {
       expect(response.status).toBe(403);
       expect(response.body).toMatch(/Privileged/);
       // And the daemon never saw it: no such container exists.
-      const containers = await new DockerClient({ socketPath: DOCKER_SOCKET }).listOwnedContainers();
+      const containers = await new DockerClient({ socketPath: proxySocket }).listOwnedContainers();
       expect(containers.map(entry => entry.server)).not.toContain('dockertest');
     },
     60_000

@@ -53,6 +53,10 @@ interface PersistedState {
  * approved; approved ones are legitimate and never evicted.
  */
 export const MAX_UNAPPROVED_CLIENTS = 100;
+const LOCK_WAIT_MS = 10_000;
+const STALE_LOCK_MS = 30_000;
+const LOCK_POLL_MS = 10;
+const lockSleep = new Int32Array(new SharedArrayBuffer(4));
 
 /**
  * All persistent auth state lives in two files under DATA_PATH:
@@ -74,33 +78,111 @@ export class AuthStore {
   readonly publicKey: crypto.KeyObject;
   private state: PersistedState;
   private readonly statePath: string;
+  private readonly lockPath: string;
   /** Identity of the file contents this.state was loaded from; see fileSignature(). */
   private signature?: string;
   private tmpCounter = 0;
 
   constructor(dataDir: string) {
     fs.mkdirSync(dataDir, { recursive: true });
-    const keyPath = path.join(dataDir, 'jwt-key.pem');
-    if (!fs.existsSync(keyPath)) {
-      const { privateKey } = crypto.generateKeyPairSync('ed25519');
-      fs.writeFileSync(keyPath, privateKey.export({ type: 'pkcs8', format: 'pem' }), { mode: 0o600 });
-    }
-    this.privateKey = crypto.createPrivateKey(fs.readFileSync(keyPath, 'utf8'));
-    this.publicKey = crypto.createPublicKey(this.privateKey);
-
     this.statePath = path.join(dataDir, 'state.json');
-    const restored = AuthStore.readState(this.statePath);
-    this.state = restored ?? {
-      cookieSecret: crypto.randomBytes(32).toString('base64url'),
-      clients: {},
-      refreshTokens: {},
-      approvals: {},
-      consumedRefreshTokens: {},
-      revokedBefore: {},
-      apiTokens: {}
-    };
-    if (restored) this.signature = this.fileSignature();
-    else this.persist();
+    this.lockPath = path.join(dataDir, '.auth-state.lock');
+    this.acquireLock();
+    try {
+      const keyPath = path.join(dataDir, 'jwt-key.pem');
+      if (!fs.existsSync(keyPath)) {
+        const { privateKey } = crypto.generateKeyPairSync('ed25519');
+        fs.writeFileSync(keyPath, privateKey.export({ type: 'pkcs8', format: 'pem' }), { mode: 0o600 });
+      }
+      this.privateKey = crypto.createPrivateKey(fs.readFileSync(keyPath, 'utf8'));
+      this.publicKey = crypto.createPublicKey(this.privateKey);
+
+      const restored = AuthStore.readState(this.statePath);
+      this.state = restored ?? {
+        cookieSecret: crypto.randomBytes(32).toString('base64url'),
+        clients: {},
+        refreshTokens: {},
+        approvals: {},
+        consumedRefreshTokens: {},
+        revokedBefore: {},
+        apiTokens: {}
+      };
+      if (restored) this.signature = this.fileSignature();
+      else this.persistUnlocked();
+    } finally {
+      this.releaseLock();
+    }
+  }
+
+  /** Atomic directory creation is the portable cross-process mutex. */
+  private acquireLock(): void {
+    const deadline = Date.now() + LOCK_WAIT_MS;
+    for (;;) {
+      try {
+        fs.mkdirSync(this.lockPath, { mode: 0o700 });
+        fs.writeFileSync(path.join(this.lockPath, 'owner'), `${process.pid}\n`, { mode: 0o600 });
+        return;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      }
+      this.removeStaleLock();
+      if (Date.now() >= deadline) throw new Error(`timed out waiting for auth state lock ${this.lockPath}`);
+      Atomics.wait(lockSleep, 0, 0, LOCK_POLL_MS);
+    }
+  }
+
+  /**
+   * Break a lock whose owner is gone.
+   *
+   * The owner's pid is the precise signal and is used whenever it can be read.
+   * Age is the fallback, and it has to be one: the directory is created before
+   * the owner file is written, so a process killed between the two leaves a
+   * lock nobody can attribute. Treating that as "held" would wedge every
+   * future AuthStore in the data directory until someone deleted it by hand.
+   *
+   * The pid also means nothing across a PID namespace — an admin CLI installed
+   * from npm on the host, against a /data volume the hub uses from inside a
+   * container. The documented invocation is `docker exec` into the hub, which
+   * shares the namespace; for the other case the age fallback is what applies.
+   */
+  private removeStaleLock(): void {
+    try {
+      const stat = fs.statSync(this.lockPath);
+      const pid = this.lockOwnerPid();
+      if (pid !== undefined) {
+        try {
+          process.kill(pid, 0);
+          return;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ESRCH') return;
+        }
+      } else if (Date.now() - stat.mtimeMs <= STALE_LOCK_MS) {
+        return;
+      }
+      fs.rmSync(this.lockPath, { recursive: true, force: true });
+    } catch {
+      // The owner may have released it between stat and read. Retry mkdir.
+    }
+  }
+
+  /** undefined when the owner file is missing, unreadable or not a pid. */
+  private lockOwnerPid(): number | undefined {
+    let raw: string;
+    try {
+      raw = fs.readFileSync(path.join(this.lockPath, 'owner'), 'utf8');
+    } catch {
+      return undefined;
+    }
+    const pid = Number(raw.trim());
+    return Number.isSafeInteger(pid) && pid > 0 ? pid : undefined;
+  }
+
+  private releaseLock(): void {
+    try {
+      fs.rmSync(this.lockPath, { recursive: true, force: true });
+    } catch (error) {
+      console.error(`mcp-hub: could not release auth state lock: ${(error as Error).message}`);
+    }
   }
 
   /**
@@ -151,10 +233,41 @@ export class AuthStore {
    * what stops persist() from writing a stale snapshot back over them.
    */
   private mutate<T>(fn: () => T): T {
-    this.reloadIfChanged();
-    const result = fn();
-    this.persist();
-    return result;
+    this.acquireLock();
+    try {
+      this.reloadUnderLock();
+      const result = fn();
+      this.persistUnlocked();
+      return result;
+    } finally {
+      this.releaseLock();
+    }
+  }
+
+  /**
+   * A mutation must never proceed from stale memory, even if stat metadata is
+   * unchanged. A file that is *gone* is not stale memory, though: the
+   * constructor recreates it, and refusing here instead would turn a deleted
+   * state.json into a hub whose every refresh-token rotation fails until it is
+   * restarted. Unparseable content stays a hard error — that is a file with
+   * contents we cannot merge into, and overwriting it would drop grants.
+   */
+  private reloadUnderLock(): void {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(fs.readFileSync(this.statePath, 'utf8'));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        console.error('mcp-hub: auth state file is gone, writing the state in memory back to disk');
+        this.persistUnlocked();
+        return;
+      }
+      throw new Error(`cannot reload auth state while holding the mutation lock: ${(error as Error).message}`);
+    }
+    const next = AuthStore.normalize(parsed);
+    if (!next) throw new Error('cannot mutate unusable auth state');
+    this.state = next;
+    this.signature = this.fileSignature();
   }
 
   /**
@@ -200,12 +313,11 @@ export class AuthStore {
     }
   }
 
-  private persist(): void {
+  private persistUnlocked(): void {
     this.pruneExpired();
-    // Per-writer temporary name: a fixed one would let two processes write into
-    // the same file at once. With a private temporary plus an atomic rename a
-    // reader can never observe a half-written file — the residual risk of
-    // concurrent writers is a lost update, not a corrupt state.
+    // Per-writer temporary name plus atomic rename keeps readers from observing
+    // a half-written file. Mutations are serialized by the cross-process lock,
+    // so this write also cannot overwrite another process's newer state.
     const tmp = `${this.statePath}.tmp-${process.pid}-${this.tmpCounter++}`;
     try {
       fs.writeFileSync(tmp, JSON.stringify(this.state, null, 2), { mode: 0o600 });
@@ -396,11 +508,8 @@ export class AuthStore {
 
   /** Deleting the record is the revocation: verification refuses unknown ids. */
   revokeApiToken(id: string): boolean {
-    // reloadIfChanged() before the existence check, so revoking a token another
-    // process minted seconds ago reports true instead of "no such id".
-    this.reloadIfChanged();
-    if (!this.state.apiTokens[id]) return false;
     return this.mutate(() => {
+      if (!this.state.apiTokens[id]) return false;
       delete this.state.apiTokens[id];
       return true;
     });

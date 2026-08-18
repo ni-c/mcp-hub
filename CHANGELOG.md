@@ -58,14 +58,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   directory the image was built in would then collect a container the hub owns
   and is holding the stdio of.
 
+- **`cpus`** for `type: "docker"` entries. Fractional values are accepted and
+  become Docker's `NanoCpus`.
+
+- `MCP_CALL_TIMEOUT_MS` and `MCP_RESET_TIMEOUT_ON_PROGRESS` for deployments
+  whose tools genuinely run longer than the new absolute deadline below. An
+  unusable value logs and keeps the default instead of ending the process:
+  unlike the other limits these are read by the request path, not at startup.
+
 ### Changed
 
-- `DOCKER_HOST` is read by the hub (default `unix:///var/run/docker.sock`). In
-  the documented deployment it points at the policy proxy's socket.
+- **Node 22 or newer is required** (`engines` was `>=20`); CI runs 22 and 24 and
+  the images are built on Node 24. Node 20 left maintenance in April 2026.
+- **`DOCKER_HOST` is required for `type: "docker"` entries and must point at the
+  policy proxy.** It has no default any more, and a value resolving to
+  `/var/run/docker.sock` is refused outright: the hub faces the internet and the
+  daemon API is root-equivalent, so falling back to it was the one mistake the
+  documentation could not prevent. Hub and proxy also complete a versioned
+  handshake before the first container operation, which fails closed against an
+  unreachable daemon, a foreign socket or a proxy speaking a different policy.
+- **Sandboxes now have resource limits by default**: `memory` `512m`, `pidsLimit`
+  `256`, `cpus` `1`. Previously an entry without those fields ran unbounded. An
+  existing sandbox that needs more must say so in `mcp.json`.
+- **Tool calls have an absolute five-minute deadline.** Progress notifications no
+  longer extend it, because a child emitting one every few seconds could hold a
+  request — and one of the client's concurrency slots — open indefinitely. Raise
+  `MCP_CALL_TIMEOUT_MS`, or set `MCP_RESET_TIMEOUT_ON_PROGRESS=true` to restore
+  the old behaviour, and raise `HTTP_REQUEST_TIMEOUT_MS` and the reverse proxy
+  with it.
 - For `type: "docker"` entries only `env` values may use `${VAR}`. The image,
   mounts, ports, network, user and command must be literal: the proxy validates
   those fields against the config and deliberately holds none of the hub's
   secrets, so a variable there would be a field it could not check.
+- A `type: "docker"` image given as a mutable tag logs a warning at startup and
+  on every config reload. Digests are strongly recommended; tags stay supported.
+- Base images are pinned to `node:24-bookworm-slim` by digest.
+
+### Fixed
+
+- The login and consent pages name the client's redirect origin in their
+  `form-action`, so signing in actually completes. Browsers apply the directive
+  to every hop of a form submission, and the last hop is the redirect that
+  carries the authorization code back to the client — with a bare `'self'`
+  Chrome and Firefox blocked it silently, leaving the window sitting on the
+  password prompt with nothing happening on click or Enter. The origin comes
+  from the redirect_uri the SDK has already matched against the client's
+  registration, so the widening is per-request and never wider than the flow.
+
+### Security
+
+- The proxy verifies container ownership with the daemon before every start,
+  stop, wait, attach and remove: both the `io.mcp-hub.owner` and the
+  `io.mcp-hub.server` label must match exactly. The name pattern alone said
+  nothing about who created a container that happened to be called
+  `mcp-sandbox-<server>`.
+- Secret files are validated when the proxy starts and on every config reload,
+  not first when a container is created — an operator finds out about a
+  world-readable credential immediately instead of at the next restart. They
+  must be regular non-symlink files of at most 64 KiB, mode 640 or stricter,
+  with at most 100 unique variables and no NUL bytes or duplicate keys. A reload
+  that references an invalid set keeps the previous policy.
+- Responses from a child server are bounded: 8 MiB per forwarded result, and
+  tool discovery stops at 100 pages, 10,000 tools, 16 MiB of metadata or a
+  repeated pagination cursor. A server that answers `tools/list` forever can no
+  longer exhaust the hub's memory.
+- A Docker attach frame with an impossible length ends the stream instead of
+  being skipped, so a desynchronised sandbox is restarted through the normal
+  supervisor backoff rather than left attached and mute.
+- `state.json` mutations are serialized with a cross-process lock (0.6.2 reduced
+  the window; it did not close it). The lock is broken only when its owner is
+  demonstrably gone — a dead pid, or, when the owner cannot be identified at
+  all, an age of more than 30 seconds. A state file deleted underneath a running
+  hub is rewritten rather than turned into a permanent failure to mutate.
+- Release tags must match `package.json` and point at a commit reachable from
+  `main` before anything is published; the MCP registry publisher is pinned by
+  version and SHA-256 instead of being taken from `latest`; a Trivy secret scan
+  gates every push; the docs deploy runs in a separate job so only it holds
+  write permission; and Dependabot auto-merge is limited to patch updates of
+  direct development dependencies.
+
 ## [0.6.4] - 2026-08-18
 
 ### Fixed

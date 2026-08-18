@@ -10,6 +10,7 @@ import { redirectUriMatches } from '@modelcontextprotocol/sdk/server/auth/handle
 import type { AuthStore } from './store.js';
 import { renderLoginPage } from './login-page.js';
 import { renderConsentPage } from './consent-page.js';
+import { allowFormActionTo } from './headers.js';
 
 const ACCESS_TOKEN_TTL_S = 15 * 60;
 const REFRESH_TOKEN_TTL_S = 30 * 24 * 3600;
@@ -153,6 +154,9 @@ export class HubOAuthProvider implements OAuthServerProvider {
     const page = session
       ? renderConsentPage(request, this.csrfToken(session), params.redirectUri, client.client_name, resource?.href)
       : renderLoginPage(request, params.redirectUri, client.client_name, undefined, resource?.href);
+    // Submitting either form ends in a redirect to this client's redirect_uri,
+    // which the SDK has already matched against its registration.
+    allowFormActionTo(res, params.redirectUri);
     res.status(200).type('html').send(page);
   }
 

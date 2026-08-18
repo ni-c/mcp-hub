@@ -9,7 +9,7 @@
 # nothing here spawns anything. It is meant to be read end to end.
 
 # Build stage
-FROM node:26-bookworm-slim@sha256:cd565714d4da3e84bfd341e31448f81d47c6362198f152345297c9c1154e6341 AS build
+FROM node:24-bookworm-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03 AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts
@@ -17,7 +17,7 @@ COPY tsconfig.json ./
 COPY src ./src
 RUN npm run build && npm prune --omit=dev --ignore-scripts
 
-FROM node:26-bookworm-slim@sha256:cd565714d4da3e84bfd341e31448f81d47c6362198f152345297c9c1154e6341
+FROM node:24-bookworm-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03
 RUN apt-get update \
     && apt-get install -y --no-install-recommends tini \
     && rm -rf /var/lib/apt/lists/*
@@ -46,7 +46,7 @@ RUN mkdir -p /run/proxy && chown -R node:node /run/proxy /app
 USER node
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
-  CMD ["node", "-e", "require('node:fs').statSync(process.env.LISTEN_SOCKET).isSocket()||process.exit(1)"]
+  CMD ["node", "-e", "const h=require('node:http');const r=h.request({socketPath:process.env.LISTEN_SOCKET,path:'/_mcp_hub/policy'},x=>{let b='';x.on('data',c=>b+=c);x.on('end',()=>{try{const j=JSON.parse(b);process.exit(x.statusCode===200&&j.name==='mcp-hub-docker-proxy'&&j.daemon==='ok'?0:1)}catch{process.exit(1)}})});r.on('error',()=>process.exit(1));r.end()"]
 
 ENTRYPOINT ["tini", "--"]
 CMD ["node", "dist/docker-proxy/index.js"]

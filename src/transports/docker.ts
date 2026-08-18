@@ -21,6 +21,7 @@ const STDERR = 2;
  */
 export class DockerFrameDecoder {
   private buffer: Buffer = Buffer.alloc(0);
+  private failed = false;
 
   constructor(
     private readonly onFrame: (stream: number, payload: Buffer) => void,
@@ -28,11 +29,13 @@ export class DockerFrameDecoder {
   ) {}
 
   push(chunk: Buffer): void {
+    if (this.failed) return;
     this.buffer = this.buffer.length === 0 ? chunk : Buffer.concat([this.buffer, chunk]);
     for (;;) {
       if (this.buffer.length < 8) return;
       const size = this.buffer.readUInt32BE(4);
       if (size > MAX_FRAME_BYTES) {
+        this.failed = true;
         this.onError(new Error(`docker frame of ${size} bytes exceeds the ${MAX_FRAME_BYTES} byte limit`));
         this.buffer = Buffer.alloc(0);
         return;
@@ -109,7 +112,13 @@ export class DockerTransport implements Transport {
         if (streamType === STDOUT) inner.receive(payload);
         else if (streamType === STDERR) this.logStderr(payload);
       },
-      error => this.onerror?.(error)
+      error => {
+        this.onerror?.(error);
+        // A corrupt length makes frame boundaries unknowable. Closing the
+        // attach stream triggers container cleanup and the supervisor's normal
+        // restart backoff instead of leaving a poisoned stream alive.
+        void inner.close();
+      }
     );
     stream.on('data', chunk => decoder.push(chunk as Buffer));
 

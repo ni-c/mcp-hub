@@ -33,7 +33,7 @@ translation, no second dialect.
 ```json
 "scraper": {
   "type": "docker",
-  "image": "scraper-mcp:1.4.2",
+  "image": "registry.example/scraper-mcp@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   "command": ["python3", "-m", "scraper_mcp"],
   "env": { "HOME": "/data" },
   "secretsFrom": "scraper",
@@ -41,7 +41,8 @@ translation, no second dialect.
   "ports": ["127.0.0.1:8686:8000"],
   "network": "scraper-net",
   "memory": "384m",
-  "pidsLimit": 128
+  "pidsLimit": 128,
+  "cpus": 0.75
 }
 ```
 
@@ -52,15 +53,17 @@ changes, the container is replaced.
 
 | Field | Default | Notes |
 |---|---|---|
-| `image` | *(required)* | Tag or digest. Must exist locally unless `pull` says otherwise. |
+| `image` | *(required)* | Digest recommended. Mutable tags are supported, but log a warning and remain an accepted supply-chain risk. |
 | `pull` | `never` | `missing` lets the hub fetch the image. `never` fails loudly instead of running whatever a registry serves today. |
 | `command` / `entrypoint` | *(image default)* | Arrays of strings, like Docker's `Cmd`/`Entrypoint`. |
 | `env` | `{}` | Passed to the container only. `${VAR}` is expanded from the hub's environment. |
 | `secretsFrom` | *(none)* | Name of an env file the **proxy** holds — see [secrets](#secrets-the-hub-never-sees). |
-| `volumes` | `[]` | `source:/target[:ro]`. Source is an absolute host path or a named volume. |
+| `volumes` | `[]` | `source:/target[:ro]`. Source is an absolute host path or a named volume. Every entry is an explicit host-access grant by the operator. |
 | `ports` | `[]` | `[ip:]hostPort:containerPort[/proto]`. An omitted address means `127.0.0.1`, not every interface. |
-| `network` | `none` | Docker network name. `none` means no interface at all — still reachable, because the protocol does not use the network. |
-| `memory`, `pidsLimit` | *(unset)* | `"384m"`, `"1g"` or a byte count. |
+| `network` | `none` | Docker network name. Selecting a network is an explicit operator grant; `none` means no interface at all. |
+| `memory` | `"512m"` | RAM limit as `"384m"`, `"1g"` or a byte count. |
+| `pidsLimit` | `256` | Maximum number of processes in the sandbox. |
+| `cpus` | `1` | CPU quota; fractional positive values are accepted. |
 | `readOnly` | `true` | Read-only root filesystem. |
 | `tmpfs` | `["/tmp"]` | `"/path"` or `"/path:options"`. |
 | `user` | *(image default)* | `"1000:1000"` or a name. |
@@ -118,10 +121,16 @@ container operations that file describes.
                                                      └─────────────────┘
 ```
 
-What it enforces:
+The file is a trusted policy input: anyone who can edit `mcp.json` can grant a
+sandbox more host data or network reach. What the proxy enforces:
 
 - The container name must be `mcp-sandbox-<server>`, and `<server>` must be a
   `type: "docker"` entry in the config.
+- Hub and proxy complete a versioned policy handshake before the first Docker
+  operation. Missing `DOCKER_HOST`, a direct daemon socket, an unreachable
+  daemon, or a different policy version is refused.
+- Every start, stop, attach, wait and remove is preceded by a daemon-side
+  inspect; both owner and server labels must match exactly.
 - The whole create request must match the one derived from that entry —
   image, mounts, ports, limits, flags. It is compared against a request rebuilt
   by the very function the hub used to build it, so the policy cannot drift
@@ -150,7 +159,7 @@ filesystem mounted, not one built from another image.
 ```yaml
 services:
   docker-proxy:
-    image: ghcr.io/ni-c/mcp-hub-docker-proxy:0.7.0
+    image: ghcr.io/ni-c/mcp-hub-docker-proxy:0.7.0   # pin a digest in production
     container_name: mcp-hub-docker-proxy
     restart: unless-stopped
     # Access to the socket comes from the group, not from running as root.
@@ -165,7 +174,7 @@ services:
       - "proxy-sock:/run/proxy"
 
   mcp-hub:
-    image: ghcr.io/ni-c/mcp-hub:0.7.0
+    image: ghcr.io/ni-c/mcp-hub:0.7.0   # pin a digest in production
     depends_on: [docker-proxy]
     environment:
       DOCKER_HOST: "unix:///run/proxy/docker.sock"
@@ -192,7 +201,7 @@ would put them back in the process every stdio child can read. So it does not
 have to:
 
 ```json
-"scraper": { "type": "docker", "image": "scraper-mcp:1.4.2", "secretsFrom": "scraper" }
+"scraper": { "type": "docker", "image": "registry.example/scraper-mcp@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "secretsFrom": "scraper" }
 ```
 
 ```
@@ -203,9 +212,10 @@ secrets/scraper.env      # chmod 640, mounted into the proxy only
 
 The proxy appends those variables to the create request **after** it has
 validated it. The hub's `mcp.json` names the file, never its contents; the hub
-process never holds the values. A world-readable secret file is refused, and a
-key that collides with one of the entry's own `env` keys is refused too —
-silently letting one win would leave you unsure which value the container got.
+process never holds the values. Files larger than 64 KiB, symlinks, unsafe
+permissions, NUL bytes, duplicate keys and sets above 100 variables are refused.
+A key that collides with the entry's own `env` keys is refused too. Invalid
+secrets prevent startup and config reload rather than failing only on create.
 
 ## Socket servers
 
@@ -219,7 +229,7 @@ yourself and let the hub connect to a socket:
 
 ```yaml
   scary-mcp:
-    image: ghcr.io/example/scary-mcp:1.2.3
+    image: ghcr.io/example/scary-mcp@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
     command: socat UNIX-LISTEN:/run/mcp/scary.sock,fork,mode=0660 EXEC:"scary-mcp"
     user: "1000:1000"          # same uid as the hub, so it may open the socket
     network_mode: none          # possible precisely because there is no HTTP
