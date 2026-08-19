@@ -197,4 +197,39 @@ describe('the --stdio entrypoint', () => {
       child.kill();
     }
   }, 30_000);
+
+  // npm links a bin entry as node_modules/.bin/<name> — a symlink whose
+  // basename is the command, not the file. Started that way, the entry point
+  // has to recognise itself; the first version compared basenames, so
+  // `npx @ni-c/mcp-hub` exited 0 without doing anything.
+  it('starts when it is invoked through a bin symlink', async () => {
+    const configPath = writeConfig({});
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-hub-bin-'));
+    const link = path.join(binDir, 'mcp-hub');
+    fs.symlinkSync(path.resolve('src/index.ts'), link);
+
+    const child = spawn(process.execPath, ['--import', 'tsx', link, '--stdio'], {
+      cwd: path.resolve('.'),
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env, CONFIG_PATH: configPath }
+    });
+    let stdout = '';
+    child.stdout.on('data', chunk => (stdout += chunk));
+
+    child.stdin.write(
+      `${JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'vitest', version: '1.0.0' } }
+      })}\n`
+    );
+    try {
+      await waitFor(() => stdout.includes('"id":1'));
+      expect(JSON.parse(stdout.split('\n')[0]).result.serverInfo.name).toBe('mcp-hub');
+    } finally {
+      child.kill();
+      fs.rmSync(binDir, { recursive: true, force: true });
+    }
+  }, 30_000);
 });
