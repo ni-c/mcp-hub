@@ -7,6 +7,9 @@ Servers marked [`"hub": false`](/guide/configuration#hiding-a-server-from-hub)
 are invisible to all four: `list_servers` omits them and the others reject them
 as unknown.
 
+The [stdio mode](/guide/clients#local-clients-over-stdio) serves the same four
+tools with the same behaviour — everything on this page applies there too.
+
 ## The intended sequence
 
 ```

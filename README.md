@@ -39,6 +39,10 @@ replaces N containers with one process:
 - **`/hub` aggregate**: register a *single* connector and reach every server
   through 4 meta-tools (`list_servers`, `list_tools`, `get_tool_schema`,
   `call_tool`) without flooding the model context with N×tools schemas.
+- **Also without HTTP**: `mcp-hub --stdio` serves that same aggregate on
+  stdin/stdout for clients that can only spawn a local process (Claude Desktop,
+  Codex, …) — same `mcp.json`, no TLS, no reverse proxy, no login. Auth exists
+  for the network endpoints; over stdio the trust boundary is the local user.
 - **Supervision**: children are spawned at boot, pinged, and restarted with
   exponential backoff when they die. A down server answers 503, not silence.
 - **Hot reload**: edits to `mcp.json` start/stop/restart only the affected

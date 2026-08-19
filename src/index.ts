@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import path from 'node:path';
 import express from 'express';
 import type { Request, Response, NextFunction } from 'express';
 import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
@@ -13,6 +14,7 @@ import { healthHandler } from './health.js';
 import { installFileLogging } from './logfile.js';
 import { canonicalResourceUrl, resourceUrlForRoute } from './auth/resource.js';
 import { ClientRequestGate } from './limits.js';
+import { runStdio } from './stdio.js';
 
 export interface HubOptions {
   externalUrl: string;
@@ -188,7 +190,13 @@ function positiveIntegerEnv(name: string, fallback: number): number {
 }
 
 const isMain = process.argv[1] && import.meta.url.endsWith(process.argv[1].split('/').pop()!);
-if (isMain) {
+// `--stdio` serves the /hub aggregate on stdin/stdout instead of over HTTP, for
+// clients that can only spawn a local process. None of the HTTP surface —
+// listener, OAuth, tokens, rate limiting — is created in that mode.
+if (isMain && process.argv.includes('--stdio')) {
+  if (process.env.LOG_FILE) installFileLogging(process.env.LOG_FILE);
+  await runStdio({ configPath: process.env.CONFIG_PATH ?? path.resolve('mcp.json') });
+} else if (isMain) {
   const port = Number(process.env.PORT ?? 3000);
   // Before anything else, so the startup lines land in the file too.
   if (process.env.LOG_FILE) {

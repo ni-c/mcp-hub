@@ -78,6 +78,23 @@ value logs and keeps the hardened default instead of taking the hub down.
 `DATA_PATH` is also read by `mcp-hub-admin`, so the admin CLI needs it set to
 the same directory when run outside the container.
 
+## In stdio mode
+
+`--stdio` ([local clients](/guide/clients#local-clients-over-stdio)) starts no
+listener and no authorization server, so most of the table above does not
+apply. What it reads:
+
+| Variable | Default | Description |
+|---|---|---|
+| `CONFIG_PATH` | `mcp.json` in the working directory | Same file, same hot reload. A missing file starts an empty hub instead of failing — the client that spawned the process has nowhere to show a startup error. |
+| `LOG_FILE` | *(unset)* | Same as above. Logging otherwise goes to stderr: in stdio mode stdout carries the protocol, so `console.log` output is moved out of the way. |
+
+Everything else — `EXTERNAL_URL`, `PASSWORD*`, `TRUSTED_PROXIES`,
+`RESOURCE_BOUND_TOKENS`, `DEFAULT_RESOURCE`, `PORT`, `DATA_PATH`, the
+rate limits and the HTTP timeouts — is HTTP-only and ignored. The call
+timeouts (`MCP_CALL_TIMEOUT_MS` and friends) apply, since they belong to the
+proxying path.
+
 ## Full Compose example
 
 ```yaml

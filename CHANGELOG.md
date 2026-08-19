@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- #region changelog -->
 
+## [Unreleased]
+
+### Added
+
+- **stdio mode.** `mcp-hub --stdio` (or the `mcp-hub-stdio` binary) serves the
+  `/hub` aggregate — the same four meta-tools, the same `mcp.json`, the same
+  supervision and hot reload — on stdin/stdout, for clients that can only spawn
+  a local process. No listener, no OAuth, no `EXTERNAL_URL`; the trust boundary
+  is the local user account. `CONFIG_PATH` defaults to `mcp.json` in the
+  working directory and a missing file starts an empty hub instead of failing,
+  because a client-spawned process has nowhere to show a startup error.
+  `console.log`/`console.info` are moved to stderr for the life of the process:
+  stdout carries the protocol.
+
+### Fixed
+
+- The release workflow now has a concurrency group and skips an npm publish or
+  GitHub release that already exists. A tag push delivered twice used to start
+  two releases, and the loser died on npm's 403 for an already-published
+  version — a permanently red check on a commit that is also main's HEAD.
+
 ## [0.8.0] - 2026-08-18
 
 ### Added
