@@ -4,6 +4,16 @@ on:
   push:
     tags: ['v*.*.*']
 
+# A tag push that is delivered twice (or a tag that is moved) would otherwise
+# run two releases side by side, and the loser dies on npm's "cannot publish
+# over the previously published version" — a permanently red check on a commit
+# that is also main's HEAD. Unlike ci.yml this must not cancel the running one:
+# killing a release between the npm publish and the registry sync leaves the
+# release half done.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
@@ -55,7 +65,17 @@ jobs:
             exit 1
           fi
       - run: npm ci --ignore-scripts
-      - run: npm publish --provenance
+      # Idempotent: a re-run of a release whose publish already went through
+      # (or a duplicate tag delivery that slipped past the concurrency group)
+      # must not turn red on npm's 403 for an existing version.
+      - name: Publish to npm unless the version is already there
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if npm view "@ni-c/mcp-hub@$version" version > /dev/null 2>&1; then
+            echo "@ni-c/mcp-hub@$version is already published — skipping"
+            exit 0
+          fi
+          npm publish --provenance
 
   mcp-registry:
     needs: publish
@@ -126,6 +146,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # Same reasoning as the npm step: creating an existing release is an
+          # error, and a re-run must be able to finish the missing half.
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME already exists — skipping"
+            exit 0
+          fi
           gh release create "$GITHUB_REF_NAME" \
             --title "$GITHUB_REF_NAME" \
             --notes-file release-notes.md
