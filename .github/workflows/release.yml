@@ -97,10 +97,31 @@ jobs:
              | (.packages[] | select(.registryType == "oci")) |= (del(.version) | .identifier |= sub(":[^:]*$"; ":" + $v))' \
             server.json > server.tmp && mv server.tmp server.json
           jq -r '.packages[] | "\(.registryType) \(.identifier) \(.version // "-")"' server.json
+      # Same idempotency as the npm and GitHub-release steps: the registry
+      # answers a version it already has with "cannot publish duplicate
+      # version", so a re-run that only needs the other half would fail here.
+      - name: Check whether the registry already has this version
+        id: registry
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if body="$(curl -fsS "https://registry.modelcontextprotocol.io/v0/servers?search=io.github.ni-c/mcp-hub&version=$version")"; then
+            # search is fuzzy, so match the name exactly rather than trusting the hit.
+            if jq -e --arg v "$version" \
+                '[.servers[].server | select(.name == "io.github.ni-c/mcp-hub" and .version == $v)] | length > 0' \
+                <<<"$body" > /dev/null; then
+              echo "io.github.ni-c/mcp-hub@$version is already in the registry — skipping"
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            # A failed query must never look like "already published" — publish
+            # and let the attempt itself report the problem.
+            echo "registry query failed — publishing anyway"
+          fi
       # The OCI image is pushed by ci.yml's publish job, which runs in parallel
       # to this workflow on the same tag — the registry's ownership check would
       # race it. Wait until GHCR actually serves the version tag.
       - name: Wait for the GHCR image tag
+        if: steps.registry.outputs.skip != 'true'
         run: |
           version="$(node -p "require('./package.json').version")"
           token="$(curl -fsS 'https://ghcr.io/token?scope=repository:ni-c/mcp-hub:pull&service=ghcr.io' | jq -r .token)"
@@ -117,13 +138,16 @@ jobs:
           echo "Image tag $version never appeared on GHCR — is ci.yml's publish job green?" >&2
           exit 1
       - name: Install mcp-publisher
+        if: steps.registry.outputs.skip != 'true'
         run: |
           curl -fsSL -o mcp-publisher.tar.gz \
             https://github.com/modelcontextprotocol/registry/releases/download/v1.7.9/mcp-publisher_linux_amd64.tar.gz
           echo 'ab128162b0616090b47cf245afe0a23f3ef08936fdce19074f5ba0a4469281ac  mcp-publisher.tar.gz' | sha256sum -c -
           tar xzf mcp-publisher.tar.gz mcp-publisher
-      - run: ./mcp-publisher login github-oidc
-      - run: ./mcp-publisher publish
+      - if: steps.registry.outputs.skip != 'true'
+        run: ./mcp-publisher login github-oidc
+      - if: steps.registry.outputs.skip != 'true'
+        run: ./mcp-publisher publish
 
   github-release:
     needs: publish

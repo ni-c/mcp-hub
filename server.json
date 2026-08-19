@@ -14,48 +14,41 @@
       "registryType": "npm",
       "identifier": "@ni-c/mcp-hub",
       "version": "0.5.1",
+      "runtimeHint": "npx",
       "transport": {
-        "type": "streamable-http",
-        "url": "http://localhost:{PORT}/hub"
+        "type": "stdio"
       },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "--stdio"
+        }
+      ],
       "environmentVariables": [
         {
-          "name": "EXTERNAL_URL",
-          "description": "Public base URL exactly as clients see it, e.g. https://mcp.example.net (no path)",
-          "isRequired": true,
-          "format": "string"
-        },
-        {
-          "name": "PASSWORD_HASH",
-          "description": "bcrypt hash of the OAuth login password (htpasswd -bnBC 10 \"\" 'pw' | tr -d ':\\n')",
-          "isRequired": true,
-          "isSecret": true,
-          "format": "string"
-        },
-        {
           "name": "CONFIG_PATH",
-          "description": "Path to the mcp.json listing the servers to expose, in Claude Code's mcpServers format (default /config/mcp.json)",
+          "description": "Path to the mcp.json listing the servers to expose, in Claude Code's mcpServers format (default mcp.json in the working directory)",
           "isRequired": false,
           "format": "string"
         },
         {
-          "name": "DATA_PATH",
-          "description": "Directory for the JWT key and OAuth client state; must persist across restarts (default /data)",
-          "isRequired": false,
-          "format": "string"
-        },
-        {
-          "name": "TRUSTED_PROXIES",
-          "description": "Comma-separated IPs/CIDRs of the reverse proxy allowed to set X-Forwarded-* headers",
-          "isRequired": false,
-          "format": "string"
-        },
-        {
-          "name": "PORT",
-          "description": "Listen port",
+          "name": "IDLE_TIMEOUT_MINUTES",
+          "description": "Minutes of inactivity before a server is put to sleep; 0 starts every server at launch and keeps it running (default 60)",
           "isRequired": false,
           "format": "number",
-          "default": "3000"
+          "default": "60"
+        },
+        {
+          "name": "TOOL_CACHE_PATH",
+          "description": "Tool snapshots of sleeping servers (default .mcp-hub/tool-cache.json beside the config)",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
+          "name": "LOG_FILE",
+          "description": "Mirror the hub's log lines into this file; stdout carries the protocol, so logging goes to stderr otherwise",
+          "isRequired": false,
+          "format": "string"
         }
       ]
     },

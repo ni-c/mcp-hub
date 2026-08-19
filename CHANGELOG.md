@@ -48,7 +48,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.mcp-hub/tool-cache.json` beside it, and a missing config starts an empty
   hub instead of failing, because a client-spawned process has nowhere to show
   a startup error. `console.log`/`console.info` are moved to stderr for the
-  life of the process: stdout carries the protocol.
+  life of the process: stdout carries the protocol. The MCP Registry entry
+  follows: the npm package is now listed as a **stdio** package
+  (`npx @ni-c/mcp-hub --stdio`), so the hub can be installed straight from the
+  registry. The OCI package stays `streamable-http` — that is the container
+  deployment.
 
 ### Changed
 
@@ -60,10 +64,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- The release workflow now has a concurrency group and skips an npm publish or
-  GitHub release that already exists. A tag push delivered twice used to start
-  two releases, and the loser died on npm's 403 for an already-published
-  version — a permanently red check on a commit that is also main's HEAD.
+- The release workflow now has a concurrency group and skips an npm publish,
+  MCP Registry publish or GitHub release that already exists. A tag push
+  delivered twice used to start two releases, and the loser died on npm's 403
+  for an already-published version — a permanently red check on a commit that
+  is also main's HEAD. Every publishing step is now idempotent, so a re-run can
+  finish the half that is missing; the manual `mcp-registry` workflow carries
+  the same guard.
 
 ## [0.8.0] - 2026-08-18
 
