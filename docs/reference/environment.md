@@ -58,6 +58,7 @@ The proxy image (`ghcr.io/ni-c/mcp-hub-docker-proxy`) reads its own set:
 | `MCP_MAX_CONCURRENT_REQUESTS` | `4` | In-flight MCP requests per OAuth client. Positive integer. |
 | `MCP_CALL_TIMEOUT_MS` | `300000` | Deadline for one forwarded tool call or request. Raise it only for a deployment that genuinely runs long tools; a stuck call holds one of the concurrency slots above. |
 | `MCP_RESET_TIMEOUT_ON_PROGRESS` | `false` | Whether a progress notification restarts that deadline. `true` is convenient for long tools and gives up the absolute bound: a child that emits progress forever keeps the call open forever. |
+| `IDLE_TIMEOUT_MINUTES` | `60` | Minutes of inactivity before an [on-demand server](/guide/on-demand) is put to sleep. `0` disables on-demand lifecycling entirely — every server starts at boot and keeps running, the pre-0.9 behaviour. Per-server `idleMinutes` overrides it. |
 | `HTTP_HEADERS_TIMEOUT_MS` | `10000` | Node's header timeout. |
 | `HTTP_REQUEST_TIMEOUT_MS` | `310000` | Complete request timeout — slightly above the default tool-call timeout. Your reverse proxy must allow at least as long, and raising `MCP_CALL_TIMEOUT_MS` means raising this and the proxy with it. |
 
@@ -72,6 +73,7 @@ value logs and keeps the hardened default instead of taking the hub down.
 |---|---|---|
 | `CONFIG_PATH` | `/config/mcp.json` | The `mcpServers` config file. Watched for changes. |
 | `DATA_PATH` | `/data` | JWT key, OAuth clients, approvals, refresh tokens. Must be persistent. |
+| `TOOL_CACHE_PATH` | `<DATA_PATH>/tool-cache.json` | Snapshots (identity, capabilities, tool list) of [on-demand servers](/guide/on-demand), so they can boot into `sleeping` instead of warm-starting. Not writable → a startup warning and on-demand servers warm-start at every boot. |
 | `LOG_FILE` | *(unset)* | Mirror every hub log line into this file with an ISO-8601 UTC prefix, in addition to the console. See [fail2ban](/guide/deployment#fail2ban). |
 | `PORT` | `80` in the image, `3000` otherwise | Listen port. |
 

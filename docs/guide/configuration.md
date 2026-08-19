@@ -173,6 +173,22 @@ time through `/hub` only duplicates them.
 Claude Code ignores unknown fields, so a file carrying `hub` still works as a
 Claude Code config.
 
+## Lifecycle: `keepAlive` and `idleMinutes`
+
+Stdio and docker servers run [on demand](/guide/on-demand) by default: started
+when used, put to sleep after `IDLE_TIMEOUT_MINUTES` (default 60) of
+inactivity. Two fields tune that per server:
+
+```json
+"workhorse": { "command": "busy-mcp", "keepAlive": true },
+"scraper":   { "type": "docker", "image": "scraper@sha256:…", "idleMinutes": 15 }
+```
+
+`keepAlive: true` exempts a server — it always runs, as every server did before
+0.9. `idleMinutes` overrides the global idle timeout for one server; the two
+are mutually exclusive. Both are rejected on remote and socket servers, whose
+processes the hub does not own. Like `hub`, Claude Code ignores them.
+
 ## Hot reload
 
 The hub watches the config file and applies changes without a restart:

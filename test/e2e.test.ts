@@ -182,7 +182,10 @@ beforeAll(async () => {
     // /health and every server, which is what lets the suite below share a
     // single token — and it keeps that legacy path under test. The default
     // (bound) behaviour has its own suite further down.
-    requireResourceBoundTokens: false
+    requireResourceBoundTokens: false,
+    // This suite asserts the always-running behaviour (503 while down, endless
+    // restarts); the on-demand lifecycle has its own suite in on-demand-e2e.
+    idleTimeoutMinutes: 0
   });
   await hub.supervisor.waitUntilSettled();
   httpServer = hub.app.listen(0);
@@ -621,10 +624,10 @@ describe('per-server proxy', () => {
 });
 
 describe('/hub aggregate', () => {
-  it('exposes exactly the four meta-tools', async () => {
+  it('exposes exactly the six meta-tools', async () => {
     const client = await mcpClient('/hub', accessToken);
     const tools = await client.listTools();
-    expect(tools.tools.map(t => t.name).sort()).toEqual(['call_tool', 'get_tool_schema', 'list_servers', 'list_tools']);
+    expect(tools.tools.map(t => t.name).sort()).toEqual(['call_tool', 'get_tool_schema', 'list_servers', 'list_tools', 'sleep_server', 'wake_server']);
     await client.close();
   });
 

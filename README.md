@@ -37,10 +37,16 @@ replaces N containers with one process:
 - **Config is exactly Claude Code's `mcpServers` format** — copy entries 1:1.
 - **Path-based routing**: `https://host/paperless`, `https://host/homeassistant`, …
 - **`/hub` aggregate**: register a *single* connector and reach every server
-  through 4 meta-tools (`list_servers`, `list_tools`, `get_tool_schema`,
-  `call_tool`) without flooding the model context with N×tools schemas.
-- **Supervision**: children are spawned at boot, pinged, and restarted with
-  exponential backoff when they die. A down server answers 503, not silence.
+  through 6 meta-tools (`list_servers`, `list_tools`, `get_tool_schema`,
+  `call_tool`, `wake_server`, `sleep_server`) without flooding the model
+  context with N×tools schemas.
+- **On-demand lifecycle**: stdio and docker servers start when used and sleep
+  after 60 idle minutes, answering `initialize`/`tools/list` from a persistent
+  snapshot meanwhile — a dozen servers cost only the memory of the ones in
+  use. `keepAlive: true` exempts a server, `IDLE_TIMEOUT_MINUTES=0` the hub.
+- **Supervision**: children are pinged and restarted with exponential backoff
+  when they die. A down server answers 503, not silence; a crash-looping
+  server nobody uses is parked instead of restarted forever.
 - **Hot reload**: edits to `mcp.json` start/stop/restart only the affected
   servers.
 - **Stateless Streamable HTTP**: no session state, so claude.ai's

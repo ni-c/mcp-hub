@@ -1,9 +1,11 @@
 #!/usr/bin/env node
+import path from 'node:path';
 import express from 'express';
 import type { Request, Response, NextFunction } from 'express';
 import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
 import { loadConfig, ConfigWatcher, warnMutableDockerImages } from './config.js';
 import { Supervisor } from './supervisor.js';
+import { ToolCache } from './tool-cache.js';
 import { serverRequestHandler, handleMcpRequest } from './proxy.js';
 import { buildHubServer } from './hub.js';
 import { AuthStore } from './auth/store.js';
@@ -28,6 +30,10 @@ export interface HubOptions {
   mcpBodyLimit?: string;
   mcpRequestsPerMinute?: number;
   mcpMaxConcurrentRequests?: number;
+  /** Idle minutes before an on-demand server sleeps; 0 disables on-demand lifecycling. Defaults to 60. */
+  idleTimeoutMinutes?: number;
+  /** Where tool snapshots of sleeping servers live. Defaults to <dataPath>/tool-cache.json. */
+  toolCachePath?: string;
 }
 
 export async function createHub(options: HubOptions) {
@@ -53,14 +59,25 @@ export async function createHub(options: HubOptions) {
       throw new Error(`defaultResource "${name}" is neither "hub" nor a configured server`);
     }
   }
-  const supervisor = new Supervisor(config);
-  // Deliberately not awaited: an unreachable Docker endpoint must not hold up
-  // the HTTP listener or the stdio children, and reaping only ever touches
-  // containers whose server is no longer configured.
+  const idleTimeoutMinutes = options.idleTimeoutMinutes ?? 60;
+  if (!Number.isSafeInteger(idleTimeoutMinutes) || idleTimeoutMinutes < 0) throw new Error('idleTimeoutMinutes must be a non-negative integer');
+  const cache = new ToolCache(options.toolCachePath ?? path.join(options.dataPath, 'tool-cache.json'));
+  if (idleTimeoutMinutes > 0) {
+    cache.load();
+    if (!cache.probeWritable()) {
+      console.warn(`mcp-hub: tool cache ${cache.filePath} is not writable — on-demand servers warm-start at every boot instead of sleeping through it`);
+    }
+  }
+  const supervisor = new Supervisor(config, { idleTimeoutMinutes, cache });
+  // start() before reapOrphans(): reaping spares the container of any server
+  // that is not asleep, so it must see the boot states. Deliberately not
+  // awaited: an unreachable Docker endpoint must not hold up the HTTP listener
+  // or the stdio children. Children come up (or hydrate into `sleeping`) in
+  // the background; paths answer 503 until then.
+  supervisor.start();
   void supervisor
     .reapOrphans()
     .catch(error => console.error(`mcp-hub: could not reap sandbox containers: ${(error as Error).message}`));
-  supervisor.start(); // children come up in the background; paths answer 503 until then
 
   const watcher = new ConfigWatcher(options.configPath, config);
   watcher.on('change', (next, diff) => {
@@ -187,6 +204,17 @@ function positiveIntegerEnv(name: string, fallback: number): number {
   return value;
 }
 
+function nonNegativeIntegerEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 0) {
+    console.error(`mcp-hub: ${name} must be a non-negative integer`);
+    process.exit(1);
+  }
+  return value;
+}
+
 const isMain = process.argv[1] && import.meta.url.endsWith(process.argv[1].split('/').pop()!);
 if (isMain) {
   const port = Number(process.env.PORT ?? 3000);
@@ -206,7 +234,9 @@ if (isMain) {
     defaultResource: process.env.DEFAULT_RESOURCE || undefined,
     mcpBodyLimit: process.env.MCP_BODY_LIMIT ?? '1mb',
     mcpRequestsPerMinute: positiveIntegerEnv('MCP_REQUESTS_PER_MINUTE', 120),
-    mcpMaxConcurrentRequests: positiveIntegerEnv('MCP_MAX_CONCURRENT_REQUESTS', 4)
+    mcpMaxConcurrentRequests: positiveIntegerEnv('MCP_MAX_CONCURRENT_REQUESTS', 4),
+    idleTimeoutMinutes: nonNegativeIntegerEnv('IDLE_TIMEOUT_MINUTES', 60),
+    toolCachePath: process.env.TOOL_CACHE_PATH || undefined
   });
   if (process.env.RESOURCE_BOUND_TOKENS === 'false' || process.env.RESOURCE_BOUND_TOKENS === '0') {
     console.warn(

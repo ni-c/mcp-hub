@@ -27,6 +27,12 @@ services:
       MCP_REQUESTS_PER_MINUTE: "120"
       MCP_MAX_CONCURRENT_REQUESTS: "4"
 
+      # Stdio and docker servers run on demand: started when used, asleep
+      # after this many idle minutes ("keepAlive": true in mcp.json exempts a
+      # server, "0" disables the feature). Snapshots live in
+      # /data/tool-cache.json, so the ./data volume below already covers them.
+      IDLE_TIMEOUT_MINUTES: "60"
+
       # bcrypt hash of the OAuth login password. Generate with:
       #   htpasswd -bnBC 10 "" 'yourpassword' | tr -d ':\n'
       # (PASSWORD with a plain-text value works too, PASSWORD_HASH wins.)

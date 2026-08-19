@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- #region changelog -->
 
+## [Unreleased]
+
+### Added
+
+- **On-demand servers.** Stdio and docker servers now start when they are used
+  and go to sleep after `IDLE_TIMEOUT_MINUTES` (default 60) without a forwarded
+  request — on a small host, a dozen configured servers cost only the memory of
+  the ones actually in use. While a server sleeps, `initialize` and
+  `tools/list` are answered from a persistent snapshot
+  (`TOOL_CACHE_PATH`, default `/data/tool-cache.json`), so a client
+  enumerating its connectors wakes nothing; the first real tool call wakes the
+  server and blocks until it is up (120 s budget). `/hub`'s `list_tools` and
+  `get_tool_schema` answer from the snapshot and pre-warm the server in the
+  background. Per-server control: `"keepAlive": true` keeps a server always
+  running (the previous behaviour), `"idleMinutes"` overrides the global
+  timeout; `IDLE_TIMEOUT_MINUTES=0` disables the feature entirely. New `/hub`
+  meta-tools `wake_server` and `sleep_server` steer the lifecycle manually. An
+  on-demand server that crashes five restarts in a row without being used is
+  parked as `sleeping` (error kept visible) instead of restarting forever.
+  `/health` treats `sleeping` as healthy. The docker-proxy and its policy are
+  unchanged — `DOCKER_POLICY_VERSION` stays at 1.
+
 ## [0.8.0] - 2026-08-18
 
 ### Added

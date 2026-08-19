@@ -87,9 +87,12 @@ corrupts the stream — the hub logs `not JSON` and drops that message. Logging
 must go to stderr, where the hub prefixes it `[name]` and passes it through to
 its own stderr, just like a stdio child's.
 
-**The container is recreated on every hub start.** A server with a long startup
-pays it again after a hub restart. The hub answers `503` on that server's path
-meanwhile; nothing else waits for it.
+**The container is recreated on every start.** Stopping a sandbox always means
+removing the container, and starting one always means creating it fresh — this
+is exactly what [on-demand lifecycling](/guide/on-demand) leans on: a sleeping
+sandbox holds no container at all, and a wake pays the full container start. A
+server with a long startup pays it again after a hub restart too. The hub
+answers `503` on that server's path meanwhile; nothing else waits for it.
 
 **One Docker host, one hub.** Sandbox containers are named `mcp-sandbox-<server>`
 and labelled `io.mcp-hub.owner=mcp-hub`, and on startup the hub removes owned

@@ -19,7 +19,8 @@ describe('parseConfig', () => {
       command: 'npx',
       args: ['-y', 'paperless-mcp'],
       env: { PAPERLESS_API_TOKEN: 'secret123' },
-      hub: true
+      hub: true,
+      keepAlive: false
     });
     const plain = config.get('plain');
     expect(plain?.kind === 'stdio' && plain.env).toEqual({});
@@ -74,6 +75,45 @@ describe('parseConfig', () => {
   ])('rejects invalid config %#', (raw, message) => {
     expect(() => parseConfig(JSON.stringify(raw), env)).toThrowError(message);
     expect(() => parseConfig(JSON.stringify(raw), env)).toThrowError(ConfigError);
+  });
+
+  it('parses keepAlive and idleMinutes on stdio and docker servers', () => {
+    const config = parseConfig(
+      JSON.stringify({
+        mcpServers: {
+          pinned: { command: 'x', keepAlive: true },
+          lazy: { command: 'x', idleMinutes: 30 },
+          plain: { command: 'x' },
+          sandbox: { type: 'docker', image: 'img:1', idleMinutes: 5 }
+        }
+      }),
+      env
+    );
+    expect(config.get('pinned')).toMatchObject({ keepAlive: true });
+    expect(config.get('pinned')).not.toHaveProperty('idleMinutes');
+    expect(config.get('lazy')).toMatchObject({ keepAlive: false, idleMinutes: 30 });
+    expect(config.get('plain')).toMatchObject({ keepAlive: false });
+    expect(config.get('sandbox')).toMatchObject({ kind: 'docker', keepAlive: false, idleMinutes: 5 });
+  });
+
+  it.each([
+    [{ mcpServers: { a: { command: 'x', keepAlive: 'yes' } } }, '"keepAlive" must be a boolean'],
+    [{ mcpServers: { a: { command: 'x', idleMinutes: 0 } } }, '"idleMinutes" must be a positive integer'],
+    [{ mcpServers: { a: { command: 'x', idleMinutes: 1.5 } } }, '"idleMinutes" must be a positive integer'],
+    [{ mcpServers: { a: { command: 'x', keepAlive: true, idleMinutes: 5 } } }, 'mutually exclusive'],
+    [{ mcpServers: { a: { type: 'http', url: 'https://example.com/mcp', keepAlive: true } } }, 'only supported on stdio and docker'],
+    [{ mcpServers: { a: { type: 'http', url: 'https://example.com/mcp', idleMinutes: 5 } } }, 'only supported on stdio and docker'],
+    [{ mcpServers: { a: { type: 'unix', socket: '/tmp/x.sock', keepAlive: true } } }, 'only supported on stdio and docker'],
+    [{ mcpServers: { a: { type: 'tcp', host: 'h', port: 1, idleMinutes: 5 } } }, 'only supported on stdio and docker']
+  ])('rejects invalid lifecycle config %#', (raw, message) => {
+    expect(() => parseConfig(JSON.stringify(raw), env)).toThrowError(message);
+    expect(() => parseConfig(JSON.stringify(raw), env)).toThrowError(ConfigError);
+  });
+
+  it('treats a keepAlive/idleMinutes edit as a change', () => {
+    const before = parseConfig(JSON.stringify({ mcpServers: { a: { command: 'x' } } }), env);
+    const after = parseConfig(JSON.stringify({ mcpServers: { a: { command: 'x', keepAlive: true } } }), env);
+    expect(diffConfigs(before, after).changed).toEqual(['a']);
   });
 });
 

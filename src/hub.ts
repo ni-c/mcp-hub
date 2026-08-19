@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import type { Supervisor } from './supervisor.js';
+import type { ManagedServer, Supervisor } from './supervisor.js';
 import { VERSION } from './version.js';
 import { ABSOLUTE_CALL_OPTIONS, assertForwardedResultSize } from './mcp-limits.js';
 
@@ -21,7 +21,7 @@ function firstLine(description: string | undefined): string {
 
 /**
  * The /hub aggregate: one connector exposing every hub-enabled server through
- * four meta-tools, so a client's context holds 4 tool schemas instead of 9×N.
+ * six meta-tools, so a client's context holds 6 tool schemas instead of 9×N.
  */
 export function buildHubServer(supervisor: Supervisor): McpServer {
   const hub = new McpServer({ name: 'mcp-hub', version: VERSION });
@@ -30,6 +30,27 @@ export function buildHubServer(supervisor: Supervisor): McpServer {
     const managed = supervisor.get(name);
     if (!managed || !managed.config.hub) return undefined;
     return managed;
+  };
+
+  /**
+   * Asking about an on-demand server's tools is the strongest hint that a
+   * call follows, so a sleeping server is pre-warmed in the background while
+   * the cached snapshot answers. Only a server with nothing cached yet (first
+   * ever run) blocks on the start — there is nothing truthful to answer from.
+   * Always-running servers pass through untouched.
+   */
+  const prepare = async (managed: ManagedServer): Promise<CallToolResult | undefined> => {
+    if (!managed.onDemand) return undefined;
+    if (!managed.hasSnapshot) {
+      try {
+        await managed.wake();
+      } catch (error) {
+        return toolError(`Server "${managed.name}" failed to start: ${(error as Error).message}`);
+      }
+    } else if (managed.state === 'sleeping') {
+      void managed.wake().catch(() => {});
+    }
+    return undefined;
   };
 
   hub.registerTool(
@@ -60,7 +81,9 @@ export function buildHubServer(supervisor: Supervisor): McpServer {
     async ({ server }) => {
       const managed = findServer(server);
       if (!managed) return toolError(`Unknown server "${server}". Use list_servers to see available servers.`);
-      if (managed.state !== 'up') return toolError(`Server "${server}" is ${managed.state}.`);
+      if (!managed.onDemand && managed.state !== 'up') return toolError(`Server "${server}" is ${managed.state}.`);
+      const failed = await prepare(managed);
+      if (failed) return failed;
       return text(managed.tools.map(t => ({ name: t.name, description: firstLine(t.description) })));
     }
   );
@@ -78,6 +101,8 @@ export function buildHubServer(supervisor: Supervisor): McpServer {
     async ({ server, tool }) => {
       const managed = findServer(server);
       if (!managed) return toolError(`Unknown server "${server}". Use list_servers to see available servers.`);
+      const failed = await prepare(managed);
+      if (failed) return failed;
       const found = managed.tools.find(t => t.name === tool);
       if (!found) return toolError(`Unknown tool "${tool}" on server "${server}". Use list_tools to see available tools.`);
       return text({ name: found.name, description: found.description ?? '', inputSchema: found.inputSchema });
@@ -98,7 +123,15 @@ export function buildHubServer(supervisor: Supervisor): McpServer {
     async ({ server, tool, arguments: args }) => {
       const managed = findServer(server);
       if (!managed) return toolError(`Unknown server "${server}". Use list_servers to see available servers.`);
+      if (managed.onDemand && (managed.state !== 'up' || !managed.client)) {
+        try {
+          await managed.wake();
+        } catch (error) {
+          return toolError(`Server "${server}" failed to start: ${(error as Error).message}`);
+        }
+      }
       if (managed.state !== 'up' || !managed.client) return toolError(`Server "${server}" is ${managed.state}, try again later.`);
+      managed.markUsed();
       try {
         const result = await managed.client.callTool(
           { name: tool, arguments: (args ?? {}) as Record<string, unknown> },
@@ -109,6 +142,43 @@ export function buildHubServer(supervisor: Supervisor): McpServer {
       } catch (error) {
         return toolError(`Tool call failed: ${(error as Error).message}`);
       }
+    }
+  );
+
+  hub.registerTool(
+    'wake_server',
+    {
+      title: 'Wake a sleeping server',
+      description: 'Start an on-demand server now so its first tool call is fast. No-op if it is already running.',
+      inputSchema: { server: z.string().describe('Server name from list_servers') }
+    },
+    async ({ server }) => {
+      const managed = findServer(server);
+      if (!managed) return toolError(`Unknown server "${server}". Use list_servers to see available servers.`);
+      if (!managed.onDemand) return toolError(`Server "${server}" is always running.`);
+      try {
+        await managed.wake();
+      } catch (error) {
+        return toolError(`Server "${server}" failed to start: ${(error as Error).message}`);
+      }
+      managed.markUsed();
+      return text({ name: managed.name, status: managed.state, toolCount: managed.tools.length });
+    }
+  );
+
+  hub.registerTool(
+    'sleep_server',
+    {
+      title: 'Put a server to sleep',
+      description: 'Stop an on-demand server immediately instead of waiting for its idle timeout. It restarts automatically on the next tool call.',
+      inputSchema: { server: z.string().describe('Server name from list_servers') }
+    },
+    async ({ server }) => {
+      const managed = findServer(server);
+      if (!managed) return toolError(`Unknown server "${server}". Use list_servers to see available servers.`);
+      if (!managed.onDemand) return toolError(`Server "${server}" is always running.`);
+      await managed.sleep();
+      return text({ name: managed.name, status: managed.state });
     }
   );
 

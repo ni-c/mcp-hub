@@ -155,6 +155,22 @@ Names must match `[a-zA-Z0-9_-]+`, and these are reserved because the hub
 serves them itself: `mcp`, `hub`, `authorize`, `token`, `register`, `login`,
 `consent`, `health`, `livez`, `revoke`, `.well-known`.
 
+### A server shows `sleeping` / the first tool call is slow
+
+Working as intended: stdio and docker servers run [on demand](/guide/on-demand)
+by default and sleep after 60 minutes of inactivity. The first call to a
+sleeping server pays its cold start; everything after that is normal. If one
+server's cold start bothers you, give it `"keepAlive": true`; to disable the
+feature entirely, set `IDLE_TIMEOUT_MINUTES: "0"`.
+
+### A crashed server stopped restarting
+
+An on-demand server that fails five restarts in a row **without being used**
+goes back to `sleeping` instead of crash-looping forever — its `lastError`
+stays visible in `list_servers` and `/health`. The next tool call (or
+`wake_server`) tries a fresh start. Servers with `keepAlive: true` keep the
+endless-backoff behaviour.
+
 ## Operating
 
 ### How do I update?
