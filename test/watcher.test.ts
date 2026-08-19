@@ -42,6 +42,19 @@ describe('ConfigWatcher', () => {
     expect(config.get('b')?.command).toBe('y');
   });
 
+  it('sees a rename-into-place save (how most editors write)', async () => {
+    // Directory-mounted configs receive edits as temp-file + rename. The
+    // directory watch matches the basename on the rename event, so no poll
+    // interval has to pass.
+    const pending = nextChange();
+    const staging = path.join(tmpDir, 'mcp.json.new');
+    fs.writeFileSync(staging, JSON.stringify({ mcpServers: { a: { command: 'renamed' } } }));
+    fs.renameSync(staging, configPath);
+    const { diff } = await pending;
+    expect(diff.changed).toEqual(['a']);
+    expect(watcher.current.get('a')?.command).toBe('renamed');
+  });
+
   it('survives a broken edit and applies the next valid one', async () => {
     const errors: Error[] = [];
     watcher.on('error', e => errors.push(e as Error));

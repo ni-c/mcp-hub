@@ -189,11 +189,14 @@ The config file is watched two ways: `fs.watch` on the parent directory, and
 `fs.watchFile` polling the file itself every 3 seconds. Both funnel into a
 300 ms debounce.
 
-The poller is not belt-and-braces. With a single-file bind mount —
-`-v ./mcp.json:/config/mcp.json` — an edit on the host produces no inotify
-event inside the container: the container's `/config` directory never changes,
-and the mount is a bind of one inode. Without polling, host-side edits would
-never be seen.
+The directory watch is what makes the recommended directory mount
+(`./config:/config:ro`) catch every kind of edit, including editors that save
+via rename. The poller is not belt-and-braces either: with a single-file bind
+mount — `-v ./mcp.json:/config/mcp.json` — an edit on the host produces no
+inotify event inside the container, so only polling sees in-place changes. And
+a *rename*-style save under a single-file mount is invisible to both — the
+mount binds one inode, and the new file is a new inode. That setup logs a
+startup warning.
 
 On a change the new file is parsed and diffed against the running
 configuration. Added servers start, removed servers stop, changed servers

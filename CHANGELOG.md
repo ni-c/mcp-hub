@@ -34,6 +34,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   be reached by the idle sweep. Tool access (`list_tools`, `get_tool_schema`,
   `call_tool`) still refuses hidden servers, now pointing at the server's own
   endpoint instead of pretending it does not exist.
+- **Single-file config mounts log a startup warning.** A
+  `-v ./mcp.json:/config/mcp.json` bind mount silently loses every editor save
+  that goes through a rename (new inode), killing hot reload. The hub and the
+  docker-proxy now detect that setup via `/proc/self/mountinfo` and say so at
+  startup.
+
+### Changed
+
+- **Examples and docs mount the config directory, not the file.** The
+  recommended layout is `./config/mcp.json` mounted as `./config:/config:ro` in
+  both the hub and the docker-proxy — rename-style editor saves then hot-reload
+  correctly. `CONFIG_PATH` and its default `/config/mcp.json` are unchanged, so
+  existing single-file deployments keep working (with the warning above).
 
 ## [0.8.0] - 2026-08-18
 

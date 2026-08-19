@@ -4,7 +4,7 @@
 # window. Prepare before recording (see the repo history for the exact steps):
 #   - local image `mcp-hub:demo` = ghcr image + four official MCP servers
 #     installed globally (memory, filesystem, everything, sequential-thinking)
-#   - mcp.json with those four servers, ./data owned by uid 1000
+#   - config/mcp.json with those four servers, ./data owned by uid 1000
 #   - an API token for /hub in ./token.txt (minted offline)
 #   - ./headers with the two transport headers (Content-Type: application/json
 #     and Accept: application/json, text/event-stream), pulled in via `-H @headers`
@@ -32,7 +32,7 @@ Show
 
 Type "# one config — many MCP servers"
 Enter
-Type "cat mcp.json"
+Type "cat config/mcp.json"
 Enter
 Sleep 3.5s
 

@@ -8,6 +8,7 @@ import { containerName } from '../sandbox/container-spec.js';
 import { createDockerProxy, recreateSandbox } from './server.js';
 import { SecretsWatcher } from './secrets-watcher.js';
 import { SecretStore, validateConfigSecrets } from './secrets.js';
+import { warnSingleFileMount } from '../mount-check.js';
 
 /**
  * mcp-hub-docker-proxy: the only component that touches /var/run/docker.sock.
@@ -43,6 +44,7 @@ try {
   console.error(`mcp-hub-docker-proxy: cannot read ${configPath}: ${(error as Error).message}`);
   process.exit(1);
 }
+warnSingleFileMount(configPath, 'mcp-hub-docker-proxy');
 
 // Fail loudly at startup rather than at the first create: a missing or
 // world-readable secret file is an operator mistake, and finding out about it

@@ -2,7 +2,9 @@
 
 mcp-hub reads a single file — `/config/mcp.json` by default, overridable with
 `CONFIG_PATH`. Its schema is Claude Code's `mcpServers` block, so entries move
-between the two without translation.
+between the two without translation. Mount the file's **directory** into the
+container (`./config:/config:ro`), not the file itself — see
+[hot reload](#hot-reload) for why.
 
 ```json
 {
@@ -206,17 +208,20 @@ file changes nothing. If an edit leaves the file invalid, the error is logged
 (`ignoring broken config update: …`) and the previous configuration stays
 active — a typo cannot take the hub down.
 
-::: details Why there is also a polling watcher
-The hub watches the config file's *directory* with `fs.watch`, plus the file
-itself with `fs.watchFile` (3-second polling). The fallback is not redundancy
-for its own sake: with a single-file bind mount — `-v ./mcp.json:/config/mcp.json` —
-an edit on the host does not produce an inotify event inside the container,
-because the mount is a bind of one inode and the container's `/config`
-directory never changes. Without the poller, host-side edits would never be
-noticed.
+Hot reload is why the examples mount the config **directory**
+(`./config:/config:ro`): with a directory mount every kind of host-side edit is
+seen, including editors that save by writing a temp file and renaming it over
+the original — which is how most editors save.
 
-Mounting the *directory* instead of the file avoids this, and is worth doing if
-you edit the config often.
+::: warning Single-file bind mounts miss renamed saves
+`-v ./mcp.json:/config/mcp.json` still works, but it binds one *inode*. An
+in-place edit is picked up (by the 3-second stat poller — single-file mounts
+produce no inotify events in the container), while a rename-style save creates
+a **new** inode the mount cannot follow: the container keeps reading the old
+file forever and hot reload silently stops. The hub and the docker-proxy log a
+startup warning when they detect this setup. If you are stuck on it, either
+edit strictly in place (`cat new.json > mcp.json`) or recreate **both**
+containers after each edit.
 :::
 
 ## Validation errors

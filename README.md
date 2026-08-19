@@ -201,7 +201,7 @@ services:
 
 ```sh
 cp docker-compose.example.yml docker-compose.yml   # adjust, swap build → image
-cp mcp.json.example mcp.json                        # adjust
+mkdir -p config && cp mcp.json.example config/mcp.json  # adjust
 mkdir -p data && sudo chown -R 1000:1000 data       # container runs as uid 1000
 docker compose up -d
 ```
@@ -215,7 +215,7 @@ docker run -d --name mcp-hub \
   -e EXTERNAL_URL="https://mcp.example.net" \
   -e PASSWORD_HASH="$(htpasswd -bnBC 10 '' 'yourpassword' | tr -d ':\n')" \
   -e TRUSTED_PROXIES="192.168.1.0/24" \
-  -v "$PWD/mcp.json:/config/mcp.json:ro" \
+  -v "$PWD/config:/config:ro" \
   -v "$PWD/data:/data" \
   ghcr.io/ni-c/mcp-hub:0.6.0
 ```
@@ -227,7 +227,7 @@ Update to a newer image with `docker compose pull && docker compose up -d`
 
 ```sh
 cp docker-compose.example.yml docker-compose.yml   # adjust
-cp mcp.json.example mcp.json                        # adjust
+mkdir -p config && cp mcp.json.example config/mcp.json  # adjust
 docker compose up -d --build
 ```
 

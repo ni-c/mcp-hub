@@ -6,6 +6,7 @@ import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middlew
 import { loadConfig, ConfigWatcher, warnMutableDockerImages } from './config.js';
 import { Supervisor } from './supervisor.js';
 import { ToolCache } from './tool-cache.js';
+import { warnSingleFileMount } from './mount-check.js';
 import { serverRequestHandler, handleMcpRequest } from './proxy.js';
 import { buildHubServer } from './hub.js';
 import { AuthStore } from './auth/store.js';
@@ -53,6 +54,7 @@ export async function createHub(options: HubOptions) {
   const requireResource = options.requireResourceBoundTokens ?? true;
   const config = loadConfig(options.configPath);
   warnMutableDockerImages(config);
+  warnSingleFileMount(options.configPath, 'mcp-hub');
   if (options.defaultResource !== undefined) {
     const name = options.defaultResource;
     if (name !== 'hub' && !config.has(name)) {

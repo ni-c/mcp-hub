@@ -148,7 +148,7 @@ docker run -d --name mcp-hub \
   -e EXTERNAL_URL="https://mcp.example.net" \
   -e PASSWORD_HASH="$(htpasswd -bnBC 10 '' 'yourpassword' | tr -d ':\n')" \
   -e TRUSTED_PROXIES="192.168.1.0/24" \
-  -v "$PWD/mcp.json:/config/mcp.json:ro" \
+  -v "$PWD/config:/config:ro" \
   -v "$PWD/data:/data" \
   ghcr.io/ni-c/mcp-hub:0.6.0
 ```

@@ -41,7 +41,7 @@ The proxy image (`ghcr.io/ni-c/mcp-hub-docker-proxy`) reads its own set:
 
 | Variable | Default | Description |
 |---|---|---|
-| `CONFIG_PATH` | `/config/mcp.json` | The same file the hub reads, mounted read-only. It *is* the policy. Parsed without `${VAR}` expansion — the proxy holds none of the hub's secrets. |
+| `CONFIG_PATH` | `/config/mcp.json` | The same file the hub reads — mount its **directory** read-only (`./config:/config:ro`), like the hub does. It *is* the policy. Parsed without `${VAR}` expansion — the proxy holds none of the hub's secrets. |
 | `LISTEN_SOCKET` | `/run/proxy/docker.sock` | Unix socket the hub connects to. Shared with the hub through a volume. |
 | `DOCKER_SOCKET` | `/var/run/docker.sock` | The real daemon. |
 | `SANDBOX_SECRETS_DIR` | `/run/secrets` | Where `"secretsFrom": "x"` looks for `x.env`. Files must be regular, non-symlink, at most 64 KiB, mode 640 or stricter, with at most 100 unique non-NUL entries. |
@@ -71,7 +71,7 @@ value logs and keeps the hardened default instead of taking the hub down.
 
 | Variable | Default | Description |
 |---|---|---|
-| `CONFIG_PATH` | `/config/mcp.json` | The `mcpServers` config file. Watched for changes. |
+| `CONFIG_PATH` | `/config/mcp.json` | The `mcpServers` config file. Watched for changes — mount its **directory** (`./config:/config:ro`), not the file: a single-file bind mount misses rename-style editor saves and logs a startup warning. |
 | `DATA_PATH` | `/data` | JWT key, OAuth clients, approvals, refresh tokens. Must be persistent. |
 | `TOOL_CACHE_PATH` | `<DATA_PATH>/tool-cache.json` | Snapshots (identity, capabilities, tool list) of [on-demand servers](/guide/on-demand), so they can boot into `sleeping` instead of warm-starting. Not writable → a startup warning and on-demand servers warm-start at every boot. |
 | `LOG_FILE` | *(unset)* | Mirror every hub log line into this file with an ISO-8601 UTC prefix, in addition to the console. See [fail2ban](/guide/deployment#fail2ban). |

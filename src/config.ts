@@ -487,7 +487,8 @@ export class ConfigWatcher extends EventEmitter {
     // host-side edits do not cross the mount boundary, so directory watching
     // never fires there. Stat polling catches in-place content changes.
     // (Host edits must rewrite the file in place — a rename/replace creates a
-    // new inode the mount cannot follow.)
+    // new inode the mount cannot follow. warnSingleFileMount() flags that
+    // setup at startup; the recommended directory mount has neither problem.)
     fs.watchFile(this.filePath, { interval: this.pollIntervalMs }, (curr, prev) => {
       if (curr.mtimeMs === prev.mtimeMs && curr.size === prev.size) return;
       clearTimeout(this.debounce);
