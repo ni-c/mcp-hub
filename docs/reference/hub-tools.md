@@ -6,8 +6,11 @@ remaining two (`wake_server`, `sleep_server`) steer the
 [on-demand lifecycle](/guide/on-demand).
 
 Servers marked [`"hub": false`](/guide/configuration#hiding-a-server-from-hub)
-are invisible to all six: `list_servers` omits them and the others reject them
-as unknown.
+keep their *tools* out of the aggregate: `list_tools`, `get_tool_schema` and
+`call_tool` refuse them with a pointer to the server's own endpoint. Their
+*lifecycle* is still the hub's business — `list_servers` shows them with a
+`hidden` marker, and `wake_server`/`sleep_server` manage them like any other
+on-demand server.
 
 ## The intended sequence
 
@@ -30,14 +33,16 @@ Returns one entry per hub-enabled server:
 
 ```json
 [
-  { "name": "paperless", "description": "Paperless-ngx", "status": "up", "toolCount": 14 },
-  { "name": "calendar",  "description": "CalDAV",        "status": "up", "toolCount": 6 }
+  { "name": "paperless", "description": "Paperless-ngx", "status": "up",       "toolCount": 14 },
+  { "name": "calendar",  "description": "CalDAV",        "status": "sleeping", "toolCount": 6, "hidden": true }
 ]
 ```
 
 `description` is the child's advertised title, falling back to its server name.
 `status` is `starting`, `up`, `down` or `sleeping`. Listing never wakes
-anything — `sleeping` entries still show their cached `toolCount`.
+anything — `sleeping` entries still show their cached `toolCount`. `hidden`
+appears only on `"hub": false` servers: their tools are served exclusively by
+their own endpoint, but `wake_server`/`sleep_server` accept them.
 
 ## `list_tools`
 

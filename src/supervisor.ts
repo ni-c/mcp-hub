@@ -514,11 +514,6 @@ export class Supervisor {
     return this.servers.get(name);
   }
 
-  /** Servers visible on the /hub aggregate endpoint. */
-  hubServers(): ManagedServer[] {
-    return [...this.servers.values()].filter(s => s.config.hub);
-  }
-
   async applyDiff(config: HubConfig, diff: ConfigDiff): Promise<void> {
     this.config = config;
     for (const name of [...diff.removed, ...diff.changed]) {

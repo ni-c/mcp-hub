@@ -28,6 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   parked as `sleeping` (error kept visible) instead of restarting forever.
   `/health` treats `sleeping` as healthy. The docker-proxy and its policy are
   unchanged — `DOCKER_POLICY_VERSION` stays at 1.
+- **`hub: false` servers are lifecycle-managed through `/hub`.** `list_servers`
+  now includes them with a `hidden` marker and `wake_server`/`sleep_server`
+  accept them — hiding a server's tools no longer means its lifecycle can only
+  be reached by the idle sweep. Tool access (`list_tools`, `get_tool_schema`,
+  `call_tool`) still refuses hidden servers, now pointing at the server's own
+  endpoint instead of pretending it does not exist.
 
 ## [0.8.0] - 2026-08-18
 

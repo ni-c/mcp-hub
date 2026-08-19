@@ -26,10 +26,18 @@ function firstLine(description: string | undefined): string {
 export function buildHubServer(supervisor: Supervisor): McpServer {
   const hub = new McpServer({ name: 'mcp-hub', version: VERSION });
 
-  const findServer = (name: string) => {
-    const managed = supervisor.get(name);
-    if (!managed || !managed.config.hub) return undefined;
-    return managed;
+  const findServer = (name: string) => supervisor.get(name);
+
+  /**
+   * `hub: false` hides a server's TOOLS from the aggregate — those are meant
+   * to be used through the server's own endpoint. Its lifecycle is a different
+   * matter: wake_server/sleep_server manage hidden servers too, so the error
+   * points at the right door instead of pretending the server does not exist
+   * (/health names every server to the same token anyway).
+   */
+  const requireExposed = (managed: ManagedServer): CallToolResult | undefined => {
+    if (managed.config.hub) return undefined;
+    return toolError(`Server "${managed.name}" is not exposed through /hub — connect to its own endpoint /${managed.name}/mcp instead.`);
   };
 
   /**
@@ -57,16 +65,19 @@ export function buildHubServer(supervisor: Supervisor): McpServer {
     'list_servers',
     {
       title: 'List MCP servers',
-      description: 'List all MCP servers available through this hub, with their status. Call this first to see what is available.',
+      description:
+        'List all MCP servers available through this hub, with their status. Call this first to see what is available. ' +
+        'Servers marked "hidden" serve their tools only via their own endpoint, but wake_server/sleep_server still manage them.',
       inputSchema: {}
     },
     async () =>
       text(
-        supervisor.hubServers().map(s => ({
+        [...supervisor.servers.values()].map(s => ({
           name: s.name,
           description: (s.serverInfo as { title?: string } | undefined)?.title ?? s.serverInfo?.name ?? '',
           status: s.state,
-          toolCount: s.tools.length
+          toolCount: s.tools.length,
+          ...(s.config.hub ? {} : { hidden: true })
         }))
       )
   );
@@ -81,6 +92,8 @@ export function buildHubServer(supervisor: Supervisor): McpServer {
     async ({ server }) => {
       const managed = findServer(server);
       if (!managed) return toolError(`Unknown server "${server}". Use list_servers to see available servers.`);
+      const hidden = requireExposed(managed);
+      if (hidden) return hidden;
       if (!managed.onDemand && managed.state !== 'up') return toolError(`Server "${server}" is ${managed.state}.`);
       const failed = await prepare(managed);
       if (failed) return failed;
@@ -101,6 +114,8 @@ export function buildHubServer(supervisor: Supervisor): McpServer {
     async ({ server, tool }) => {
       const managed = findServer(server);
       if (!managed) return toolError(`Unknown server "${server}". Use list_servers to see available servers.`);
+      const hidden = requireExposed(managed);
+      if (hidden) return hidden;
       const failed = await prepare(managed);
       if (failed) return failed;
       const found = managed.tools.find(t => t.name === tool);
@@ -123,6 +138,8 @@ export function buildHubServer(supervisor: Supervisor): McpServer {
     async ({ server, tool, arguments: args }) => {
       const managed = findServer(server);
       if (!managed) return toolError(`Unknown server "${server}". Use list_servers to see available servers.`);
+      const hidden = requireExposed(managed);
+      if (hidden) return hidden;
       if (managed.onDemand && (managed.state !== 'up' || !managed.client)) {
         try {
           await managed.wake();

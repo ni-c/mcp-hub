@@ -162,9 +162,12 @@ running.
 "internal-only": { "command": "some-mcp", "args": [], "hub": false }
 ```
 
-`"hub": false` removes a server from the `/hub` aggregate — `list_servers`
-does not mention it and `call_tool` refuses it. Its own path
-(`/internal-only/mcp`) keeps working normally.
+`"hub": false` keeps a server's tools out of the `/hub` aggregate —
+`list_tools` and `call_tool` refuse it and point at its own path
+(`/internal-only/mcp`), which keeps working normally. It still appears in
+`list_servers` with a `hidden` marker, and `wake_server`/`sleep_server`
+[manage its lifecycle](/guide/on-demand#manual-control) like any other
+on-demand server.
 
 Use it for the servers you register as dedicated connectors anyway: they are
 already in the client's context with full schemas, so listing them a second

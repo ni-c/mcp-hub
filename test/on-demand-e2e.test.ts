@@ -91,7 +91,8 @@ beforeAll(async () => {
     JSON.stringify({
       mcpServers: {
         everything: { command: process.execPath, args: [EVERYTHING] },
-        pinned: { command: process.execPath, args: [EVERYTHING], keepAlive: true }
+        pinned: { command: process.execPath, args: [EVERYTHING], keepAlive: true },
+        secret: { command: process.execPath, args: [EVERYTHING], hub: false }
       }
     })
   );
@@ -205,6 +206,39 @@ describe('waking', () => {
     const entry = cache.get('everything', ToolCache.fingerprint(managed.config));
     expect(entry?.tools.map(t => t.name)).toContain('echo');
     expect(entry?.serverInfo?.name).not.toBe('everything-cached');
+  });
+});
+
+describe('hidden (hub: false) servers', () => {
+  it('appear in list_servers with a hidden marker', async () => {
+    const result = await hubTool('list_servers', {});
+    const servers = JSON.parse((result.content[0] as { text: string }).text) as { name: string; status: string; hidden?: boolean }[];
+    const secret = servers.find(s => s.name === 'secret');
+    expect(secret?.hidden).toBe(true);
+    expect(servers.find(s => s.name === 'everything')?.hidden).toBeUndefined();
+  });
+
+  it('refuse tool access with a pointer to their own endpoint', async () => {
+    for (const [tool, args] of [
+      ['list_tools', { server: 'secret' }],
+      ['get_tool_schema', { server: 'secret', tool: 'echo' }],
+      ['call_tool', { server: 'secret', tool: 'echo', arguments: {} }]
+    ] as const) {
+      const result = await hubTool(tool, args as Record<string, unknown>);
+      expect(result.isError).toBe(true);
+      expect((result.content[0] as { text: string }).text).toContain('not exposed through /hub');
+      expect((result.content[0] as { text: string }).text).toContain('/secret/mcp');
+    }
+  });
+
+  it('are still managed by sleep_server and wake_server', async () => {
+    const slept = await hubTool('sleep_server', { server: 'secret' });
+    expect(JSON.parse((slept.content[0] as { text: string }).text)).toMatchObject({ status: 'sleeping' });
+    expect(hub.supervisor.get('secret')!.state).toBe('sleeping');
+
+    const woken = await hubTool('wake_server', { server: 'secret' });
+    expect(JSON.parse((woken.content[0] as { text: string }).text)).toMatchObject({ status: 'up' });
+    expect(hub.supervisor.get('secret')!.state).toBe('up');
   });
 });
 

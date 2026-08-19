@@ -99,7 +99,9 @@ are just as heavy as before 0.9.
 Two [/hub meta-tools](/reference/hub-tools) steer the lifecycle directly:
 `wake_server` starts a server ahead of time so a workflow's first real call is
 fast, `sleep_server` frees its resources immediately instead of waiting out the
-idle timeout. `list_servers` and [`/health`](/reference/endpoints#status) both
+idle timeout. Both also accept [`"hub": false`](/guide/configuration#hiding-a-server-from-hub)
+servers — hiding a server's tools from the aggregate does not take away the
+hub's responsibility for its lifecycle. `list_servers` and [`/health`](/reference/endpoints#status) both
 report `sleeping` as a distinct state — and `/health` counts it as healthy,
 because a sleeping server is exactly what this feature is for.
 
