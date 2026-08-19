@@ -27,6 +27,12 @@ services:
       MCP_REQUESTS_PER_MINUTE: "120"
       MCP_MAX_CONCURRENT_REQUESTS: "4"
 
+      # Stdio and docker servers run on demand: started when used, asleep
+      # after this many idle minutes ("keepAlive": true in mcp.json exempts a
+      # server, "0" disables the feature). Snapshots live in
+      # /data/tool-cache.json, so the ./data volume below already covers them.
+      IDLE_TIMEOUT_MINUTES: "60"
+
       # bcrypt hash of the OAuth login password. Generate with:
       #   htpasswd -bnBC 10 "" 'yourpassword' | tr -d ':\n'
       # (PASSWORD with a plain-text value works too, PASSWORD_HASH wins.)
@@ -41,7 +47,10 @@ services:
       # DOCKER_HOST: "unix:///run/proxy/docker.sock" # required; direct daemon access is refused
 
     volumes:
-      - "./mcp.json:/config/mcp.json:ro"
+      # The directory, not the file: editors save via rename (new inode),
+      # which a single-file bind mount cannot follow — hot reload would
+      # miss every host-side edit. mcp.json lives inside ./config.
+      - "./config:/config:ro"
       # JWT key + OAuth client registrations + refresh tokens. Must survive
       # container recreates, otherwise every connector must re-authorize.
       # The container runs as uid 1000 (non-root), so chown this dir to match:
@@ -80,7 +89,7 @@ services:
   #   security_opt:
   #     - no-new-privileges:true
   #   volumes:
-  #     - "./mcp.json:/config/mcp.json:ro"
+  #     - "./config:/config:ro"
   #     # Credentials for sandboxed servers ("secretsFrom"), chmod 640, regular
   #     # non-symlink files, at most 64 KiB and 100 unique variables. They are
   #     # added to the container after the request is validated, so the hub

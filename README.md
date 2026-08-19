@@ -37,10 +37,20 @@ replaces N containers with one process:
 - **Config is exactly Claude Code's `mcpServers` format** — copy entries 1:1.
 - **Path-based routing**: `https://host/paperless`, `https://host/homeassistant`, …
 - **`/hub` aggregate**: register a *single* connector and reach every server
-  through 4 meta-tools (`list_servers`, `list_tools`, `get_tool_schema`,
-  `call_tool`) without flooding the model context with N×tools schemas.
-- **Supervision**: children are spawned at boot, pinged, and restarted with
-  exponential backoff when they die. A down server answers 503, not silence.
+  through 6 meta-tools (`list_servers`, `list_tools`, `get_tool_schema`,
+  `call_tool`, `wake_server`, `sleep_server`) without flooding the model
+  context with N×tools schemas.
+- **Also without HTTP**: `mcp-hub --stdio` serves that same aggregate on
+  stdin/stdout for clients that can only spawn a local process (Claude Desktop,
+  Codex, …) — same `mcp.json`, no TLS, no reverse proxy, no login. Auth exists
+  for the network endpoints; over stdio the trust boundary is the local user.
+- **On-demand lifecycle**: stdio and docker servers start when used and sleep
+  after 60 idle minutes, answering `initialize`/`tools/list` from a persistent
+  snapshot meanwhile — a dozen servers cost only the memory of the ones in
+  use. `keepAlive: true` exempts a server, `IDLE_TIMEOUT_MINUTES=0` the hub.
+- **Supervision**: children are pinged and restarted with exponential backoff
+  when they die. A down server answers 503, not silence; a crash-looping
+  server nobody uses is parked instead of restarted forever.
 - **Hot reload**: edits to `mcp.json` start/stop/restart only the affected
   servers.
 - **Stateless Streamable HTTP**: no session state, so claude.ai's
@@ -195,7 +205,7 @@ services:
 
 ```sh
 cp docker-compose.example.yml docker-compose.yml   # adjust, swap build → image
-cp mcp.json.example mcp.json                        # adjust
+mkdir -p config && cp mcp.json.example config/mcp.json  # adjust
 mkdir -p data && sudo chown -R 1000:1000 data       # container runs as uid 1000
 docker compose up -d
 ```
@@ -209,7 +219,7 @@ docker run -d --name mcp-hub \
   -e EXTERNAL_URL="https://mcp.example.net" \
   -e PASSWORD_HASH="$(htpasswd -bnBC 10 '' 'yourpassword' | tr -d ':\n')" \
   -e TRUSTED_PROXIES="192.168.1.0/24" \
-  -v "$PWD/mcp.json:/config/mcp.json:ro" \
+  -v "$PWD/config:/config:ro" \
   -v "$PWD/data:/data" \
   ghcr.io/ni-c/mcp-hub:0.6.0
 ```
@@ -221,7 +231,7 @@ Update to a newer image with `docker compose pull && docker compose up -d`
 
 ```sh
 cp docker-compose.example.yml docker-compose.yml   # adjust
-cp mcp.json.example mcp.json                        # adjust
+mkdir -p config && cp mcp.json.example config/mcp.json  # adjust
 docker compose up -d --build
 ```
 

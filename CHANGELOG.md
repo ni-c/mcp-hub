@@ -7,6 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- #region changelog -->
 
+## [Unreleased]
+
+### Added
+
+- **On-demand servers.** Stdio and docker servers now start when they are used
+  and go to sleep after `IDLE_TIMEOUT_MINUTES` (default 60) without a forwarded
+  request — on a small host, a dozen configured servers cost only the memory of
+  the ones actually in use. While a server sleeps, `initialize` and
+  `tools/list` are answered from a persistent snapshot
+  (`TOOL_CACHE_PATH`, default `/data/tool-cache.json`), so a client
+  enumerating its connectors wakes nothing; the first real tool call wakes the
+  server and blocks until it is up (120 s budget). `/hub`'s `list_tools` and
+  `get_tool_schema` answer from the snapshot and pre-warm the server in the
+  background. Per-server control: `"keepAlive": true` keeps a server always
+  running (the previous behaviour), `"idleMinutes"` overrides the global
+  timeout; `IDLE_TIMEOUT_MINUTES=0` disables the feature entirely. New `/hub`
+  meta-tools `wake_server` and `sleep_server` steer the lifecycle manually. An
+  on-demand server that crashes five restarts in a row without being used is
+  parked as `sleeping` (error kept visible) instead of restarting forever.
+  `/health` treats `sleeping` as healthy. The docker-proxy and its policy are
+  unchanged — `DOCKER_POLICY_VERSION` stays at 1.
+- **`hub: false` servers are lifecycle-managed through `/hub`.** `list_servers`
+  now includes them with a `hidden` marker and `wake_server`/`sleep_server`
+  accept them — hiding a server's tools no longer means its lifecycle can only
+  be reached by the idle sweep. Tool access (`list_tools`, `get_tool_schema`,
+  `call_tool`) still refuses hidden servers, now pointing at the server's own
+  endpoint instead of pretending it does not exist.
+- **Single-file config mounts log a startup warning.** A
+  `-v ./mcp.json:/config/mcp.json` bind mount silently loses every editor save
+  that goes through a rename (new inode), killing hot reload. The hub and the
+  docker-proxy now detect that setup via `/proc/self/mountinfo` and say so at
+  startup.
+- **stdio mode.** `mcp-hub --stdio` (or the `mcp-hub-stdio` binary) serves the
+  `/hub` aggregate — the same six meta-tools, the same `mcp.json`, the same
+  supervision, on-demand lifecycle and hot reload — on stdin/stdout, for
+  clients that can only spawn a local process. No listener, no OAuth, no
+  `EXTERNAL_URL`; the trust boundary is the local user account. `CONFIG_PATH`
+  defaults to `mcp.json` in the working directory, the tool cache to
+  `.mcp-hub/tool-cache.json` beside it, and a missing config starts an empty
+  hub instead of failing, because a client-spawned process has nowhere to show
+  a startup error. `console.log`/`console.info` are moved to stderr for the
+  life of the process: stdout carries the protocol. The MCP Registry entry
+  follows: the npm package is now listed as a **stdio** package
+  (`npx @ni-c/mcp-hub --stdio`), so the hub can be installed straight from the
+  registry. The OCI package stays `streamable-http` — that is the container
+  deployment.
+
+### Changed
+
+- **Examples and docs mount the config directory, not the file.** The
+  recommended layout is `./config/mcp.json` mounted as `./config:/config:ro` in
+  both the hub and the docker-proxy — rename-style editor saves then hot-reload
+  correctly. `CONFIG_PATH` and its default `/config/mcp.json` are unchanged, so
+  existing single-file deployments keep working (with the warning above).
+
+### Fixed
+
+- The release workflow now has a concurrency group and skips an npm publish,
+  MCP Registry publish or GitHub release that already exists. A tag push
+  delivered twice used to start two releases, and the loser died on npm's 403
+  for an already-published version — a permanently red check on a commit that
+  is also main's HEAD. Every publishing step is now idempotent, so a re-run can
+  finish the half that is missing; the manual `mcp-registry` workflow carries
+  the same guard.
+
 ## [0.8.0] - 2026-08-18
 
 ### Added

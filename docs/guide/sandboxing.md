@@ -87,9 +87,12 @@ corrupts the stream — the hub logs `not JSON` and drops that message. Logging
 must go to stderr, where the hub prefixes it `[name]` and passes it through to
 its own stderr, just like a stdio child's.
 
-**The container is recreated on every hub start.** A server with a long startup
-pays it again after a hub restart. The hub answers `503` on that server's path
-meanwhile; nothing else waits for it.
+**The container is recreated on every start.** Stopping a sandbox always means
+removing the container, and starting one always means creating it fresh — this
+is exactly what [on-demand lifecycling](/guide/on-demand) leans on: a sleeping
+sandbox holds no container at all, and a wake pays the full container start. A
+server with a long startup pays it again after a hub restart too. The hub
+answers `503` on that server's path meanwhile; nothing else waits for it.
 
 **One Docker host, one hub.** Sandbox containers are named `mcp-sandbox-<server>`
 and labelled `io.mcp-hub.owner=mcp-hub`, and on startup the hub removes owned
@@ -168,7 +171,7 @@ services:
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     volumes:
-      - "./mcp.json:/config/mcp.json:ro"
+      - "./config:/config:ro"
       - "./secrets:/run/secrets:ro"
       - "/var/run/docker.sock:/var/run/docker.sock"
       - "proxy-sock:/run/proxy"
@@ -179,7 +182,7 @@ services:
     environment:
       DOCKER_HOST: "unix:///run/proxy/docker.sock"
     volumes:
-      - "./mcp.json:/config/mcp.json:ro"
+      - "./config:/config:ro"
       - "./data:/data"
       - "proxy-sock:/run/proxy"
 
@@ -279,7 +282,7 @@ happens to speak MCP.
 |---|---|
 | `image "x" is not present and "pull" is "never"` | Build or pull it, or set `"pull": "missing"`. |
 | `403 … create request does not match the configuration — .HostConfig.Memory` | The proxy is running an older `mcp.json` than the hub. Both poll the file; it resolves itself on the next retry, within seconds. |
-| `403 … is not a docker server in the configuration` | The proxy cannot see the config the hub sees — check that both mount the same `mcp.json`. |
+| `403 … is not a docker server in the configuration` | The proxy cannot see the config the hub sees — check that both mount the same config directory. |
 | `connect EACCES /run/proxy/docker.sock` | The socket volume is not shared with the hub, or the proxy's `SOCKET_MODE`/uid does not let it in. |
 | `permission denied … /var/run/docker.sock` in the proxy | `group_add` is missing or has the wrong gid. |
 | Server flaps `up` / `down (container exited)` | The server exits on its own. Its stderr is in the hub's log, prefixed with the server name. |

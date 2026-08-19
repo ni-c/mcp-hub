@@ -8,8 +8,10 @@ import path from 'node:path';
  * Stdio servers (`command`/`args`/`env`) are spawned verbatim (after ${VAR}
  * expansion), so arbitrary `sh -c` bootstrap scripts work. Remote servers
  * (`type: "http"` or `"sse"` with `url`/`headers`) are connected via the SDK's
- * client transports. `hub` is the only mcp-hub extension: `false` removes the
- * server from the /hub aggregate endpoint.
+ * client transports. The mcp-hub extensions are `hub` (`false` removes the
+ * server from the /hub aggregate endpoint), `keepAlive` (`true` exempts a
+ * local server from on-demand lifecycling) and `idleMinutes` (per-server
+ * override of the global idle timeout).
  */
 export interface StdioServerConfig {
   kind: 'stdio';
@@ -17,6 +19,9 @@ export interface StdioServerConfig {
   args: string[];
   env: Record<string, string>;
   hub: boolean;
+  /** Optional in the type so hand-built configs stay terse; the parser always sets it. */
+  keepAlive?: boolean;
+  idleMinutes?: number;
 }
 
 export interface RemoteServerConfig {
@@ -67,6 +72,9 @@ export interface DockerServerConfig {
   tmpfs: string[];
   user?: string;
   hub: boolean;
+  /** Optional in the type so hand-built configs stay terse; the parser always sets it. */
+  keepAlive?: boolean;
+  idleMinutes?: number;
 }
 
 /**
@@ -183,6 +191,34 @@ function requireLiteral(name: string, field: string, value: string): string {
   return value;
 }
 
+/** The on-demand lifecycle fields shared by stdio and docker servers. */
+interface LifecycleConfig {
+  keepAlive: boolean;
+  idleMinutes?: number;
+}
+
+function parseLifecycle(name: string, entry: Record<string, unknown>): LifecycleConfig {
+  if (entry.keepAlive !== undefined && typeof entry.keepAlive !== 'boolean') {
+    throw new ConfigError(`Server "${name}": "keepAlive" must be a boolean`);
+  }
+  const idleMinutes = entry.idleMinutes;
+  if (idleMinutes !== undefined && (!Number.isSafeInteger(idleMinutes) || (idleMinutes as number) < 1)) {
+    throw new ConfigError(`Server "${name}": "idleMinutes" must be a positive integer`);
+  }
+  if (entry.keepAlive === true && idleMinutes !== undefined) {
+    throw new ConfigError(`Server "${name}": "keepAlive" and "idleMinutes" are mutually exclusive`);
+  }
+  return { keepAlive: entry.keepAlive === true, ...(idleMinutes !== undefined ? { idleMinutes: idleMinutes as number } : {}) };
+}
+
+function rejectLifecycle(name: string, entry: Record<string, unknown>, kind: string): void {
+  for (const field of ['keepAlive', 'idleMinutes']) {
+    if (entry[field] !== undefined) {
+      throw new ConfigError(`Server "${name}": "${field}" is only supported on stdio and docker servers — the hub does not manage the lifetime of ${kind} servers`);
+    }
+  }
+}
+
 function parseDockerServer(name: string, entry: Record<string, unknown>, expand: ExpandFn, hub: boolean): DockerServerConfig {
   if (entry.command !== undefined && !Array.isArray(entry.command)) {
     throw new ConfigError(`Server "${name}": for docker servers "command" is an array of strings (the container's Cmd)`);
@@ -276,7 +312,8 @@ function parseDockerServer(name: string, entry: Record<string, unknown>, expand:
     readOnly: entry.readOnly !== false,
     tmpfs,
     ...(entry.user !== undefined ? { user: requireLiteral(name, 'user', entry.user) } : {}),
-    hub
+    hub,
+    ...parseLifecycle(name, entry)
   };
 }
 
@@ -312,11 +349,15 @@ function parseServer(name: string, entry: Record<string, unknown>, env: NodeJS.P
     throw new ConfigError(`Server "${name}": "type" must be a string`);
   }
   if (type === 'docker') return parseDockerServer(name, entry, expand, hub);
-  if (type === 'unix' || type === 'tcp') return parseSocketServer(name, entry, type, expand, hub);
+  if (type === 'unix' || type === 'tcp') {
+    rejectLifecycle(name, entry, type);
+    return parseSocketServer(name, entry, type, expand, hub);
+  }
 
   const isRemote = (typeof type === 'string' && type !== 'stdio') || entry.url !== undefined;
 
   if (isRemote) {
+    rejectLifecycle(name, entry, 'remote');
     if (typeof type === 'string' && type !== 'stdio' && !REMOTE_TYPES.has(type)) {
       throw new ConfigError(`Server "${name}": unknown type "${type}" (supported: stdio, http, sse, docker, unix, tcp)`);
     }
@@ -352,7 +393,8 @@ function parseServer(name: string, entry: Record<string, unknown>, env: NodeJS.P
     command: expand(entry.command),
     args: args.map(expand),
     env: expandRecord(envEntry, expand),
-    hub
+    hub,
+    ...parseLifecycle(name, entry)
   };
 }
 
@@ -445,7 +487,8 @@ export class ConfigWatcher extends EventEmitter {
     // host-side edits do not cross the mount boundary, so directory watching
     // never fires there. Stat polling catches in-place content changes.
     // (Host edits must rewrite the file in place — a rename/replace creates a
-    // new inode the mount cannot follow.)
+    // new inode the mount cannot follow. warnSingleFileMount() flags that
+    // setup at startup; the recommended directory mount has neither problem.)
     fs.watchFile(this.filePath, { interval: this.pollIntervalMs }, (curr, prev) => {
       if (curr.mtimeMs === prev.mtimeMs && curr.size === prev.size) return;
       clearTimeout(this.debounce);

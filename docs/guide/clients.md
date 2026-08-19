@@ -167,6 +167,44 @@ Two knobs are worth knowing: `timeout` (600000 ms by default) bounds each
 request, and `trust: true` has nothing to do with authenticating against the
 hub — it only stops Gemini from asking you to confirm tool calls.
 
+## Local clients over stdio
+
+A client that only speaks stdio — Claude Desktop, Codex, anything that spawns a
+local process — can use the hub without HTTPS, a reverse proxy or OAuth:
+
+```json
+{
+  "mcpServers": {
+    "hub": {
+      "command": "npx",
+      "args": ["-y", "@ni-c/mcp-hub", "--stdio"],
+      "env": { "CONFIG_PATH": "/home/you/.config/mcp-hub/mcp.json" }
+    }
+  }
+}
+```
+
+`--stdio` serves the same aggregate as `/hub`: the six meta-tools, the same
+`mcp.json`, the same supervision and hot reload. Individual servers get no path
+of their own here — everything goes through `call_tool`, which is the point:
+one entry in the client's config instead of N, and six tool schemas in the
+context instead of the sum of all of them. `CONFIG_PATH` defaults to `mcp.json`
+in the working directory; a missing file starts an empty hub rather than
+failing, so the client keeps running while you write one.
+
+The [on-demand lifecycle](/guide/on-demand) applies here as well, and matters
+more than it does behind HTTP: a hub spawned per client session would otherwise
+start every configured server at every launch. Servers boot into `sleeping`
+from the snapshot in `.mcp-hub/tool-cache.json` next to the config
+(`TOOL_CACHE_PATH` moves it), and the first `call_tool` wakes the one it needs.
+
+::: warning No authentication
+stdio has no tokens and no login — the trust boundary is the local user
+account, exactly as for any other stdio MCP server. Everything the child
+servers can reach, the client can reach. The OAuth stack exists for the HTTP
+endpoints, where the hub is reachable over the network.
+:::
+
 ## Other clients
 
 Anything that implements the MCP authorization spec works. The hub publishes

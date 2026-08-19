@@ -2,7 +2,9 @@
 
 mcp-hub reads a single file — `/config/mcp.json` by default, overridable with
 `CONFIG_PATH`. Its schema is Claude Code's `mcpServers` block, so entries move
-between the two without translation.
+between the two without translation. Mount the file's **directory** into the
+container (`./config:/config:ro`), not the file itself — see
+[hot reload](#hot-reload) for why.
 
 ```json
 {
@@ -162,9 +164,12 @@ running.
 "internal-only": { "command": "some-mcp", "args": [], "hub": false }
 ```
 
-`"hub": false` removes a server from the `/hub` aggregate — `list_servers`
-does not mention it and `call_tool` refuses it. Its own path
-(`/internal-only/mcp`) keeps working normally.
+`"hub": false` keeps a server's tools out of the `/hub` aggregate —
+`list_tools` and `call_tool` refuse it and point at its own path
+(`/internal-only/mcp`), which keeps working normally. It still appears in
+`list_servers` with a `hidden` marker, and `wake_server`/`sleep_server`
+[manage its lifecycle](/guide/on-demand#manual-control) like any other
+on-demand server.
 
 Use it for the servers you register as dedicated connectors anyway: they are
 already in the client's context with full schemas, so listing them a second
@@ -172,6 +177,22 @@ time through `/hub` only duplicates them.
 
 Claude Code ignores unknown fields, so a file carrying `hub` still works as a
 Claude Code config.
+
+## Lifecycle: `keepAlive` and `idleMinutes`
+
+Stdio and docker servers run [on demand](/guide/on-demand) by default: started
+when used, put to sleep after `IDLE_TIMEOUT_MINUTES` (default 60) of
+inactivity. Two fields tune that per server:
+
+```json
+"workhorse": { "command": "busy-mcp", "keepAlive": true },
+"scraper":   { "type": "docker", "image": "scraper@sha256:…", "idleMinutes": 15 }
+```
+
+`keepAlive: true` exempts a server — it always runs, as every server did before
+0.9. `idleMinutes` overrides the global idle timeout for one server; the two
+are mutually exclusive. Both are rejected on remote and socket servers, whose
+processes the hub does not own. Like `hub`, Claude Code ignores them.
 
 ## Hot reload
 
@@ -187,17 +208,20 @@ file changes nothing. If an edit leaves the file invalid, the error is logged
 (`ignoring broken config update: …`) and the previous configuration stays
 active — a typo cannot take the hub down.
 
-::: details Why there is also a polling watcher
-The hub watches the config file's *directory* with `fs.watch`, plus the file
-itself with `fs.watchFile` (3-second polling). The fallback is not redundancy
-for its own sake: with a single-file bind mount — `-v ./mcp.json:/config/mcp.json` —
-an edit on the host does not produce an inotify event inside the container,
-because the mount is a bind of one inode and the container's `/config`
-directory never changes. Without the poller, host-side edits would never be
-noticed.
+Hot reload is why the examples mount the config **directory**
+(`./config:/config:ro`): with a directory mount every kind of host-side edit is
+seen, including editors that save by writing a temp file and renaming it over
+the original — which is how most editors save.
 
-Mounting the *directory* instead of the file avoids this, and is worth doing if
-you edit the config often.
+::: warning Single-file bind mounts miss renamed saves
+`-v ./mcp.json:/config/mcp.json` still works, but it binds one *inode*. An
+in-place edit is picked up (by the 3-second stat poller — single-file mounts
+produce no inotify events in the container), while a rename-style save creates
+a **new** inode the mount cannot follow: the container keeps reading the old
+file forever and hot reload silently stops. The hub and the docker-proxy log a
+startup warning when they detect this setup. If you are stuck on it, either
+edit strictly in place (`cat new.json > mcp.json`) or recreate **both**
+containers after each edit.
 :::
 
 ## Validation errors

@@ -24,7 +24,9 @@ export function healthHandler(supervisor: Supervisor) {
         }
       ])
     );
-    const allUp = Object.values(servers).every(s => s.state === 'up');
-    res.status(allUp ? 200 : 503).json({ status: allUp ? 'ok' : 'degraded', servers });
+    // Sleeping is the intended resting state of an on-demand server, not a
+    // failure — reporting it as degraded would page the operator forever.
+    const healthy = Object.values(servers).every(s => s.state === 'up' || s.state === 'sleeping');
+    res.status(healthy ? 200 : 503).json({ status: healthy ? 'ok' : 'degraded', servers });
   };
 }

@@ -1,11 +1,19 @@
 # Hub meta-tools
 
-The `/hub` endpoint exposes exactly four tools, regardless of how many servers
-are configured. They are how a client reaches everything else.
+The `/hub` endpoint exposes exactly six tools, regardless of how many servers
+are configured. Four of them are how a client reaches everything else; the
+remaining two (`wake_server`, `sleep_server`) steer the
+[on-demand lifecycle](/guide/on-demand).
 
 Servers marked [`"hub": false`](/guide/configuration#hiding-a-server-from-hub)
-are invisible to all four: `list_servers` omits them and the others reject them
-as unknown.
+keep their *tools* out of the aggregate: `list_tools`, `get_tool_schema` and
+`call_tool` refuse them with a pointer to the server's own endpoint. Their
+*lifecycle* is still the hub's business — `list_servers` shows them with a
+`hidden` marker, and `wake_server`/`sleep_server` manage them like any other
+on-demand server.
+
+The [stdio mode](/guide/clients#local-clients-over-stdio) serves the same six
+tools with the same behaviour — everything on this page applies there too.
 
 ## The intended sequence
 
@@ -28,13 +36,16 @@ Returns one entry per hub-enabled server:
 
 ```json
 [
-  { "name": "paperless", "description": "Paperless-ngx", "status": "up", "toolCount": 14 },
-  { "name": "calendar",  "description": "CalDAV",        "status": "up", "toolCount": 6 }
+  { "name": "paperless", "description": "Paperless-ngx", "status": "up",       "toolCount": 14 },
+  { "name": "calendar",  "description": "CalDAV",        "status": "sleeping", "toolCount": 6, "hidden": true }
 ]
 ```
 
 `description` is the child's advertised title, falling back to its server name.
-`status` is `starting`, `up` or `down`.
+`status` is `starting`, `up`, `down` or `sleeping`. Listing never wakes
+anything — `sleeping` entries still show their cached `toolCount`. `hidden`
+appears only on `"hub": false` servers: their tools are served exclusively by
+their own endpoint, but `wake_server`/`sleep_server` accept them.
 
 ## `list_tools`
 
@@ -56,8 +67,10 @@ cheap:
 ]
 ```
 
-Errors: an unknown server, or a server that is not `up`, returns a tool error
-naming the state.
+Errors: an unknown server, or an always-running server that is not `up`,
+returns a tool error naming the state. A `sleeping` server answers from its
+cached snapshot and is [pre-warmed in the background](/guide/on-demand#what-wakes-a-server-and-what-does-not) —
+asking for its tools is the strongest hint a call follows.
 
 ## `get_tool_schema`
 
@@ -100,11 +113,44 @@ Timeout: 5 minutes, reset whenever the child sends a progress notification. A
 failure comes back as a tool error (`Tool call failed: …`) rather than an HTTP
 error, so the model can react to it.
 
+Calling a `sleeping` server wakes it first and blocks until it is up (120-second
+budget) — the call itself then proceeds normally. Only a start that fails for
+the whole budget surfaces as a tool error.
+
+## `wake_server`
+
+> Start an on-demand server now so its first tool call is fast. No-op if it is
+> already running.
+
+| Input | Type | Description |
+|---|---|---|
+| `server` | string, required | server name from `list_servers` |
+
+Blocks until the server is up and returns `{ name, status, toolCount }`. Useful
+at the start of a longer workflow: the cold start happens while the model is
+still planning instead of inside the first real call. An always-running server
+(`keepAlive` or remote/socket) is refused with `… is always running`.
+
+## `sleep_server`
+
+> Stop an on-demand server immediately instead of waiting for its idle timeout.
+> It restarts automatically on the next tool call.
+
+| Input | Type | Description |
+|---|---|---|
+| `server` | string, required | server name from `list_servers` |
+
+Frees the server's resources right away — the stdio child exits, a sandbox
+container is removed. Returns `{ name, status }`; already-sleeping servers are
+a no-op. Always-running servers are refused.
+
 ## Caching
 
 The hub keeps each child's tool list in memory and refreshes it when the child
 sends `tools/list_changed`. `list_servers` and `list_tools` are therefore
-answered without a round trip to the child.
+answered without a round trip to the child. For on-demand servers the same
+snapshot is [persisted to disk](/guide/on-demand#the-tool-cache), which is what
+lets a sleeping server answer at all.
 
 Clients are not notified of those changes — the [stateless
 transport](/guide/architecture#stateless-transport) has no channel for

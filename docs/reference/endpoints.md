@@ -28,7 +28,7 @@ A server that is not `up` answers `503` with a JSON-RPC error naming its state:
 | Path | Auth | Purpose |
 |---|---|---|
 | `/livez` | none | process liveness; always `200 {"status":"ok"}` while the process runs |
-| `/health` | Bearer for `/hub` | per-server state; `200` when every server is up, `503` otherwise |
+| `/health` | Bearer for `/hub` | per-server state; `200` when every server is `up` or `sleeping`, `503` otherwise |
 
 `/health` reports the same fleet-wide view as the `/hub` aggregate, so it takes
 the same resource: a token issued for one server's path gets `401` here.
@@ -51,9 +51,11 @@ unhealthy.
 }
 ```
 
-`state` is one of `starting`, `up`, `down`. `kind` is `stdio`, `remote`,
-`docker` or `socket`. `restarts` counts supervisor restarts since boot. `hub`
-says whether the server appears in the `/hub` aggregate. A
+`state` is one of `starting`, `up`, `down`, `sleeping`. `kind` is `stdio`,
+`remote`, `docker` or `socket`. `restarts` counts supervisor restarts since
+boot. `hub` says whether the server appears in the `/hub` aggregate. A
+`sleeping` [on-demand server](/guide/on-demand) counts as healthy — it is
+resting by design, and its cached `tools` count stays visible. A
 [sandboxed server](/guide/sandboxing) also reports the `image` and `container`
 it runs as — a local tag and a name, not credentials, and the difference
 between "scraper is down" and something you can act on.

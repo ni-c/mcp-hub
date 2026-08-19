@@ -182,7 +182,10 @@ beforeAll(async () => {
     // /health and every server, which is what lets the suite below share a
     // single token — and it keeps that legacy path under test. The default
     // (bound) behaviour has its own suite further down.
-    requireResourceBoundTokens: false
+    requireResourceBoundTokens: false,
+    // This suite asserts the always-running behaviour (503 while down, endless
+    // restarts); the on-demand lifecycle has its own suite in on-demand-e2e.
+    idleTimeoutMinutes: 0
   });
   await hub.supervisor.waitUntilSettled();
   httpServer = hub.app.listen(0);
@@ -621,10 +624,10 @@ describe('per-server proxy', () => {
 });
 
 describe('/hub aggregate', () => {
-  it('exposes exactly the four meta-tools', async () => {
+  it('exposes exactly the six meta-tools', async () => {
     const client = await mcpClient('/hub', accessToken);
     const tools = await client.listTools();
-    expect(tools.tools.map(t => t.name).sort()).toEqual(['call_tool', 'get_tool_schema', 'list_servers', 'list_tools']);
+    expect(tools.tools.map(t => t.name).sort()).toEqual(['call_tool', 'get_tool_schema', 'list_servers', 'list_tools', 'sleep_server', 'wake_server']);
     await client.close();
   });
 
@@ -632,9 +635,11 @@ describe('/hub aggregate', () => {
     const client = await mcpClient('/hub', accessToken);
 
     const servers = (await client.callTool({ name: 'list_servers', arguments: {} })) as CallToolResult;
-    const serverList = JSON.parse((servers.content[0] as { text: string }).text) as Array<{ name: string; status: string }>;
+    const serverList = JSON.parse((servers.content[0] as { text: string }).text) as Array<{ name: string; status: string; hidden?: boolean }>;
     expect(serverList.map(s => s.name)).toContain('everything');
-    expect(serverList.map(s => s.name)).not.toContain('hidden'); // hub: false
+    expect(serverList.find(s => s.name === 'everything')?.hidden).toBeUndefined();
+    // hub: false servers are listed (their lifecycle is manageable) but marked.
+    expect(serverList.find(s => s.name === 'hidden')?.hidden).toBe(true);
     expect(serverList.find(s => s.name === 'broken')?.status).not.toBe('up');
 
     const tools = (await client.callTool({ name: 'list_tools', arguments: { server: 'everything' } })) as CallToolResult;
@@ -650,8 +655,16 @@ describe('/hub aggregate', () => {
     })) as CallToolResult;
     expect((result.content[0] as { text: string }).text).toContain('via hub');
 
+    // Hidden: the error names the right door; a nonexistent server stays "Unknown".
     const hidden = (await client.callTool({ name: 'call_tool', arguments: { server: 'hidden', tool: 'echo', arguments: { message: 'x' } } })) as CallToolResult;
     expect(hidden.isError).toBe(true);
+    expect((hidden.content[0] as { text: string }).text).toContain('not exposed through /hub');
+    expect((hidden.content[0] as { text: string }).text).toContain('/hidden/mcp');
+    const hiddenList = (await client.callTool({ name: 'list_tools', arguments: { server: 'hidden' } })) as CallToolResult;
+    expect(hiddenList.isError).toBe(true);
+    expect((hiddenList.content[0] as { text: string }).text).toContain('not exposed through /hub');
+    const missing = (await client.callTool({ name: 'call_tool', arguments: { server: 'nope', tool: 'x' } })) as CallToolResult;
+    expect((missing.content[0] as { text: string }).text).toContain('Unknown server');
 
     await client.close();
   });

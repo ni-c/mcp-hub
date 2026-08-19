@@ -13,6 +13,16 @@
       "args": [],
       "hub": false
     },
+    "workhorse": {
+      "command": "busy-mcp",
+      "args": [],
+      "keepAlive": true
+    },
+    "rarely-used": {
+      "command": "seldom-mcp",
+      "args": [],
+      "idleMinutes": 15
+    },
     "untrusted": {
       "type": "docker",
       "image": "ghcr.io/example/untrusted-mcp@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",

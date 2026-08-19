@@ -116,14 +116,20 @@ them if a legitimate client needs more.
 
 ### Editing `mcp.json` does nothing
 
-The hub watches the file's directory *and* polls the file every 3 seconds, so a
-host-side edit should be picked up within a few seconds — the poller exists
-precisely because single-file bind mounts produce no inotify events in the
-container.
+With the recommended directory mount (`./config:/config:ro`) any host-side edit
+is picked up within a few seconds. If nothing happens, check two things:
 
-If nothing happens, look for `ignoring broken config update: …` in the log: an
-edit that does not parse is rejected and the previous configuration stays
-active.
+1. **A single-file bind mount plus an editor that saves via rename.** Most
+   editors write a temp file and rename it over the original — that creates a
+   new inode, and a `-v ./mcp.json:/config/mcp.json` mount keeps pointing at
+   the old one, so the container never sees the edit (compare
+   `md5sum mcp.json` on the host with `docker exec mcp-hub md5sum
+   /config/mcp.json`). The hub logs a `single-file bind mount` warning at
+   startup for this setup. Immediate fix: recreate **both** the hub and the
+   docker-proxy container; lasting fix: mount the directory.
+2. **A broken edit.** Look for `ignoring broken config update: …` in the log:
+   an edit that does not parse is rejected and the previous configuration
+   stays active.
 
 ### Notifications from a server never arrive
 
@@ -141,7 +147,8 @@ the proxy still holds the old one. The server goes `down` and the supervisor
 retries — it resolves itself within seconds.
 
 If it does not, the two are not reading the same file: check that both
-containers mount the same `mcp.json`, and that they run the same image version.
+containers mount the same config directory, and that they run the same image
+version.
 
 ### A sandboxed server never comes up and the log shows `not JSON`
 
@@ -154,6 +161,22 @@ passes it through to its own stderr.
 Names must match `[a-zA-Z0-9_-]+`, and these are reserved because the hub
 serves them itself: `mcp`, `hub`, `authorize`, `token`, `register`, `login`,
 `consent`, `health`, `livez`, `revoke`, `.well-known`.
+
+### A server shows `sleeping` / the first tool call is slow
+
+Working as intended: stdio and docker servers run [on demand](/guide/on-demand)
+by default and sleep after 60 minutes of inactivity. The first call to a
+sleeping server pays its cold start; everything after that is normal. If one
+server's cold start bothers you, give it `"keepAlive": true`; to disable the
+feature entirely, set `IDLE_TIMEOUT_MINUTES: "0"`.
+
+### A crashed server stopped restarting
+
+An on-demand server that fails five restarts in a row **without being used**
+goes back to `sleeping` instead of crash-looping forever — its `lastError`
+stays visible in `list_servers` and `/health`. The next tool call (or
+`wake_server`) tries a fresh start. Servers with `keepAlive: true` keep the
+endless-backoff behaviour.
 
 ## Operating
 

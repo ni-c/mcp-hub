@@ -56,29 +56,42 @@ function buildProxyServer(managed: ManagedServer): Server {
     { name: managed.serverInfo?.name ?? managed.name, version: managed.serverInfo?.version ?? '0.0.0' },
     { capabilities: advertisedCapabilities(managed.capabilities) }
   );
-  const forward = <T extends { method: string; params?: unknown }>(request: T, resultSchema: Parameters<NonNullable<ManagedServer['client']>['request']>[1]) => {
+  const forwardLive = <T extends { method: string; params?: unknown }>(request: T, resultSchema: Parameters<NonNullable<ManagedServer['client']>['request']>[1]) => {
     const client = managed.client;
     if (!client) throw new Error(`Server "${managed.name}" is not running`);
     return client
       .request(request as Parameters<NonNullable<ManagedServer['client']>['request']>[0], resultSchema, ABSOLUTE_CALL_OPTIONS)
       .then(assertForwardedResultSize);
   };
+  // Real usage: wakes a sleeping on-demand server (blocking until it is up)
+  // and resets its idle window. Everything else is answered without a child.
+  const use = async <T extends { method: string; params?: unknown }>(request: T, resultSchema: Parameters<NonNullable<ManagedServer['client']>['request']>[1]) => {
+    if (managed.state !== 'up' || !managed.client) await managed.wake();
+    managed.markUsed();
+    return forwardLive(request, resultSchema);
+  };
   const caps = managed.capabilities ?? {};
   if (caps.tools) {
-    server.setRequestHandler(ListToolsRequestSchema, req => forward(req, ListToolsResultSchema));
-    server.setRequestHandler(CallToolRequestSchema, req => forward(req, CallToolResultSchema));
+    // tools/list is part of every client's session handshake — a client with
+    // all hub paths configured enumerates them on connect, so answering from
+    // the cached snapshot (instead of waking) is what keeps a fleet of
+    // sleeping servers asleep. Neither branch counts as usage.
+    server.setRequestHandler(ListToolsRequestSchema, req =>
+      managed.state === 'up' && managed.client ? forwardLive(req, ListToolsResultSchema) : Promise.resolve({ tools: managed.tools })
+    );
+    server.setRequestHandler(CallToolRequestSchema, req => use(req, CallToolResultSchema));
   }
   if (caps.resources) {
-    server.setRequestHandler(ListResourcesRequestSchema, req => forward(req, ListResourcesResultSchema));
-    server.setRequestHandler(ListResourceTemplatesRequestSchema, req => forward(req, ListResourceTemplatesResultSchema));
-    server.setRequestHandler(ReadResourceRequestSchema, req => forward(req, ReadResourceResultSchema));
+    server.setRequestHandler(ListResourcesRequestSchema, req => use(req, ListResourcesResultSchema));
+    server.setRequestHandler(ListResourceTemplatesRequestSchema, req => use(req, ListResourceTemplatesResultSchema));
+    server.setRequestHandler(ReadResourceRequestSchema, req => use(req, ReadResourceResultSchema));
   }
   if (caps.prompts) {
-    server.setRequestHandler(ListPromptsRequestSchema, req => forward(req, ListPromptsResultSchema));
-    server.setRequestHandler(GetPromptRequestSchema, req => forward(req, GetPromptResultSchema));
+    server.setRequestHandler(ListPromptsRequestSchema, req => use(req, ListPromptsResultSchema));
+    server.setRequestHandler(GetPromptRequestSchema, req => use(req, GetPromptResultSchema));
   }
   if (caps.completions) {
-    server.setRequestHandler(CompleteRequestSchema, req => forward(req, CompleteResultSchema));
+    server.setRequestHandler(CompleteRequestSchema, req => use(req, CompleteResultSchema));
   }
   return server;
 }
@@ -102,10 +115,24 @@ export async function handleMcpRequest(buildServer: () => Server, req: Request, 
 export function serverRequestHandler(managed: ManagedServer) {
   return async (req: Request, res: Response): Promise<void> => {
     if (managed.state !== 'up' || !managed.client) {
-      res
-        .status(503)
-        .json({ jsonrpc: '2.0', error: { code: -32000, message: `Server "${managed.name}" is ${managed.state}` }, id: null });
-      return;
+      if (!managed.onDemand) {
+        res
+          .status(503)
+          .json({ jsonrpc: '2.0', error: { code: -32000, message: `Server "${managed.name}" is ${managed.state}` }, id: null });
+        return;
+      }
+      if (!managed.hasSnapshot) {
+        // First-ever run: nothing cached to answer initialize from, so the
+        // whole request blocks on the start instead of just the tool calls.
+        try {
+          await managed.wake();
+        } catch (error) {
+          res.status(503).json({ jsonrpc: '2.0', error: { code: -32000, message: (error as Error).message }, id: null });
+          return;
+        }
+      }
+      // With a snapshot the proxy server is built from cached identity and
+      // capabilities; its handlers wake the child only for real usage.
     }
     await handleMcpRequest(() => buildProxyServer(managed), req, res);
   };

@@ -19,11 +19,18 @@ hostname you control.
 `npx @ni-c/mcp-hub` works too and is handy for a first look. The container is
 the recommended deployment because it carries the isolation, read-only root
 filesystem and resource limits the [security model](/guide/security) assumes.
+
+If all you want is the aggregate for a local, stdio-only client, none of this
+page applies: `npx @ni-c/mcp-hub --stdio` needs no hostname, no TLS and no
+password — see [local clients](/guide/clients#local-clients-over-stdio).
 :::
 
 ## 1. Write the config
 
-Create `mcp.json`. It is exactly Claude Code's `mcpServers` block:
+Create `config/mcp.json` — in a directory of its own, because the whole
+directory is mounted into the container (that is what keeps
+[hot reload](/guide/configuration#hot-reload) working with editors that save
+via rename). It is exactly Claude Code's `mcpServers` block:
 
 ```json
 {
@@ -84,7 +91,7 @@ docker run -d --name mcp-hub \
   -e PASSWORD_HASH='$2y$10$…' \
   -e TRUSTED_PROXIES="192.168.1.0/24" \
   -e PAPERLESS_API_TOKEN="…" \
-  -v "$PWD/mcp.json:/config/mcp.json:ro" \
+  -v "$PWD/config:/config:ro" \
   -v "$PWD/data:/data" \
   ghcr.io/ni-c/mcp-hub:0.6.0
 ```

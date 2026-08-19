@@ -30,7 +30,7 @@ Update with `docker compose pull && docker compose up -d`.
 ```sh
 git clone https://github.com/ni-c/mcp-hub.git && cd mcp-hub
 cp docker-compose.example.yml docker-compose.yml   # adjust
-cp mcp.json.example mcp.json                       # adjust
+mkdir -p config && cp mcp.json.example config/mcp.json   # adjust
 docker compose up -d --build
 ```
 
@@ -76,7 +76,7 @@ services:
       PAPERLESS_API_TOKEN: "${PAPERLESS_API_TOKEN}"
 
     volumes:
-      - "./mcp.json:/config/mcp.json:ro"
+      - "./config:/config:ro"
       - "./data:/data"           # chown 1000:1000 on the host
 
     # Hardening — keep these.

@@ -41,7 +41,7 @@ The proxy image (`ghcr.io/ni-c/mcp-hub-docker-proxy`) reads its own set:
 
 | Variable | Default | Description |
 |---|---|---|
-| `CONFIG_PATH` | `/config/mcp.json` | The same file the hub reads, mounted read-only. It *is* the policy. Parsed without `${VAR}` expansion — the proxy holds none of the hub's secrets. |
+| `CONFIG_PATH` | `/config/mcp.json` | The same file the hub reads — mount its **directory** read-only (`./config:/config:ro`), like the hub does. It *is* the policy. Parsed without `${VAR}` expansion — the proxy holds none of the hub's secrets. |
 | `LISTEN_SOCKET` | `/run/proxy/docker.sock` | Unix socket the hub connects to. Shared with the hub through a volume. |
 | `DOCKER_SOCKET` | `/var/run/docker.sock` | The real daemon. |
 | `SANDBOX_SECRETS_DIR` | `/run/secrets` | Where `"secretsFrom": "x"` looks for `x.env`. Files must be regular, non-symlink, at most 64 KiB, mode 640 or stricter, with at most 100 unique non-NUL entries. |
@@ -58,6 +58,7 @@ The proxy image (`ghcr.io/ni-c/mcp-hub-docker-proxy`) reads its own set:
 | `MCP_MAX_CONCURRENT_REQUESTS` | `4` | In-flight MCP requests per OAuth client. Positive integer. |
 | `MCP_CALL_TIMEOUT_MS` | `300000` | Deadline for one forwarded tool call or request. Raise it only for a deployment that genuinely runs long tools; a stuck call holds one of the concurrency slots above. |
 | `MCP_RESET_TIMEOUT_ON_PROGRESS` | `false` | Whether a progress notification restarts that deadline. `true` is convenient for long tools and gives up the absolute bound: a child that emits progress forever keeps the call open forever. |
+| `IDLE_TIMEOUT_MINUTES` | `60` | Minutes of inactivity before an [on-demand server](/guide/on-demand) is put to sleep. `0` disables on-demand lifecycling entirely — every server starts at boot and keeps running, the pre-0.9 behaviour. Per-server `idleMinutes` overrides it. |
 | `HTTP_HEADERS_TIMEOUT_MS` | `10000` | Node's header timeout. |
 | `HTTP_REQUEST_TIMEOUT_MS` | `310000` | Complete request timeout — slightly above the default tool-call timeout. Your reverse proxy must allow at least as long, and raising `MCP_CALL_TIMEOUT_MS` means raising this and the proxy with it. |
 
@@ -70,13 +71,33 @@ value logs and keeps the hardened default instead of taking the hub down.
 
 | Variable | Default | Description |
 |---|---|---|
-| `CONFIG_PATH` | `/config/mcp.json` | The `mcpServers` config file. Watched for changes. |
+| `CONFIG_PATH` | `/config/mcp.json` | The `mcpServers` config file. Watched for changes — mount its **directory** (`./config:/config:ro`), not the file: a single-file bind mount misses rename-style editor saves and logs a startup warning. |
 | `DATA_PATH` | `/data` | JWT key, OAuth clients, approvals, refresh tokens. Must be persistent. |
+| `TOOL_CACHE_PATH` | `<DATA_PATH>/tool-cache.json` | Snapshots (identity, capabilities, tool list) of [on-demand servers](/guide/on-demand), so they can boot into `sleeping` instead of warm-starting. Not writable → a startup warning and on-demand servers warm-start at every boot. |
 | `LOG_FILE` | *(unset)* | Mirror every hub log line into this file with an ISO-8601 UTC prefix, in addition to the console. See [fail2ban](/guide/deployment#fail2ban). |
 | `PORT` | `80` in the image, `3000` otherwise | Listen port. |
 
 `DATA_PATH` is also read by `mcp-hub-admin`, so the admin CLI needs it set to
 the same directory when run outside the container.
+
+## In stdio mode
+
+`--stdio` ([local clients](/guide/clients#local-clients-over-stdio)) starts no
+listener and no authorization server, so most of the table above does not
+apply. What it reads:
+
+| Variable | Default | Description |
+|---|---|---|
+| `CONFIG_PATH` | `mcp.json` in the working directory | Same file, same hot reload. A missing file starts an empty hub instead of failing — the client that spawned the process has nowhere to show a startup error. |
+| `IDLE_TIMEOUT_MINUTES` | `60` | As above. Worth keeping on: a hub spawned per client session would otherwise start every configured server at every launch. |
+| `TOOL_CACHE_PATH` | `.mcp-hub/tool-cache.json` beside the config | As above, but there is no `DATA_PATH` here to derive it from. |
+| `LOG_FILE` | *(unset)* | Same as above. Logging otherwise goes to stderr: in stdio mode stdout carries the protocol, so `console.log` output is moved out of the way. |
+
+Everything else — `EXTERNAL_URL`, `PASSWORD*`, `TRUSTED_PROXIES`,
+`RESOURCE_BOUND_TOKENS`, `DEFAULT_RESOURCE`, `PORT`, `DATA_PATH`, the
+rate limits and the HTTP timeouts — is HTTP-only and ignored. The call
+timeouts (`MCP_CALL_TIMEOUT_MS` and friends) apply, since they belong to the
+proxying path.
 
 ## Full Compose example
 
