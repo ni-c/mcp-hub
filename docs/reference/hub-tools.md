@@ -12,6 +12,9 @@ keep their *tools* out of the aggregate: `list_tools`, `get_tool_schema` and
 `hidden` marker, and `wake_server`/`sleep_server` manage them like any other
 on-demand server.
 
+The [stdio mode](/guide/clients#local-clients-over-stdio) serves the same six
+tools with the same behaviour — everything on this page applies there too.
+
 ## The intended sequence
 
 ```

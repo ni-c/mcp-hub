@@ -19,6 +19,10 @@ hostname you control.
 `npx @ni-c/mcp-hub` works too and is handy for a first look. The container is
 the recommended deployment because it carries the isolation, read-only root
 filesystem and resource limits the [security model](/guide/security) assumes.
+
+If all you want is the aggregate for a local, stdio-only client, none of this
+page applies: `npx @ni-c/mcp-hub --stdio` needs no hostname, no TLS and no
+password — see [local clients](/guide/clients#local-clients-over-stdio).
 :::
 
 ## 1. Write the config

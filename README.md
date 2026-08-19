@@ -40,6 +40,10 @@ replaces N containers with one process:
   through 6 meta-tools (`list_servers`, `list_tools`, `get_tool_schema`,
   `call_tool`, `wake_server`, `sleep_server`) without flooding the model
   context with N×tools schemas.
+- **Also without HTTP**: `mcp-hub --stdio` serves that same aggregate on
+  stdin/stdout for clients that can only spawn a local process (Claude Desktop,
+  Codex, …) — same `mcp.json`, no TLS, no reverse proxy, no login. Auth exists
+  for the network endpoints; over stdio the trust boundary is the local user.
 - **On-demand lifecycle**: stdio and docker servers start when used and sleep
   after 60 idle minutes, answering `initialize`/`tools/list` from a persistent
   snapshot meanwhile — a dozen servers cost only the memory of the ones in
