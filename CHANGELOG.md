@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- #region changelog -->
 
+## [0.9.1] - 2026-08-20
+
+### Fixed
+
+- **`npx @ni-c/mcp-hub` did nothing.** npm links a `bin` entry as
+  `node_modules/.bin/<name>` — a symlink whose basename is the command, not the
+  file — and the entry point recognised itself by comparing that basename with
+  its own file name. Started through the symlink it therefore never ran: the
+  process exited 0 without a listener, a child or a single log line, in HTTP as
+  well as in stdio mode. Only `node dist/index.js` (what the container does)
+  ever worked. Entry-point detection now compares real paths, and a test starts
+  the hub through a `.bin`-style symlink.
+
 ## [0.9.0] - 2026-08-20
 
 ### Added

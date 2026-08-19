@@ -6,6 +6,7 @@ import { loadConfig, parseConfig, ConfigWatcher, warnMutableDockerImages, type H
 import { Supervisor } from './supervisor.js';
 import { ToolCache } from './tool-cache.js';
 import { buildHubServer } from './hub.js';
+import { isMainModule } from './main-module.js';
 
 export interface StdioHubOptions {
   /** Path to the mcp.json. A missing file starts an empty hub instead of failing. */
@@ -121,8 +122,7 @@ export async function runStdio(options: StdioHubOptions): Promise<void> {
   process.stdin.on('close', () => void shutdown('stdin close'));
 }
 
-const isMain = process.argv[1] && import.meta.url.endsWith(process.argv[1].split('/').pop()!);
-if (isMain) {
+if (isMainModule(import.meta.url)) {
   const idle = Number(process.env.IDLE_TIMEOUT_MINUTES ?? 60);
   if (!Number.isSafeInteger(idle) || idle < 0) {
     console.error('mcp-hub: IDLE_TIMEOUT_MINUTES must be a non-negative integer');

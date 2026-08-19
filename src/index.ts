@@ -17,6 +17,7 @@ import { installFileLogging } from './logfile.js';
 import { canonicalResourceUrl, resourceUrlForRoute } from './auth/resource.js';
 import { ClientRequestGate } from './limits.js';
 import { runStdio } from './stdio.js';
+import { isMainModule } from './main-module.js';
 
 export interface HubOptions {
   externalUrl: string;
@@ -218,7 +219,7 @@ function nonNegativeIntegerEnv(name: string, fallback: number): number {
   return value;
 }
 
-const isMain = process.argv[1] && import.meta.url.endsWith(process.argv[1].split('/').pop()!);
+const isMain = isMainModule(import.meta.url);
 // `--stdio` serves the /hub aggregate on stdin/stdout instead of over HTTP, for
 // clients that can only spawn a local process. None of the HTTP surface —
 // listener, OAuth, tokens, rate limiting — is created in that mode.
