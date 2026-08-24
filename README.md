@@ -144,7 +144,8 @@ USER node
 | `DEFAULT_RESOURCE` | no | server name (or `hub`) to bind tokens to when a client sends no `resource` parameter; unset → such requests are refused |
 | `MCP_BODY_LIMIT` | no | authenticated MCP JSON body limit, default `1mb` |
 | `MCP_REQUESTS_PER_MINUTE` | no | limit per OAuth client, default `120` |
-| `MCP_MAX_CONCURRENT_REQUESTS` | no | in-flight limit per OAuth client, default `4` |
+| `MCP_MAX_CONCURRENT_REQUESTS` | no | in-flight request limit per OAuth client, default `4` |
+| `MCP_MAX_CONCURRENT_STREAMS` | no | open SSE listening streams per OAuth client — one per connected session, default `32` |
 | `HTTP_HEADERS_TIMEOUT_MS` | no | Node HTTP header timeout, default `10000` |
 | `HTTP_REQUEST_TIMEOUT_MS` | no | complete request timeout, default `310000` (slightly above the tool-call timeout) |
 | `PORT` | no | listen port (default 80 in the image, 3000 outside) |

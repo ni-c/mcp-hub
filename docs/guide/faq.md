@@ -114,6 +114,18 @@ The per-client gate: `MCP_REQUESTS_PER_MINUTE` (default 120) and
 `MCP_MAX_CONCURRENT_REQUESTS` (default 4), counted **per OAuth client**. Raise
 them if a legitimate client needs more.
 
+### Connecting gets `429` with `Too many concurrent MCP streams`
+
+That client has more sessions open than `MCP_MAX_CONCURRENT_STREAMS` (default
+32) allows. Each connected session holds one `GET` SSE stream, and every window
+of the same editor or CLI counts, since they all share one OAuth client. Closing
+sessions frees the slots; raise the limit if you genuinely run that many.
+
+Before 0.9.2 those streams were charged to `MCP_MAX_CONCURRENT_REQUESTS`
+instead, so the fifth session against the default of four could not connect at
+all — it got `Too many concurrent MCP requests` on an otherwise idle hub. If
+you see that message on connect, upgrade rather than raise the limit.
+
 ### Editing `mcp.json` does nothing
 
 With the recommended directory mount (`./config:/config:ro`) any host-side edit

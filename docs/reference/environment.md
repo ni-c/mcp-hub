@@ -55,7 +55,8 @@ The proxy image (`ghcr.io/ni-c/mcp-hub-docker-proxy`) reads its own set:
 |---|---|---|
 | `MCP_BODY_LIMIT` | `1mb` | Maximum JSON body for authenticated MCP requests. Any Express/`bytes` size string. |
 | `MCP_REQUESTS_PER_MINUTE` | `120` | MCP requests per minute **per OAuth client**. Positive integer. |
-| `MCP_MAX_CONCURRENT_REQUESTS` | `4` | In-flight MCP requests per OAuth client. Positive integer. |
+| `MCP_MAX_CONCURRENT_REQUESTS` | `4` | In-flight MCP requests per OAuth client — `POST`s carrying JSON-RPC, so this is the work a child server is doing at once. Positive integer. |
+| `MCP_MAX_CONCURRENT_STREAMS` | `32` | Open SSE listening streams (`GET`) per OAuth client. One per connected session, so this bounds how many sessions one client may hold open, not how much work it may cause. Positive integer. |
 | `MCP_CALL_TIMEOUT_MS` | `300000` | Deadline for one forwarded tool call or request. Raise it only for a deployment that genuinely runs long tools; a stuck call holds one of the concurrency slots above. |
 | `MCP_RESET_TIMEOUT_ON_PROGRESS` | `false` | Whether a progress notification restarts that deadline. `true` is convenient for long tools and gives up the absolute bound: a child that emits progress forever keeps the call open forever. |
 | `IDLE_TIMEOUT_MINUTES` | `60` | Minutes of inactivity before an [on-demand server](/guide/on-demand) is put to sleep. `0` disables on-demand lifecycling entirely — every server starts at boot and keeps running, the pre-0.9 behaviour. Per-server `idleMinutes` overrides it. |
@@ -110,6 +111,7 @@ environment:
   MCP_BODY_LIMIT: "1mb"
   MCP_REQUESTS_PER_MINUTE: "120"
   MCP_MAX_CONCURRENT_REQUESTS: "4"
+  MCP_MAX_CONCURRENT_STREAMS: "32"
 
   LOG_FILE: "/data/mcp-hub.log"
 

@@ -109,16 +109,26 @@ describe('LoginRateLimiter', () => {
 });
 
 describe('ClientRequestGate', () => {
-  it('limits concurrent requests per OAuth client and releases on finish', () => {
-    const gate = new ClientRequestGate(10, 1);
+  /** Collects the finish/close handlers so a test can end the request itself. */
+  const stubResponse = () => {
     const listeners = new Map<string, () => void>();
+    const body: Record<string, unknown>[] = [];
     const response = {
       once: (event: string, handler: () => void) => listeners.set(event, handler),
       set: () => response,
       status: () => response,
-      json: () => response
+      json: (payload: Record<string, unknown>) => {
+        body.push(payload);
+        return response;
+      }
     } as unknown as Response;
-    const request = { auth: { clientId: 'client-1' } } as Request;
+    return { response, listeners, body };
+  };
+
+  it('limits concurrent requests per OAuth client and releases on finish', () => {
+    const gate = new ClientRequestGate(10, 1, 10);
+    const { response, listeners } = stubResponse();
+    const request = { method: 'POST', auth: { clientId: 'client-1' } } as Request;
     let passed = 0;
     gate.middleware(request, response, (() => passed++) as NextFunction);
     gate.middleware(request, response, (() => passed++) as NextFunction);
@@ -126,6 +136,55 @@ describe('ClientRequestGate', () => {
     listeners.get('finish')?.();
     gate.middleware(request, response, (() => passed++) as NextFunction);
     expect(passed).toBe(2);
+  });
+
+  it('keeps open listening streams out of the in-flight budget', () => {
+    // The regression this guards: a GET is the session's SSE channel and stays
+    // open for its lifetime, so counting it as in-flight work locked a client
+    // out of its own hub after `maxConcurrent` connected sessions.
+    const gate = new ClientRequestGate(100, 1, 10);
+    const { response } = stubResponse();
+    const clientId = 'client-1';
+    let passed = 0;
+    const next = (() => passed++) as NextFunction;
+
+    for (let i = 0; i < 4; i++) gate.middleware({ method: 'GET', auth: { clientId } } as Request, response, next);
+    expect(passed).toBe(4);
+
+    gate.middleware({ method: 'POST', auth: { clientId } } as Request, response, next);
+    expect(passed).toBe(5);
+  });
+
+  it('charges a plain GET route such as /health to the request budget', () => {
+    const gate = new ClientRequestGate(100, 1, 10);
+    const { response, body } = stubResponse();
+    const request = { method: 'GET', auth: { clientId: 'client-1' } } as Request;
+    let passed = 0;
+    const next = (() => passed++) as NextFunction;
+
+    gate.requestMiddleware(request, response, next);
+    gate.requestMiddleware(request, response, next);
+    expect(passed).toBe(1);
+    expect(body.at(-1)).toMatchObject({ error: { message: 'Too many concurrent MCP requests' } });
+  });
+
+  it('still bounds how many streams one client may hold open', () => {
+    const gate = new ClientRequestGate(100, 4, 2);
+    const { response, listeners, body } = stubResponse();
+    const request = { method: 'GET', auth: { clientId: 'client-1' } } as Request;
+    let passed = 0;
+    const next = (() => passed++) as NextFunction;
+
+    gate.middleware(request, response, next);
+    gate.middleware(request, response, next);
+    gate.middleware(request, response, next);
+    expect(passed).toBe(2);
+    expect(body.at(-1)).toMatchObject({ error: { message: 'Too many concurrent MCP streams' } });
+
+    // A client that drops its connection frees the slot again.
+    listeners.get('close')?.();
+    gate.middleware(request, response, next);
+    expect(passed).toBe(3);
   });
 });
 

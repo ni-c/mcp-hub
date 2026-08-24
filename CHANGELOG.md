@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- #region changelog -->
 
+## [0.9.2] - 2026-08-24
+
+### Fixed
+
+- **A client locked itself out of the hub after four connected sessions.**
+  Streamable HTTP uses a `GET` to open the server-to-client SSE channel, and
+  that stream stays open for the whole session. The per-client gate counted it
+  as an in-flight request, so every connected session permanently held one of
+  the `MCP_MAX_CONCURRENT_REQUESTS` slots (default 4) — the fifth session got
+  `429 Too many concurrent MCP requests` on `initialize` while the hub was
+  otherwise idle, and stayed locked out until the older sessions ended. Since
+  sessions of the same editor or CLI share one OAuth client, running a handful
+  of them was enough. Listening streams now have their own budget.
+
+### Added
+
+- `MCP_MAX_CONCURRENT_STREAMS` (default 32) bounds the SSE listening streams
+  one OAuth client may hold open, so the stream budget stays limited without
+  competing with actual request work.
+
 ## [0.9.1] - 2026-08-20
 
 ### Fixed

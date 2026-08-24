@@ -33,6 +33,8 @@ export interface HubOptions {
   mcpBodyLimit?: string;
   mcpRequestsPerMinute?: number;
   mcpMaxConcurrentRequests?: number;
+  /** Open SSE listening streams per OAuth client — one per connected session. Defaults to 32. */
+  mcpMaxConcurrentStreams?: number;
   /** Idle minutes before an on-demand server sleeps; 0 disables on-demand lifecycling. Defaults to 60. */
   idleTimeoutMinutes?: number;
   /** Where tool snapshots of sleeping servers live. Defaults to <dataPath>/tool-cache.json. */
@@ -48,8 +50,13 @@ export async function createHub(options: HubOptions) {
   if (externalUrl !== `${origin}/`) throw new Error('EXTERNAL_URL must be an origin without a path, query or fragment');
   const requestsPerMinute = options.mcpRequestsPerMinute ?? 120;
   const maxConcurrentRequests = options.mcpMaxConcurrentRequests ?? 4;
+  // One per connected session, not per unit of work, so the budget is much
+  // larger than the in-flight one: a client with several open sessions (an
+  // editor, a CLI and a web connector) must not lock itself out.
+  const maxConcurrentStreams = options.mcpMaxConcurrentStreams ?? 32;
   if (!Number.isSafeInteger(requestsPerMinute) || requestsPerMinute < 1) throw new Error('mcpRequestsPerMinute must be a positive integer');
   if (!Number.isSafeInteger(maxConcurrentRequests) || maxConcurrentRequests < 1) throw new Error('mcpMaxConcurrentRequests must be a positive integer');
+  if (!Number.isSafeInteger(maxConcurrentStreams) || maxConcurrentStreams < 1) throw new Error('mcpMaxConcurrentStreams must be a positive integer');
   if (!/^\d+(?:b|kb|mb)$/i.test(options.mcpBodyLimit ?? '1mb')) throw new Error('mcpBodyLimit must use b, kb or mb units');
   // Bound tokens are the default: an unbound token reaches every MCP path, so
   // the safe behaviour must be the one you get without asking for it.
@@ -139,13 +146,13 @@ export async function createHub(options: HubOptions) {
   // every authenticated route: bearer first so only authenticated clients
   // create gate state, gate before the resource check so rejected-resource
   // requests count as load too — they cost the same work.
-  const gate = new ClientRequestGate(requestsPerMinute, maxConcurrentRequests);
+  const gate = new ClientRequestGate(requestsPerMinute, maxConcurrentRequests, maxConcurrentStreams);
 
   // /health reports the same fleet-wide view as the /hub aggregate — every
   // server's name, state and tool count — so it takes the same resource. A
   // token for one server must not be able to enumerate the others.
   const hubResource = resourceUrlForRoute(origin, 'hub');
-  app.get('/health', bearer, gate.middleware, requireResourceFor(() => hubResource), healthHandler(supervisor));
+  app.get('/health', bearer, gate.requestMiddleware, requireResourceFor(() => hubResource), healthHandler(supervisor));
 
   const requireRouteResource = requireResourceFor(req => resourceUrlForRoute(origin, String(req.params.name)));
   const parseMcpJson = express.json({ limit: options.mcpBodyLimit ?? '1mb' });
@@ -249,6 +256,7 @@ if (isMain && process.argv.includes('--stdio')) {
     mcpBodyLimit: process.env.MCP_BODY_LIMIT ?? '1mb',
     mcpRequestsPerMinute: positiveIntegerEnv('MCP_REQUESTS_PER_MINUTE', 120),
     mcpMaxConcurrentRequests: positiveIntegerEnv('MCP_MAX_CONCURRENT_REQUESTS', 4),
+    mcpMaxConcurrentStreams: positiveIntegerEnv('MCP_MAX_CONCURRENT_STREAMS', 32),
     idleTimeoutMinutes: nonNegativeIntegerEnv('IDLE_TIMEOUT_MINUTES', 60),
     toolCachePath: process.env.TOOL_CACHE_PATH || undefined
   });

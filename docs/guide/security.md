@@ -133,7 +133,7 @@ password scoped to one resource.
 | `/login` | 100 per 15 min | 500 per 15 min |
 | `/consent` | 100 per 15 min | 500 per 15 min |
 | Failed logins | 10 per 15 min | 100 per 15 min |
-| MCP traffic | `MCP_REQUESTS_PER_MINUTE` (120) and `MCP_MAX_CONCURRENT_REQUESTS` (4) **per OAuth client** | — |
+| MCP traffic | `MCP_REQUESTS_PER_MINUTE` (120), `MCP_MAX_CONCURRENT_REQUESTS` (4) and `MCP_MAX_CONCURRENT_STREAMS` (32) **per OAuth client** | — |
 
 The auth limiters run **before** body parsing, and they reject without
 inserting the offending IP into their tables, so a flood of forged addresses
