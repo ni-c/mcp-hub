@@ -6,6 +6,7 @@
 [![Container](https://img.shields.io/badge/ghcr.io-ni--c%2Fmcp--hub-2496ED?logo=docker&logoColor=white)](https://github.com/ni-c/mcp-hub/pkgs/container/mcp-hub)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-mcp--hub.ni--c.de-4f46e5)](https://mcp-hub.ni-c.de)
+[![Sponsor](https://img.shields.io/badge/sponsor-ni--c-ea4aaa?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/ni-c)
 
 📖 **Full documentation: <https://mcp-hub.ni-c.de>**
 

@@ -21,6 +21,7 @@
     "url": "https://github.com/ni-c/mcp-hub/issues"
   },
   "homepage": "https://mcp-hub.ni-c.de",
+  "funding": "https://github.com/sponsors/ni-c",
   "engines": {
     "node": ">=22"
   },
