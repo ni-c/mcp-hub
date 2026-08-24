@@ -16,14 +16,15 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 # The base image bundles npm 10, whose vendored deps (tar, brace-expansion,
 # sigstore, ...) carry known HIGH/CRITICAL CVEs; replace it wholesale. Even
-# current npm still pins two vendored packages to vulnerable releases, so
+# current npm still pins three vendored packages to vulnerable releases, so
 # overwrite those in place with the fixed same-major versions (identical
 # dependency footprint, verified against the registry).
 RUN npm install -g npm@12.0.2 \
-    && npm pack brace-expansion@5.0.9 ip-address@10.3.1 --pack-destination /tmp > /dev/null \
+    && npm pack brace-expansion@5.0.9 ip-address@10.3.1 tar@7.5.22 --pack-destination /tmp > /dev/null \
     && tar -xzf /tmp/brace-expansion-5.0.9.tgz --strip-components=1 -C /usr/local/lib/node_modules/npm/node_modules/brace-expansion \
     && tar -xzf /tmp/ip-address-10.3.1.tgz --strip-components=1 -C /usr/local/lib/node_modules/npm/node_modules/ip-address \
-    && rm -f /tmp/brace-expansion-5.0.9.tgz /tmp/ip-address-10.3.1.tgz
+    && tar -xzf /tmp/tar-7.5.22.tgz --strip-components=1 -C /usr/local/lib/node_modules/npm/node_modules/tar \
+    && rm -f /tmp/brace-expansion-5.0.9.tgz /tmp/ip-address-10.3.1.tgz /tmp/tar-7.5.22.tgz
 
 # Ownership proof for the MCP Registry: must match server.json's name.
 LABEL io.modelcontextprotocol.server.name="io.github.ni-c/mcp-hub"

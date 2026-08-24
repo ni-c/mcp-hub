@@ -27,6 +27,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one OAuth client may hold open, so the stream budget stays limited without
   competing with actual request work.
 
+### Security
+
+- The image overwrites npm's vendored `tar` with 7.5.22, alongside the
+  `brace-expansion` and `ip-address` replacements it already carried. npm 12.0.2
+  still pins 7.5.19, which CVE-2026-73566 (denial of service via a crafted long
+  path) applies to.
+
 ## [0.9.1] - 2026-08-20
 
 ### Fixed
