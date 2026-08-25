@@ -4,14 +4,16 @@ import express from 'express';
 import type { Request, Response, NextFunction } from 'express';
 import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
 import { loadConfig, ConfigWatcher, warnMutableDockerImages } from './config.js';
-import { Supervisor } from './supervisor.js';
+import { Supervisor, UpstreamAuthRegistry } from './supervisor.js';
 import { ToolCache } from './tool-cache.js';
 import { warnSingleFileMount } from './mount-check.js';
 import { serverRequestHandler, handleMcpRequest } from './proxy.js';
 import { buildHubServer } from './hub.js';
-import { AuthStore } from './auth/store.js';
+import { AuthStore, DEFAULT_CLIENT_LIMITS } from './auth/store.js';
+import { CimdResolver } from './auth/cimd.js';
 import { HubOAuthProvider } from './auth/provider.js';
 import { createAuthRoutes } from './auth/routes.js';
+import { createUpstreamRoutes } from './upstream/routes.js';
 import { healthHandler } from './health.js';
 import { installFileLogging } from './logfile.js';
 import { canonicalResourceUrl, resourceUrlForRoute } from './auth/resource.js';
@@ -39,7 +41,26 @@ export interface HubOptions {
   idleTimeoutMinutes?: number;
   /** Where tool snapshots of sleeping servers live. Defaults to <dataPath>/tool-cache.json. */
   toolCachePath?: string;
+  /** Accepted client registration mechanisms. Defaults to both. */
+  clientRegistration?: ClientRegistrationMechanism[];
+  /** Origins whose Client ID Metadata Documents are accepted; empty means all. */
+  cimdAllowedOrigins?: string[];
+  /** Lets metadata documents be fetched from private addresses — development only. */
+  cimdAllowPrivateAddresses?: boolean;
+  /** Ceiling on stored dynamic registrations. Defaults to 500. */
+  dcrMaxClients?: number;
+  /** How long a registration may sit without ever being approved. Defaults to 24. */
+  dcrPendingTtlHours?: number;
+  /** How long a registration may sit unused before it is dropped. Defaults to 90. */
+  dcrInactiveDays?: number;
 }
+
+/** How often the hub looks for registrations that have aged out. The windows
+ *  are a day and three months, so this only has to be far below those. */
+const CLIENT_PRUNE_INTERVAL_MS = 15 * 60_000;
+
+export type ClientRegistrationMechanism = 'cimd' | 'dcr';
+export const CLIENT_REGISTRATION_MECHANISMS: ClientRegistrationMechanism[] = ['cimd', 'dcr'];
 
 export async function createHub(options: HubOptions) {
   // Canonical issuer identifier: URL.href form ('https://host/' for a root
@@ -79,7 +100,25 @@ export async function createHub(options: HubOptions) {
       console.warn(`mcp-hub: tool cache ${cache.filePath} is not writable — on-demand servers warm-start at every boot instead of sleeping through it`);
     }
   }
-  const supervisor = new Supervisor(config, { idleTimeoutMinutes, cache });
+  const clientLimits = {
+    maxClients: options.dcrMaxClients ?? DEFAULT_CLIENT_LIMITS.maxClients,
+    pendingTtlSeconds: (options.dcrPendingTtlHours ?? 24) * 3600,
+    inactiveSeconds: (options.dcrInactiveDays ?? 90) * 86_400
+  };
+  const store = new AuthStore(options.dataPath, clientLimits);
+  // Recorded so `mcp-hub-admin upstream login` can build a redirect URI: the
+  // image sets CONFIG_PATH and DATA_PATH, but never EXTERNAL_URL.
+  store.rememberExternalUrl(externalUrl);
+  // A metadata document has to be fetchable over https by a third party, so
+  // this mode cannot work behind a plain-http issuer. Say so at boot rather
+  // than at the first login attempt.
+  for (const [name, server] of config) {
+    if (server.kind === 'remote' && server.oauth?.mode === 'cimd' && new URL(externalUrl).protocol !== 'https:') {
+      throw new Error(`Server "${name}": oauth mode "cimd" needs an https EXTERNAL_URL, because the upstream fetches the document`);
+    }
+  }
+  const upstreamAuth = new UpstreamAuthRegistry(store, externalUrl);
+  const supervisor = new Supervisor(config, { idleTimeoutMinutes, cache, upstreamAuth });
   // start() before reapOrphans(): reaping spares the container of any server
   // that is not asleep, so it must see the boot states. Deliberately not
   // awaited: an unreachable Docker endpoint must not hold up the HTTP listener
@@ -99,11 +138,21 @@ export async function createHub(options: HubOptions) {
   watcher.on('error', error => console.error(`mcp-hub: ignoring broken config update: ${(error as Error).message}`));
   watcher.start();
 
-  const store = new AuthStore(options.dataPath);
+  // Both mechanisms are on by default: CIMD is what the MCP specification now
+  // prefers, and dynamic registration is what every client written against the
+  // earlier revisions still uses.
+  const mechanisms = options.clientRegistration ?? CLIENT_REGISTRATION_MECHANISMS;
+  if (mechanisms.length === 0) throw new Error('clientRegistration must name at least one mechanism');
+  const cimd = mechanisms.includes('cimd')
+    ? new CimdResolver({ allowedOrigins: options.cimdAllowedOrigins, allowPrivateAddresses: options.cimdAllowPrivateAddresses })
+    : undefined;
+
   const provider = new HubOAuthProvider(store, externalUrl, {
     requireResource,
     resolveResource: resource => canonicalResourceUrl(resource, origin, watcher.current),
-    defaultResource: options.defaultResource !== undefined ? resourceUrlForRoute(origin, options.defaultResource) : undefined
+    defaultResource: options.defaultResource !== undefined ? resourceUrlForRoute(origin, options.defaultResource) : undefined,
+    cimd,
+    allowDynamicRegistration: mechanisms.includes('dcr')
   });
 
   const app = express();
@@ -118,7 +167,30 @@ export async function createHub(options: HubOptions) {
   // A liveness check intentionally carries no topology. Detailed child state
   // lives behind OAuth at /health.
   app.get('/livez', (_req, res) => res.status(200).json({ status: 'ok' }));
-  app.use(createAuthRoutes({ provider, externalUrl, passwordHash: options.passwordHash, password: options.password }));
+  app.use(createAuthRoutes({ provider, store, externalUrl, passwordHash: options.passwordHash, password: options.password, cimd }));
+  // The upstream callback and the hub's own client metadata document. Mounted
+  // after the auth routes so it inherits nothing from them but sits ahead of
+  // the /:name catch-all.
+  app.use(createUpstreamRoutes({ store, provider, registry: upstreamAuth, supervisor, watcher, externalUrl }));
+
+  // Registrations age out on a clock, not on traffic, so this cannot wait for
+  // the next write to state.json — an idle hub would never clean up at all.
+  // The first pass runs at boot, which is also what gives clients from a state
+  // file written before activity was tracked their starting timestamp.
+  const sweepClients = () => {
+    try {
+      const { pending, inactive } = store.pruneClients();
+      if (pending.length > 0 || inactive.length > 0) {
+        console.log(`mcp-hub: dropped ${pending.length} unconfirmed and ${inactive.length} unused client registration(s)`);
+      }
+    } catch (error) {
+      console.warn(`mcp-hub: could not prune client registrations: ${(error as Error).message}`);
+    }
+  };
+  sweepClients();
+  const pruneTimer = setInterval(sweepClients, CLIENT_PRUNE_INTERVAL_MS);
+  pruneTimer.unref(); // never a reason to keep the process alive
+  const stopMaintenance = () => clearInterval(pruneTimer);
 
   // Bearer auth for the MCP endpoints, advertising the path-scoped RFC 9728
   // metadata document in WWW-Authenticate so clients discover the AS.
@@ -192,7 +264,7 @@ export async function createHub(options: HubOptions) {
     res.status(500).json({ jsonrpc: '2.0', error: { code: -32603, message: 'Internal error' }, id: null });
   });
 
-  return { app, supervisor, watcher, provider, store };
+  return { app, supervisor, watcher, provider, store, upstreamAuth, stopMaintenance };
 }
 
 function requireEnv(name: string): string {
@@ -215,6 +287,44 @@ function positiveIntegerEnv(name: string, fallback: number): number {
   return value;
 }
 
+/**
+ * CLIENT_REGISTRATION names the mechanisms a client may use to obtain a
+ * client_id, as a comma-separated list. It is deliberately a positive list
+ * rather than a "disable" switch: an operator reading their compose file
+ * should see what is allowed, not what is not.
+ */
+function clientRegistrationEnv(): ClientRegistrationMechanism[] {
+  const raw = process.env.CLIENT_REGISTRATION;
+  if (raw === undefined) return CLIENT_REGISTRATION_MECHANISMS;
+  const values = raw.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+  const unknown = values.filter(value => !(CLIENT_REGISTRATION_MECHANISMS as string[]).includes(value));
+  if (values.length === 0 || unknown.length > 0) {
+    console.error(`mcp-hub: CLIENT_REGISTRATION must be a comma-separated list of ${CLIENT_REGISTRATION_MECHANISMS.join(', ')}`);
+    process.exit(1);
+  }
+  return [...new Set(values)] as ClientRegistrationMechanism[];
+}
+
+/** Origins are compared verbatim against a client_id's origin, so anything
+ *  with a path, a query or a non-https scheme is a configuration mistake. */
+function cimdAllowedOriginsEnv(): string[] {
+  const entries = process.env.CIMD_ALLOWED_ORIGINS?.split(',').map(s => s.trim()).filter(Boolean) ?? [];
+  for (const entry of entries) {
+    let url: URL;
+    try {
+      url = new URL(entry);
+    } catch {
+      console.error(`mcp-hub: CIMD_ALLOWED_ORIGINS entry "${entry}" is not a URL`);
+      process.exit(1);
+    }
+    if (url.protocol !== 'https:' || url.origin !== entry.replace(/\/$/, '')) {
+      console.error(`mcp-hub: CIMD_ALLOWED_ORIGINS entry "${entry}" must be a bare https origin, e.g. https://chatgpt.com`);
+      process.exit(1);
+    }
+  }
+  return entries.map(entry => new URL(entry).origin);
+}
+
 function nonNegativeIntegerEnv(name: string, fallback: number): number {
   const raw = process.env[name];
   if (raw === undefined) return fallback;
@@ -235,7 +345,10 @@ if (isMain && process.argv.includes('--stdio')) {
   await runStdio({
     configPath: process.env.CONFIG_PATH ?? path.resolve('mcp.json'),
     idleTimeoutMinutes: nonNegativeIntegerEnv('IDLE_TIMEOUT_MINUTES', 60),
-    toolCachePath: process.env.TOOL_CACHE_PATH || undefined
+    toolCachePath: process.env.TOOL_CACHE_PATH || undefined,
+    // Optional here, unlike over HTTP: only a server with an `oauth` block
+    // needs it, to reuse a token authorized against the HTTP hub.
+    dataPath: process.env.DATA_PATH || undefined
   });
 } else if (isMain) {
   const port = Number(process.env.PORT ?? 3000);
@@ -244,7 +357,8 @@ if (isMain && process.argv.includes('--stdio')) {
     installFileLogging(process.env.LOG_FILE);
     console.log(`mcp-hub: mirroring log output to ${process.env.LOG_FILE}`);
   }
-  const { app, supervisor, watcher } = await createHub({
+  const clientRegistration = clientRegistrationEnv();
+  const { app, supervisor, watcher, stopMaintenance } = await createHub({
     externalUrl: requireEnv('EXTERNAL_URL'),
     configPath: process.env.CONFIG_PATH ?? '/config/mcp.json',
     dataPath: process.env.DATA_PATH ?? '/data',
@@ -258,8 +372,21 @@ if (isMain && process.argv.includes('--stdio')) {
     mcpMaxConcurrentRequests: positiveIntegerEnv('MCP_MAX_CONCURRENT_REQUESTS', 4),
     mcpMaxConcurrentStreams: positiveIntegerEnv('MCP_MAX_CONCURRENT_STREAMS', 32),
     idleTimeoutMinutes: nonNegativeIntegerEnv('IDLE_TIMEOUT_MINUTES', 60),
-    toolCachePath: process.env.TOOL_CACHE_PATH || undefined
+    toolCachePath: process.env.TOOL_CACHE_PATH || undefined,
+    clientRegistration,
+    dcrMaxClients: positiveIntegerEnv('DCR_MAX_CLIENTS', 500),
+    dcrPendingTtlHours: positiveIntegerEnv('DCR_PENDING_TTL_HOURS', 24),
+    dcrInactiveDays: positiveIntegerEnv('DCR_INACTIVE_DAYS', 90),
+    cimdAllowedOrigins: cimdAllowedOriginsEnv(),
+    cimdAllowPrivateAddresses: process.env.CIMD_ALLOW_PRIVATE_ADDRESSES === 'true' || process.env.CIMD_ALLOW_PRIVATE_ADDRESSES === '1'
   });
+  console.log(`mcp-hub: client registration via ${clientRegistration.join(' and ')}`);
+  if (!clientRegistration.includes('dcr')) {
+    console.warn('mcp-hub: dynamic client registration is off — clients without Client ID Metadata Document support cannot connect');
+  }
+  if (process.env.CIMD_ALLOW_PRIVATE_ADDRESSES === 'true' || process.env.CIMD_ALLOW_PRIVATE_ADDRESSES === '1') {
+    console.warn('mcp-hub: CIMD_ALLOW_PRIVATE_ADDRESSES is enabled — client metadata documents may be fetched from private addresses. Do not use in production.');
+  }
   if (process.env.RESOURCE_BOUND_TOKENS === 'false' || process.env.RESOURCE_BOUND_TOKENS === '0') {
     console.warn(
       'mcp-hub: RESOURCE_BOUND_TOKENS is disabled — unbound access tokens may call every MCP path. ' +
@@ -276,6 +403,7 @@ if (isMain && process.argv.includes('--stdio')) {
   const shutdown = async (signal: string, code = 0) => {
     console.log(`mcp-hub: received ${signal}, shutting down`);
     watcher.stop();
+    stopMaintenance();
     httpServer.close();
     await supervisor.stop();
     process.exit(code);

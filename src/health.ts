@@ -3,9 +3,14 @@ import type { Supervisor } from './supervisor.js';
 import { containerName } from './sandbox/container-spec.js';
 
 /**
- * Unauthenticated on purpose (Docker's HEALTHCHECK needs it), so it reports
- * state only: lastError carries upstream URLs and spawn paths and stays in the
- * container log instead.
+ * The detailed fleet view, and therefore an authenticated one: it names every
+ * configured server, its state and its sandbox image, which together describe
+ * the deployment. It is mounted behind bearer auth and bound to the `hub`
+ * resource, so a token issued for one server cannot enumerate the others.
+ * Docker's HEALTHCHECK uses `/livez` instead, which carries no topology at all.
+ *
+ * `lastError` is deliberately left out even here: it carries upstream URLs and
+ * spawn paths, and stays in the container log.
  */
 export function healthHandler(supervisor: Supervisor) {
   return (_req: Request, res: Response): void => {

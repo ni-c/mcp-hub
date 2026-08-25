@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.ni-c/mcp-hub",
   "title": "mcp-hub",
-  "description": "Serve many stdio MCP servers from one container, for ChatGPT, Claude and other MCP clients",
+  "description": "Serve many stdio MCP servers from one container with CIMD-first OAuth 2.1, for ChatGPT, Claude and other MCP clients",
   "websiteUrl": "https://mcp-hub.ni-c.de",
   "repository": {
     "url": "https://github.com/ni-c/mcp-hub",
@@ -76,6 +76,19 @@
         {
           "name": "TRUSTED_PROXIES",
           "description": "Comma-separated IPs/CIDRs of the reverse proxy allowed to set X-Forwarded-* headers",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
+          "name": "CLIENT_REGISTRATION",
+          "description": "Which mechanisms a client may use to obtain a client_id: cimd (Client ID Metadata Documents), dcr (RFC 7591 dynamic registration), or both",
+          "isRequired": false,
+          "format": "string",
+          "default": "cimd,dcr"
+        },
+        {
+          "name": "CIMD_ALLOWED_ORIGINS",
+          "description": "Comma-separated https origins whose client ID metadata documents are accepted, e.g. https://chatgpt.com; unset admits every https origin",
           "isRequired": false,
           "format": "string"
         },
