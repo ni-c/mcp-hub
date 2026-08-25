@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { loadConfig, parseConfig, ConfigWatcher, warnMutableDockerImages, type HubConfig } from './config.js';
-import { Supervisor } from './supervisor.js';
+import { Supervisor, UpstreamAuthRegistry } from './supervisor.js';
+import { AuthStore } from './auth/store.js';
 import { ToolCache } from './tool-cache.js';
 import { buildHubServer } from './hub.js';
 import { isMainModule } from './main-module.js';
@@ -15,6 +16,15 @@ export interface StdioHubOptions {
   idleTimeoutMinutes?: number;
   /** Where tool snapshots of sleeping servers live. Defaults to .mcp-hub/tool-cache.json beside the config. */
   toolCachePath?: string;
+  /**
+   * The hub's state directory, when there is one.
+   *
+   * Optional because this mode normally has none. Pointing it at the same
+   * `/data` an HTTP hub uses is what lets an upstream that was authorized there
+   * be used — and refreshed — from here too. Refreshing needs no browser; only
+   * the first login does, and that one has to happen against the HTTP hub.
+   */
+  dataPath?: string;
 }
 
 /**
@@ -61,6 +71,31 @@ function loadOrEmpty(configPath: string): HubConfig {
  * Codex, …). Everything HTTP-only — OAuth, tokens, rate limiting, /health —
  * has no counterpart here; the trust boundary is the local user account.
  */
+/**
+ * Outbound OAuth only works here when a state directory was given: there is
+ * nowhere else to read a token from, and no HTTP listener for a browser to
+ * come back to. Without one, such a server simply cannot connect, so say why
+ * once rather than leaving an unexplained failure in the log.
+ */
+function buildUpstreamAuth(config: HubConfig, dataPath: string | undefined): UpstreamAuthRegistry | undefined {
+  const oauthServers = [...config].filter(([, server]) => server.kind === 'remote' && server.oauth !== undefined);
+  if (oauthServers.length === 0) return undefined;
+  if (!dataPath) {
+    console.warn(
+      `mcp-hub: ${oauthServers.map(([name]) => name).join(', ')} need an upstream OAuth token, but this mode has no state directory. ` +
+        'Set DATA_PATH to the hub\'s /data to reuse a token authorized there.'
+    );
+    return undefined;
+  }
+  const store = new AuthStore(dataPath);
+  const externalUrl = store.getExternalUrl();
+  if (!externalUrl) {
+    console.warn(`mcp-hub: ${dataPath} holds no upstream credentials yet; authorize them against the HTTP hub first`);
+    return undefined;
+  }
+  return new UpstreamAuthRegistry(store, externalUrl);
+}
+
 export function createStdioHub(options: StdioHubOptions) {
   const config = loadOrEmpty(options.configPath);
   warnMutableDockerImages(config);
@@ -80,7 +115,8 @@ export function createStdioHub(options: StdioHubOptions) {
     }
   }
 
-  const supervisor = new Supervisor(config, { idleTimeoutMinutes, cache });
+  const upstreamAuth = buildUpstreamAuth(config, options.dataPath);
+  const supervisor = new Supervisor(config, { idleTimeoutMinutes, cache, upstreamAuth });
   supervisor.start(); // children come up (or hydrate into `sleeping`) in the background
   void supervisor
     .reapOrphans()

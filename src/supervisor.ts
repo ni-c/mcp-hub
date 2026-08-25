@@ -11,18 +11,45 @@ import type { HubConfig, ServerConfig, RemoteServerConfig, ConfigDiff } from './
 import { SocketTransport } from './transports/socket.js';
 import { DockerTransport } from './transports/docker.js';
 import { DockerClient, parseSandboxDockerHost } from './sandbox/docker-client.js';
+import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
+import type { AuthStore } from './auth/store.js';
+import { UpstreamAuth, UpstreamLoginRequiredError } from './upstream/auth.js';
+import { credentialFingerprint } from './upstream/provider.js';
 import { ToolCache } from './tool-cache.js';
 import type { ToolCacheEntry } from './tool-cache.js';
 
-export type ServerState = 'starting' | 'up' | 'down' | 'stopped' | 'sleeping';
+export type ServerState = 'starting' | 'up' | 'down' | 'stopped' | 'sleeping' | 'unauthorized';
+
+/**
+ * Whether a failure is one a restart could fix.
+ *
+ * Only two things mean "a human has to act": our own manager saying there is no
+ * usable credential, and the SDK giving up on authorization. Everything else —
+ * DNS, a 5xx, a timeout — is transient and must keep its backoff, or an
+ * upstream that would have recovered on its own would need manual attention.
+ */
+function classifyAuthFailure(error: unknown): 'restart' | 'unauthorized' {
+  return error instanceof UpstreamLoginRequiredError || error instanceof UnauthorizedError ? 'unauthorized' : 'restart';
+}
 
 /**
  * Remote upstreams get their configured headers on EVERY request via a fetch
  * wrapper — requestInit alone does not cover the SSE stream GET.
  */
-function buildRemoteTransport(config: RemoteServerConfig): Transport {
+function buildRemoteTransport(config: RemoteServerConfig, auth?: UpstreamAuth): Transport {
   const url = new URL(config.url);
   const headers = config.headers;
+  if (auth) {
+    // Deliberately no `requestInit`: the transport merges those headers *after*
+    // the OAuth Authorization header, so a static one would win — and the SDK
+    // would carry them to the authorization server as well, because the fetch
+    // it uses for tokens is the same object. The auth manager's own fetch adds
+    // the configured headers to upstream requests only.
+    const guarded = auth.createFetch();
+    return config.transport === 'sse'
+      ? new SSEClientTransport(url, { authProvider: auth.provider(), fetch: guarded })
+      : new StreamableHTTPClientTransport(url, { authProvider: auth.provider(), fetch: guarded });
+  }
   const fetchWithHeaders: typeof fetch = (input, init) => {
     const merged = new Headers(init?.headers);
     for (const [key, value] of Object.entries(headers)) {
@@ -74,6 +101,9 @@ export interface ManagedServerOptions {
   maxUnusedRestarts?: number;
   /** Test hook: initial restart backoff. */
   backoffInitialMs?: number;
+  /** Outbound OAuth for a remote server that needs it. Injected here rather
+   *  than built in buildTransport(), which runs on every single start. */
+  auth?: UpstreamAuth;
 }
 
 interface WakeWaiter {
@@ -171,6 +201,11 @@ export class ManagedServer {
   wake(): Promise<void> {
     if (this.state === 'up' && this.client) return Promise.resolve();
     if (this.state === 'stopped') return Promise.reject(new Error(`Server "${this.name}" is stopped`));
+    // Without this the request would sit in a waiter nothing can resolve until
+    // the wake timeout, two minutes later.
+    if (this.state === 'unauthorized') {
+      return Promise.reject(new Error(`Server "${this.name}" needs an upstream login`));
+    }
     const timeoutMs = this.options.wakeTimeoutMs ?? WAKE_TIMEOUT_MS;
     const promise = new Promise<void>((resolve, reject) => {
       const waiter: WakeWaiter = {
@@ -219,7 +254,7 @@ export class ManagedServer {
   private buildTransport(): Transport {
     switch (this.config.kind) {
       case 'remote':
-        return buildRemoteTransport(this.config);
+        return buildRemoteTransport(this.config, this.options.auth);
       case 'socket':
         return new SocketTransport(this.config);
       case 'docker':
@@ -252,13 +287,24 @@ export class ManagedServer {
     this.stopping = false;
     this.state = 'starting';
     const generation = ++this.generation;
+    if (this.options.auth) {
+      // Getting a token is the one part of connecting that a restart cannot
+      // fix, so it happens first and its failure is classified separately.
+      try {
+        await this.options.auth.prepare();
+      } catch (error) {
+        if (generation !== this.generation) return;
+        this.onExit(`upstream authorization: ${(error as Error).message}`, generation, classifyAuthFailure(error));
+        return;
+      }
+    }
     const transport = this.buildTransport();
     const client = new Client({ name: 'mcp-hub', version: VERSION }, { capabilities: {} });
     transport.onclose = () => this.onExit(this.exitReason(), generation);
     try {
       await client.connect(transport);
     } catch (error) {
-      this.onExit(`failed to start: ${(error as Error).message}`, generation);
+      this.onExit(`failed to start: ${(error as Error).message}`, generation, classifyAuthFailure(error));
       return;
     }
     if (generation !== this.generation) {
@@ -320,7 +366,7 @@ export class ManagedServer {
     }
   }
 
-  private onExit(reason: string, generation = this.generation): void {
+  private onExit(reason: string, generation = this.generation, outcome: 'restart' | 'unauthorized' = 'restart'): void {
     // A callback from a transport that sleep()/stop()/a newer start() already
     // left behind must not touch the current child.
     if (generation !== this.generation) return;
@@ -328,11 +374,21 @@ export class ManagedServer {
     // calls us as well. Without this guard the second call would overwrite
     // restartTimer without clearing it, so two children would be spawned and
     // one of them left unreferenced — never pinged, never stopped.
-    if (this.state === 'down' || this.state === 'stopped' || this.state === 'sleeping') return;
+    if (this.state === 'down' || this.state === 'stopped' || this.state === 'sleeping' || this.state === 'unauthorized') return;
     clearInterval(this.pingTimer);
     this.client = undefined;
     if (this.stopping) {
       this.state = 'stopped';
+      return;
+    }
+    if (outcome === 'unauthorized') {
+      // Restarting cannot help: the upstream wants a human. Sitting in a
+      // five-minute retry loop forever would only hammer it and hide the reason
+      // behind a state that looks like an ordinary outage.
+      this.state = 'unauthorized';
+      this.lastError = reason;
+      this.rejectWakeWaiters(new Error(`Server "${this.name}" needs an upstream login`));
+      console.error(`[${this.name}] unauthorized (${reason}); run: mcp-hub-admin upstream login ${this.name}`);
       return;
     }
     this.state = 'down';
@@ -356,6 +412,20 @@ export class ManagedServer {
     }, this.backoffMs);
     this.restartTimer.unref();
     this.backoffMs = Math.min(this.backoffMs * 2, BACKOFF_MAX_MS);
+  }
+
+  /**
+   * Try again now that a credential may exist — called after the callback route
+   * completed a login, or by the admin CLI's refresh. Does nothing unless the
+   * server is actually waiting for one.
+   */
+  reauthorize(): void {
+    if (this.state !== 'unauthorized') return;
+    this.backoffMs = this.options.backoffInitialMs ?? BACKOFF_INITIAL_MS;
+    // onExit() ignores a report while the state is already terminal, so it has
+    // to be left before the next attempt can report anything.
+    this.state = 'down';
+    void this.start();
   }
 
   private async shutdown(): Promise<void> {
@@ -397,6 +467,45 @@ export interface SupervisorOptions {
   cache?: ToolCache;
   sweepIntervalMs?: number;
   wakeTimeoutMs?: number;
+  /** Backs outbound OAuth for remote servers. Absent in stdio mode without a
+   *  DATA_PATH, where there is nowhere to keep a token. */
+  upstreamAuth?: UpstreamAuthRegistry;
+}
+
+/**
+ * One credential manager per server name, outliving the ManagedServer.
+ *
+ * applyDiff() throws the ManagedServer away and builds a new one for any config
+ * change at all — a header edit included — so a manager held there would lose
+ * its in-flight refresh and its single-flight guarantee whenever the config file
+ * was touched. Keyed by name and rebuilt only when the credential fingerprint
+ * actually changes.
+ */
+export class UpstreamAuthRegistry {
+  private readonly managers = new Map<string, { fingerprint: string; auth: UpstreamAuth }>();
+
+  constructor(
+    private readonly store: AuthStore,
+    private readonly externalUrl: string
+  ) {}
+
+  for(name: string, config: RemoteServerConfig): UpstreamAuth | undefined {
+    if (!config.oauth) return undefined;
+    const auth = new UpstreamAuth(name, config, this.store, this.externalUrl);
+    const fingerprint = credentialFingerprint(auth.identity);
+    const existing = this.managers.get(name);
+    if (existing?.fingerprint === fingerprint) return existing.auth;
+    this.managers.set(name, { fingerprint, auth });
+    return auth;
+  }
+
+  get(name: string): UpstreamAuth | undefined {
+    return this.managers.get(name)?.auth;
+  }
+
+  forget(name: string): void {
+    this.managers.delete(name);
+  }
 }
 
 export class Supervisor {
@@ -415,7 +524,8 @@ export class Supervisor {
 
   private buildManaged(name: string, cfg: ServerConfig): ManagedServer {
     if ((cfg.kind !== 'stdio' && cfg.kind !== 'docker') || cfg.keepAlive || this.idleTimeoutMinutes <= 0) {
-      return new ManagedServer(name, cfg);
+      const auth = cfg.kind === 'remote' ? this.options.upstreamAuth?.for(name, cfg) : undefined;
+      return new ManagedServer(name, cfg, auth ? { auth } : {});
     }
     return new ManagedServer(name, cfg, {
       onDemand: true,
@@ -524,6 +634,10 @@ export class Supervisor {
         this.servers.delete(name);
       }
       this.options.cache?.delete(name);
+      // Only for servers that are gone. A `changed` one keeps its manager
+      // unless the credential fingerprint moved, so editing a header does not
+      // discard a perfectly good refresh token.
+      if (diff.removed.includes(name)) this.options.upstreamAuth?.forget(name);
     }
     await Promise.all(
       [...diff.added, ...diff.changed].map(name => {
