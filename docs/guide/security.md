@@ -71,10 +71,16 @@ runtime root filesystem read-only.
 - [ ] `/data` on a persistent, private volume
 - [ ] `RESOURCE_BOUND_TOKENS` left at its default (`true`) — the migration
       mode is not still switched off
+- [ ] `CIMD_ALLOWED_ORIGINS` set to the origins you actually expect, unless you
+      deliberately want any HTTPS origin to be able to ask for consent
+- [ ] `CIMD_ALLOW_PRIVATE_ADDRESSES` **not** set — it is a local-development
+      switch and turns off the guard that keeps a `client_id` from being aimed
+      at your internal network
 - [ ] The example's non-root user, dropped capabilities, read-only root
       filesystem, `pids_limit`, memory limit and `no-new-privileges`
 - [ ] `/data/jwt-key.pem`, `/data/state.json`, the MCP config and every
-      referenced environment variable treated as secrets
+      referenced environment variable treated as secrets — with `state.json`
+      handled as **third-party** credentials once any upstream uses OAuth
 - [ ] Outbound network access restricted to what the configured servers need
 - [ ] `/var/run/docker.sock` mounted **only** into `mcp-hub-docker-proxy`, never
       into the hub, and both images on the same version
@@ -87,12 +93,86 @@ runtime root filesystem read-only.
 approve a client and reach every server the hub exposes. Use a strong one and
 store the bcrypt hash, not the plain text.
 
-**Registration is open, approval is not.** Dynamic client registration is
-unauthenticated, as the MCP specification intends. Registering grants nothing —
-a client receives an authorization code only after you confirmed it, and only
-at the redirect URI you confirmed. Never-approved registrations are pruned at a
-fixed cap of 100, so an open endpoint cannot grow the state file without bound;
-approved clients are never pruned.
+**Identifying yourself is open, approval is not.** Both ways of obtaining a
+`client_id` — a [Client ID Metadata
+Document](/guide/client-registration#client-id-metadata-documents) or
+[dynamic registration](/guide/client-registration#dynamic-client-registration) —
+are unauthenticated, as the MCP specification intends. Neither grants anything:
+a client receives an authorization code only after you confirmed it, and only at
+the redirect URI you confirmed. Metadata documents are not stored at all.
+
+**Registrations do not accumulate.** A dynamic registration that is never
+approved is dropped after a day, an approved one nobody has used after 90 days —
+together with its approval and refresh tokens — and the store holds at most 500.
+When the ceiling is reached the oldest never-approved registrations are evicted
+first; if every one of them has been approved, the new registration is refused
+instead, so nobody can push a working connector out by registering repeatedly.
+A client can also remove its own registration
+([RFC 7592](/guide/client-registration#managing-a-registration-rfc-7592)) with
+the credential it was issued at registration, of which only a hash is stored.
+Changing the redirect URIs through that interface withdraws the approval:
+consent was given for a destination, and it does not transfer to a new one.
+
+**A metadata document is fetched, not trusted.** The URL is chosen by an
+unauthenticated caller, so the request is treated as hostile: `https` only, no
+redirects followed, private, loopback, link-local and CGNAT addresses refused
+after DNS resolution, a 5 kB cap enforced while reading, a 5-second timeout, and
+a JSON content type required. The name is resolved once and the connection is
+pinned to the address that was checked, so a zone that answers differently the
+second time cannot move the request onto an internal address. The document must
+carry the same `client_id` it was fetched from, must not contain a
+`client_secret`, and may only declare `none` or `private_key_jwt`. The `jwks_uri`
+of a `private_key_jwt` client is fetched through the same guards, under a 64 kB
+cap of its own. Concurrent lookups collapse into one request, rejections are
+remembered briefly, and an origin that keeps failing is left alone for a while —
+the query string is part of the `client_id`, so per-URL memory alone would not
+stop one host from being fetched over and over. Every rejection answers a bare
+`invalid_client`; the reason goes to the log only, so the policy cannot be
+mapped by probing.
+
+**The hub is also an OAuth client, outwards.** An upstream with an
+[`oauth` block](/guide/configuration#upstreams-that-speak-oauth) is reached with
+a token the hub obtained itself. Three things follow. The tokens are stored in
+`state.json` in the clear, because they have to be presented — that file already
+held live secrets, but it now holds credentials to a *third party*, which is
+worth reflecting in how the volume is treated. The authorization server is found
+by following the upstream's own metadata, so that URL is not the operator's
+choice: discovery, token and registration requests go through the same guard as
+an inbound metadata document, and an upstream that is publicly reachable cannot
+point the hub at a private address. And the configured `headers` are never sent
+to the authorization server, nor is an upstream token — the two request paths
+are kept apart deliberately, because the SDK hands the same fetch to both.
+
+**Nothing a client chooses can forge a log line.** A `client_id` may contain
+newlines — the URL parser strips them, so such a value passes every structural
+check while the raw string still reaches the log, where each line is given a
+valid timestamp. A forged `mcp-hub: authentication failure from …` line matches
+the fail2ban filter this project ships, which would have let anyone have any
+address banned. Every client-chosen value is escaped and capped before it enters
+a log line. The same clamping applies to a self-declared `client_name` before it
+reaches the consent page: escaping alone still renders it, and a few hundred
+characters would push the redirect target out of view.
+
+**Finishing an upstream login takes more than the redirect.** The callback is
+public by necessity, so it requires a `state` that is HMAC-signed with the hub's
+own secret, single-use, and valid for fifteen minutes — *and* a valid hub
+session in the same browser. Intercepting the redirect is not enough.
+
+**Codes only travel somewhere they cannot be read off the wire.** Both
+registration mechanisms hold `redirect_uris` to the same rule: `https` anywhere,
+plain `http` only on a loopback address, and — for dynamic registration, which
+native clients use — an application-specific scheme such as
+`com.example.app:/callback`. A plaintext callback on a remote host is refused at
+registration, because the code would otherwise be delivered in the clear on the
+final redirect.
+
+**The consent page names what cannot be forged.** For a metadata-document
+client the page shows the document URL under *Identified by* — the name and
+logo in that document are self-declared, the origin serving it is not
+([draft §6.4](https://datatracker.ietf.org/doc/html/draft-ietf-oauth-client-id-metadata-document-00#name-security-considerations)).
+When every redirect URI is a loopback address, the page says so: a code sent to
+`http://127.0.0.1:…` could be collected by any program on that machine, and no
+registration mechanism can change that.
 
 **Consent is explicit.** Entering the password approves the client that asked
 for it. While a login session is still valid, a client the hub has not seen
@@ -139,6 +219,11 @@ The auth limiters run **before** body parsing, and they reject without
 inserting the offending IP into their tables, so a flood of forged addresses
 cannot grow memory. The global counters exist precisely because an attacker who
 rotates `X-Forwarded-For` would otherwise dodge the per-IP limit.
+
+Metadata-document fetches inherit the `/authorize` and `/token` limits, and are
+throttled further on their own: a document is cached for at least a minute, a
+rejected `client_id` for 30 seconds, concurrent lookups of the same URL collapse
+into one request, and the cache holds at most 200 entries.
 
 MCP traffic is limited per OAuth client rather than per IP: behind a reverse
 proxy every client shares one source address, so an IP key would let one

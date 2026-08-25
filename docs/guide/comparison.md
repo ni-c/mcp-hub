@@ -25,9 +25,10 @@ a browser and caching the tokens.
 
 It points the opposite way from mcp-hub: it adapts remote servers for local
 clients; mcp-hub adapts local servers for remote clients. They are
-complementary, not alternatives — mcp-hub can even run `mcp-remote` as one of
-its stdio children to reach an upstream whose OAuth needs a browser
-([how](/guide/configuration#upstreams-with-interactive-oauth)).
+complementary, not alternatives. mcp-hub no longer needs it for its own
+upstreams, though: it is an
+[OAuth client in its own right](/guide/configuration#upstreams-that-speak-oauth)
+and obtains and refreshes those tokens itself.
 
 **Use `mcp-remote` if** your servers are already remote and your clients are
 local.
@@ -63,10 +64,11 @@ Two reasons people still route them through mcp-hub:
 
 - **One connector.** Adding them to `/hub` keeps the client's connector list
   and its context small.
-- **One authentication story.** The hub holds the upstream credential in a
-  header and presents its own OAuth outward, so a client never sees the
-  upstream's token — and an expired upstream credential shows up as one server
-  `down` in `/health` instead of a confusing 401 in the client.
+- **One authentication story.** The hub holds the upstream credential — a
+  header, or an OAuth token it obtained and refreshes itself — and presents its
+  own OAuth outward, so a client never sees the upstream's token. An upstream
+  that needs re-authorizing shows up as one server `unauthorized` in `/health`
+  instead of a confusing 401 in the client.
 
 ## Hosted or commercial MCP gateways
 
@@ -87,7 +89,8 @@ small trusted group running their own infrastructure.
 | Certificates / hostnames | none | none | N | 1 |
 | Logins to maintain | none | per server | N | 1 |
 | Isolation between servers | n/a | n/a | **strong** | none (same user) |
-| Context cost for N servers | N × tools | N × tools | N × tools | 4 meta-tools via `/hub` |
+| Context cost for N servers | N × tools | N × tools | N × tools | 6 meta-tools via `/hub` |
+| Upstream OAuth handled for you | no | yes, per client | no | yes, per hub |
 | Multi-user, roles, audit | no | no | depends | no |
 
 If the isolation row is the one that matters for your setup, use separate

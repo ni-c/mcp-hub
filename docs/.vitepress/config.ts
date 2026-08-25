@@ -10,7 +10,7 @@ const { version } = JSON.parse(readFileSync(fileURLToPath(new URL('../../package
 
 const site = 'https://mcp-hub.ni-c.de';
 const description =
-  'Serve many stdio MCP servers from one container: Claude-Code-style config, path-based routing, hub meta-tools, and OAuth 2.1 + API tokens for ChatGPT, Claude and any Streamable-HTTP MCP client.';
+  'Serve many stdio MCP servers from one container: Claude-Code-style config, path-based routing, hub meta-tools, and OAuth 2.1 in both directions — dynamic registration and client ID metadata documents for the clients that connect, and for the upstreams the hub connects to.';
 
 export default defineConfig({
   title: 'mcp-hub',
@@ -69,6 +69,7 @@ export default defineConfig({
             { text: 'Deployment', link: '/guide/deployment' },
             { text: 'Sandboxing servers', link: '/guide/sandboxing' },
             { text: 'On-demand servers', link: '/guide/on-demand' },
+            { text: 'Client registration', link: '/guide/client-registration' },
             { text: 'Security', link: '/guide/security' },
             { text: 'FAQ & troubleshooting', link: '/guide/faq' }
           ]
@@ -88,6 +89,8 @@ export default defineConfig({
             { text: 'HTTP endpoints', link: '/reference/endpoints' },
             { text: 'Hub meta-tools', link: '/reference/hub-tools' },
             { text: 'Environment variables', link: '/reference/environment' },
+            { text: 'Admin CLI', link: '/reference/admin-cli' },
+            { text: 'Standards', link: '/reference/standards' },
             { text: 'Changelog', link: '/reference/changelog' }
           ]
         }

@@ -177,7 +177,7 @@ services:
       - "proxy-sock:/run/proxy"
 
   mcp-hub:
-    image: ghcr.io/ni-c/mcp-hub:0.7.0   # pin a digest in production
+    image: ghcr.io/ni-c/mcp-hub:0.10.0   # pin a digest in production
     depends_on: [docker-proxy]
     environment:
       DOCKER_HOST: "unix:///run/proxy/docker.sock"

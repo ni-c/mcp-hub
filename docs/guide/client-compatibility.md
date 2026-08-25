@@ -9,9 +9,15 @@ The ecosystem falls into three camps.
 ## Camp 1 — OAuth clients (use the normal flow)
 
 These implement the MCP authorization spec: they discover the hub through the
-`.well-known` documents, register themselves, open a browser for the password
+`.well-known` documents, obtain a `client_id`, open a browser for the password
 login, and refresh silently. [Connecting clients](/guide/clients) covers the
 general flow; below are the per-client notes.
+
+Since 0.10.0 the hub accepts both registration mechanisms — [Client ID Metadata
+Documents](/guide/client-registration#client-id-metadata-documents) and
+[dynamic registration](/guide/client-registration#dynamic-client-registration) —
+and advertises both, so each client takes whichever path it prefers. The notes
+below say which one that is where it matters.
 
 | Client | Notes |
 |---|---|
@@ -23,9 +29,9 @@ general flow; below are the per-client notes.
 | **Gemini CLI** | Use `httpUrl` (not `url`) for Streamable HTTP. Its resource check compares strictly — connect to the exact URL the path-scoped metadata names, e.g. `https://…/paperless/mcp`, not a shortened form. [Step by step](/guide/clients#gemini-cli). |
 | **qwen-code** | Also `httpUrl`. OAuth callback is fixed to port 7777 (`--oauth-redirect-uri` overrides). |
 | **Kimi Code CLI** | `kimi mcp add --transport http --auth oauth <name> <url>`; re-registers with a fresh random loopback port per flow, which the hub accepts. |
-| **VS Code (GitHub Copilot)** | `type: "http"` in `.vscode/mcp.json`; OAuth automatic. Redirects `http://127.0.0.1:33418` and `https://vscode.dev/redirect` arrive via DCR. |
+| **VS Code (GitHub Copilot)** | `type: "http"` in `.vscode/mcp.json`; OAuth automatic. Recent builds identify themselves with the metadata document at `https://vscode.dev/oauth/client-metadata.json`; older ones register dynamically. Either way the redirects are `http://127.0.0.1:33418` and `https://vscode.dev/redirect`. |
 | **Codex CLI** | Pass the resource when adding the server: `codex mcp add <name> --url <url> --oauth-resource <url>`; builds without that flag need `oauth_resource` written into `config.toml` by hand. Older Codex builds omit the resource on refresh — the hub tolerates that and keeps the binding from the original grant. [Step by step](/guide/clients#codex-cli). |
-| **ChatGPT connectors** | Works through DCR (developer mode → custom connector), but the OAuth endpoints have to be filled in by hand — ChatGPT disables the DCR option until a registration URL is present. The hub plays along with its registration quirks: public clients get a non-expiring `client_secret` in the response, and registrations are never garbage-collected once approved. ChatGPT's newer CIMD path (`private_key_jwt`) is not supported yet — see the roadmap issue. [Step by step](/guide/clients#chatgpt). |
+| **ChatGPT connectors** | Both paths work (developer mode → custom connector), but the OAuth endpoints have to be filled in by hand. CIMD with `private_key_jwt` is its preferred path and is supported since 0.10.0 — the per-connector document URL is random, so allowlist the origin `https://chatgpt.com`, never an exact URL. On the DCR path the hub plays along with its quirks: public clients get a non-expiring `client_secret` in the response. An approved registration is kept as long as it is used; see the [lifecycle rules](/guide/client-registration#registrations-do-not-accumulate). [Step by step](/guide/clients#chatgpt). |
 | **Copilot Studio / M365 Copilot** | "Dynamic discovery" mode should work since the hub now issues client secrets on registration. Untested — reports welcome. |
 
 Clients that omit the RFC 8707 `resource` parameter entirely are refused by

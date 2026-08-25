@@ -99,9 +99,18 @@ Code, so the file stays interchangeable.
 
 **The `/hub` aggregate.** Registering nine connectors means nine servers' worth
 of tool schemas in the model's context before a single question is asked.
-`/hub` is one connector that exposes four meta-tools — `list_servers`,
+`/hub` is one connector that exposes six meta-tools — `list_servers`,
 `list_tools`, `get_tool_schema`, `call_tool` — and lets the model page in only
 the schema it actually needs. Four schemas instead of N×tools.
+
+**Client registration that does not need registering.** The hub is its own
+OAuth 2.1 authorization server, and it takes the path the MCP specification now
+prefers: a client uses an HTTPS URL as its `client_id` and hosts its own
+[metadata document](/guide/client-registration) there, including the keys it
+authenticates with. Nothing is issued, nothing expires, and a client that
+reinstalls is still the same client. RFC 7591 dynamic registration stays
+advertised beside it, so older clients keep working — and one setting retires it
+when you no longer need it.
 
 **Real supervision.** Children start at boot, get pinged every 60 seconds and
 are restarted with exponential backoff when they die. A server that is down
@@ -136,5 +145,6 @@ keeps the hub comfortable on a single-board computer.
 
 - [Getting started](/guide/getting-started) — a working deployment
 - [Configuration](/guide/configuration) — writing your `mcp.json`
+- [Client registration](/guide/client-registration) — how clients get a `client_id`
 - [Architecture](/guide/architecture) — what happens inside
 - [Comparison](/guide/comparison) — when something else fits better

@@ -42,8 +42,10 @@ Returns one entry per hub-enabled server:
 ```
 
 `description` is the child's advertised title, falling back to its server name.
-`status` is `starting`, `up`, `down` or `sleeping`. Listing never wakes
-anything — `sleeping` entries still show their cached `toolCount`. `hidden`
+`status` is `starting`, `up`, `down`, `sleeping` or `unauthorized`. Listing
+never wakes anything — `sleeping` entries still show their cached `toolCount`,
+and `unauthorized` means a remote server whose
+[upstream OAuth](/guide/configuration#upstreams-that-speak-oauth) needs a login. `hidden`
 appears only on `"hub": false` servers: their tools are served exclusively by
 their own endpoint, but `wake_server`/`sleep_server` accept them.
 

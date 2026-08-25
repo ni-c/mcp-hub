@@ -79,8 +79,10 @@ for. A client that changes its redirect target counts as new. Loopback URIs
 picking a fresh port each time is not the cause.
 
 Check `mcp-hub-admin clients list` — if the same client name appears many times
-with different IDs, the client is re-registering instead of persisting its
-credentials.
+with different IDs, and the `via` column says `dcr`, the client is
+re-registering instead of persisting its credentials. A client that uses a
+[metadata document](/guide/client-registration) cannot have this problem: its
+ID is a URL that does not change.
 
 ### `/health` returns 401
 
@@ -172,7 +174,7 @@ passes it through to its own stderr.
 
 Names must match `[a-zA-Z0-9_-]+`, and these are reserved because the hub
 serves them itself: `mcp`, `hub`, `authorize`, `token`, `register`, `login`,
-`consent`, `health`, `livez`, `revoke`, `.well-known`.
+`consent`, `health`, `livez`, `revoke`, `upstream`, `.well-known`.
 
 ### A server shows `sleeping` / the first tool call is slow
 
@@ -181,6 +183,34 @@ by default and sleep after 60 minutes of inactivity. The first call to a
 sleeping server pays its cold start; everything after that is normal. If one
 server's cold start bothers you, give it `"keepAlive": true`; to disable the
 feature entirely, set `IDLE_TIMEOUT_MINUTES: "0"`.
+
+### A server shows `unauthorized`
+
+That is a remote server with an
+[`oauth` block](/guide/configuration#upstreams-that-speak-oauth) whose token is
+missing, expired beyond recovery, or refused by the upstream. Unlike `down` it
+is **not** retried: another attempt cannot produce a credential, and hammering
+an upstream that has already said no helps nobody.
+
+```sh
+docker exec mcp-hub node /app/dist/admin.js upstream status <name>
+```
+
+`login_required` means there is nothing stored — run `upstream login <name>` and
+open the URL it prints in a browser signed in to this hub. `stale` means the
+stored credential belongs to a configuration that has since changed, so a fresh
+login is needed. For a `client_credentials` upstream there is no browser step;
+`upstream refresh <name>` will show you the actual error.
+
+The server comes up on its own once the login succeeds — no restart needed.
+
+### An upstream login says "Not signed in"
+
+The callback deliberately requires two things: the signed, single-use `state`
+the CLI generated, **and** a valid hub session in the same browser. Open
+`https://your-hub/` first, sign in with the hub password, then open the
+authorization URL again. Without the session check, anyone who intercepted the
+redirect could finish somebody else's login.
 
 ### A crashed server stopped restarting
 

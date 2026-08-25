@@ -93,7 +93,7 @@ docker run -d --name mcp-hub \
   -e PAPERLESS_API_TOKEN="…" \
   -v "$PWD/config:/config:ro" \
   -v "$PWD/data:/data" \
-  ghcr.io/ni-c/mcp-hub:0.6.0
+  ghcr.io/ni-c/mcp-hub:0.10.0
 ```
 
 Two of those matter more than the rest:
@@ -137,7 +137,7 @@ The proxy has to:
 - allow a request to run longer than 310 seconds — MCP tool calls are long,
 - cap request bodies at or below `MCP_BODY_LIMIT` (default 1 MB).
 
-Sample configurations for nginx, Caddy and Traefik are on the
+Sample configurations for nginx and Caddy are on the
 [deployment page](/guide/deployment#reverse-proxy).
 
 ## 7. Connect a client

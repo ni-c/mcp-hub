@@ -5,7 +5,7 @@
   Regenerate with: npm run assets
 -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 320" width="800" height="320" role="img" aria-labelledby="flow-title">
-  <title id="flow-title">Request flow from an MCP client through a reverse proxy into mcp-hub and on to its child servers</title>
+  <title id="flow-title">Request flow from an MCP client through a reverse proxy into mcp-hub, which is an OAuth 2.1 authorization server for its clients and an OAuth client toward its own upstreams, and on to its child servers</title>
 
   <style>
     .node { stroke-width: 1.25; }
@@ -51,7 +51,8 @@
   <text x="478" y="68" text-anchor="middle" class="label-muted">one Node process</text>
 
   <rect class="node" x="384" y="84" width="188" height="44" rx="8" />
-  <text x="478" y="111" text-anchor="middle" class="label-mono">OAuth 2.1 AS</text>
+  <text x="478" y="104" text-anchor="middle" class="label-mono">OAuth 2.1</text>
+  <text x="478" y="120" text-anchor="middle" class="label-muted">server in · client out</text>
 
   <rect class="node" x="384" y="140" width="188" height="44" rx="8" />
   <text x="478" y="167" text-anchor="middle" class="label-mono">/hub · /&lt;name&gt;/mcp</text>
@@ -71,7 +72,7 @@
 
   <rect class="node" x="650" y="212" width="146" height="56" rx="10" />
   <text x="723" y="236" text-anchor="middle" class="label-mono">homeassistant</text>
-  <text x="723" y="254" text-anchor="middle" class="label-muted">remote http/sse</text>
+  <text x="723" y="254" text-anchor="middle" class="label-muted">remote · OAuth out</text>
 
   <path class="edge-accent" d="M154 160 L194 160" marker-end="url(#arrow-flow-accent)" />
   <text x="174" y="149" text-anchor="middle" class="label-muted">TLS</text>

@@ -39,7 +39,7 @@ These names are reserved and rejected at load time, because the hub itself
 serves them:
 
 `mcp` · `hub` · `authorize` · `token` · `register` · `login` · `consent` ·
-`health` · `livez` · `revoke` · `.well-known`
+`health` · `livez` · `revoke` · `upstream` · `.well-known`
 
 The check is case-insensitive — `Hub` is rejected just like `hub`.
 
@@ -90,29 +90,111 @@ A server that already speaks HTTP does not need a child process. Give it a
 | `type` | `http` (also accepted: `streamable-http`, `streamable_http`) or `sse`. Omitting `type` but giving a `url` implies a remote server. |
 | `url` | required, must parse as a URL |
 | `headers` | optional object of strings, injected on **every** request to that upstream |
+| `oauth` | optional; the hub authenticates itself with OAuth instead — see below |
 | `command` | not allowed together with `url` |
 
 Remote servers get the same treatment as children: connected at boot, pinged,
 reconnected with backoff, reloaded on config change.
 
-### Upstreams with interactive OAuth
+### Upstreams that speak OAuth
 
-Static headers cannot drive an OAuth flow that expects a browser. Bridge those
-with an [`mcp-remote`](https://github.com/geelen/mcp-remote) stdio entry and
-persist its token cache under `/data`:
+Where a static header is not enough, the hub can be an OAuth client in its own
+right. It obtains and refreshes the token itself; no bridge process is involved.
 
 ```json
 "some-saas": {
-  "command": "mcp-remote",
-  "args": ["https://saas.example.net/mcp"],
-  "env": { "MCP_REMOTE_CONFIG_DIR": "/data/mcp-remote" }
+  "type": "http",
+  "url": "https://saas.example.net/mcp",
+  "oauth": {
+    "mode": "static",
+    "clientId": "abc123",
+    "clientSecret": "${SAAS_SECRET}",
+    "grant": "client_credentials",
+    "scopes": ["mcp.read", "mcp.write"]
+  }
 }
 ```
 
-Be aware that a bridge with rotating refresh tokens and a supervisor that
-restarts on failure can fight each other: if the bridge rotates its token and
-then crashes before persisting it, the restart loops. Prefer an upstream that
-accepts a long-lived token in a header where you have the choice.
+| Field | Notes |
+|---|---|
+| `mode` | `static` (credentials the upstream issued you), `dcr` ([RFC 7591](https://www.rfc-editor.org/rfc/rfc7591) dynamic registration) or `cimd` (the hub's own client metadata document) |
+| `grant` | `client_credentials` for a machine-to-machine upstream, `authorization_code` where a person has to sign in |
+| `clientId` | required for `static`, and only allowed there — the other modes get one from the upstream |
+| `clientSecret` | optional, `static` only. Use `${VAR}` so it lives in the environment, not the file |
+| `clientAuth` | optional: `client_secret_basic`, `client_secret_post` or `private_key_jwt`. Unset lets the upstream's metadata decide, which is what almost every upstream wants |
+| `scopes` | optional array; sent at registration, authorization and token request alike |
+
+`oauth` and a literal `Authorization` header are mutually exclusive and rejected
+at startup: the OAuth token would either be overridden by the static header or,
+worse, the header would be carried to the authorization server.
+
+**`client_credentials` needs no attention.** The hub fetches a token at connect
+time and renews it on its own; nothing to run, nothing to click.
+
+**`authorization_code` needs one browser visit, once.** The hub cannot open a
+browser, so the flow is started from the console and finished in yours:
+
+```sh
+docker exec mcp-hub node /app/dist/admin.js upstream login some-saas
+```
+
+It prints a URL. Open it in a browser **that is signed in to the hub**, approve
+the upstream, and the redirect lands back on the hub, which stores the tokens
+and connects the server. The command waits and reports when that has happened.
+
+Both halves of that sentence matter: the callback checks a signed, single-use
+`state` **and** a valid hub session, so intercepting the redirect is not enough
+to complete somebody else's login.
+
+**`private_key_jwt` instead of a shared secret.** Set
+`"clientAuth": "private_key_jwt"` and the hub signs an assertion with a key of
+its own rather than presenting a secret. The key lives at
+`<DATA_PATH>/upstream-key.pem`, is created on first use, and is deliberately not
+the key that signs the tokens the hub issues to its own clients — one key, one
+job. The public half travels with the client metadata document or the
+registration request, which is how the upstream verifies the assertion. It
+cannot be combined with a `clientSecret`.
+
+`cimd` additionally requires an `https` `EXTERNAL_URL` — the upstream fetches
+the hub's client metadata document, and each `cimd` upstream gets its own at
+`<EXTERNAL_URL>/.well-known/mcp-hub-client/<id>.json`. The identifier is derived
+from the server name rather than being it, because that URL is public and your
+server names are not. Two upstreams can therefore use `cimd` with different
+scopes without one inheriting the other's.
+
+### When an upstream needs attention
+
+A server whose token is missing or no longer accepted does not sit in a restart
+loop. It enters a distinct `unauthorized` state, visible in `/health` and in
+`list_servers`, and the log says which command to run. Retrying would only
+hammer an upstream that has already made up its mind.
+
+```sh
+docker exec mcp-hub node /app/dist/admin.js upstream list
+docker exec mcp-hub node /app/dist/admin.js upstream status some-saas
+docker exec mcp-hub node /app/dist/admin.js upstream refresh some-saas
+docker exec mcp-hub node /app/dist/admin.js upstream register some-saas
+docker exec mcp-hub node /app/dist/admin.js upstream logout some-saas
+```
+
+`logout` forgets the credentials here **and** asks the upstream to revoke the
+token ([RFC 7009](https://www.rfc-editor.org/rfc/rfc7009)) and delete a dynamic
+registration ([RFC 7592](https://www.rfc-editor.org/rfc/rfc7592)). If the
+upstream cannot be reached, the local side still goes away and the command says
+what failed.
+
+Credentials are keyed to the configuration that obtained them. Change the `url`,
+the mode, the grant or the scopes and the stored token is treated as belonging
+to an identity the upstream no longer knows — `upstream list` shows it as
+`stale` and a fresh login is needed. Editing a header or renaming the server
+changes nothing.
+
+::: tip stdio mode
+`mcp-hub --stdio` has no HTTP listener, so a login cannot complete there. Point
+`DATA_PATH` at the same `/data` an HTTP hub uses and it will reuse — and
+refresh — a token authorized there. Without `DATA_PATH` such a server is
+skipped, with one line saying so.
+:::
 
 ## Sandboxed servers
 
