@@ -1,21 +1,23 @@
 # mcp-hub
 
-[![CI](https://github.com/ni-c/mcp-hub/actions/workflows/ci.yml/badge.svg)](https://github.com/ni-c/mcp-hub/actions/workflows/ci.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/ni-c/mcp-hub/ci.yml?branch=main&label=CI)](https://github.com/ni-c/mcp-hub/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/%40ni-c%2Fmcp-hub)](https://www.npmjs.com/package/@ni-c/mcp-hub)
 [![npm downloads](https://img.shields.io/npm/dm/%40ni-c%2Fmcp-hub)](https://www.npmjs.com/package/@ni-c/mcp-hub)
-[![Container](https://img.shields.io/badge/ghcr.io-ni--c%2Fmcp--hub-2496ED?logo=docker&logoColor=white)](https://github.com/ni-c/mcp-hub/pkgs/container/mcp-hub)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Docs](https://img.shields.io/badge/docs-mcp--hub.ni--c.de-4f46e5)](https://mcp-hub.ni-c.de)
-[![Sponsor](https://img.shields.io/badge/sponsor-ni--c-ea4aaa?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/ni-c)
+[![node](https://img.shields.io/node/v/%40ni-c%2Fmcp-hub)](https://nodejs.org)
+[![license](https://img.shields.io/npm/l/%40ni-c%2Fmcp-hub)](LICENSE)
+[![container](https://img.shields.io/badge/ghcr.io-ni--c%2Fmcp--hub-blue)](https://github.com/ni-c/mcp-hub/pkgs/container/mcp-hub)
+[![docs](https://img.shields.io/badge/docs-mcp--hub.ni--c.de-informational)](https://mcp-hub.ni-c.de)
+[![sponsor](https://img.shields.io/badge/sponsor-ni--c-ea4aaa?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/ni-c)
 
-📖 **Full documentation: <https://mcp-hub.ni-c.de>**
+A [Model Context Protocol](https://modelcontextprotocol.io) (MCP) gateway: it serves
+many stdio MCP servers from **one container**, published over HTTPS.
 
-Serve many stdio MCP servers from **one container**, published over HTTPS for
-ChatGPT connectors, Claude (Web and Code), Mistral Le Chat, Cursor, LibreChat
-and any other Streamable-HTTP MCP client — with a built-in OAuth 2.1 login
-protected by a single password, plus long-lived API tokens for clients that
-cannot do OAuth (OpenAI Responses API, xAI API, Gemini API). Per-client
-recipes: [client compatibility](https://mcp-hub.ni-c.de/guide/client-compatibility).
+Lets MCP clients that cannot spawn a local process — ChatGPT connectors, Claude on
+the Web and in Code, Mistral Le Chat, Cursor, LibreChat and any other
+Streamable-HTTP client — reach every server behind it, with a built-in OAuth 2.1
+login protected by a single password, plus long-lived API tokens for clients that
+cannot do OAuth (OpenAI Responses API, xAI API, Gemini API). Per-client recipes:
+[client compatibility](https://mcp-hub.ni-c.de/guide/client-compatibility).
 
 <!-- <picture> is resolved against the colour scheme of the page showing it, so GitHub
      picks the variant that matches its own theme toggle. npm strips <picture> and
@@ -38,12 +40,12 @@ configure, nothing to clean up but a volume.
 ## Why
 
 Wrapping each stdio MCP server in its own auth-proxy container costs a full
-image, an OAuth stack, a hostname and a compose stack *per server*. mcp-hub
+image, an OAuth stack, a hostname and a compose stack _per server_. mcp-hub
 replaces N containers with one process:
 
 - **Config is exactly Claude Code's `mcpServers` format** — copy entries 1:1.
 - **Path-based routing**: `https://host/paperless`, `https://host/homeassistant`, …
-- **`/hub` aggregate**: register a *single* connector and reach every server
+- **`/hub` aggregate**: register a _single_ connector and reach every server
   through 6 meta-tools (`list_servers`, `list_tools`, `get_tool_schema`,
   `call_tool`, `wake_server`, `sleep_server`) without flooding the model
   context with N×tools schemas.
@@ -155,35 +157,35 @@ USER node
 
 ### Environment
 
-| Variable | Required | Description |
-|---|---|---|
-| `EXTERNAL_URL` | yes | Public base URL, e.g. `https://mcp.example.net` (no path) |
-| `PASSWORD_HASH` | one of | bcrypt hash of the login password (`htpasswd -bnBC 10 "" 'pw' \| tr -d ':\n'`) |
-| `PASSWORD` | one of | plain-text alternative to `PASSWORD_HASH` |
-| `TRUSTED_PROXIES` | no | comma-separated IPs/CIDRs allowed to set `X-Forwarded-*` (see below) |
-| `RESOURCE_BOUND_TOKENS` | no | RFC 8707 tokens bound to `/hub` or one `/<name>/mcp`, default `true`; set `false` only to keep pre-0.5 unbound tokens working |
-| `DEFAULT_RESOURCE` | no | server name (or `hub`) to bind tokens to when a client sends no `resource` parameter; unset → such requests are refused |
-| `MCP_BODY_LIMIT` | no | authenticated MCP JSON body limit, default `1mb` |
-| `MCP_REQUESTS_PER_MINUTE` | no | limit per OAuth client, default `120` |
-| `MCP_MAX_CONCURRENT_REQUESTS` | no | in-flight request limit per OAuth client, default `4` |
-| `MCP_MAX_CONCURRENT_STREAMS` | no | open SSE listening streams per OAuth client — one per connected session, default `32` |
-| `HTTP_HEADERS_TIMEOUT_MS` | no | Node HTTP header timeout, default `10000` |
-| `HTTP_REQUEST_TIMEOUT_MS` | no | complete request timeout, default `310000` (slightly above the tool-call timeout) |
-| `PORT` | no | listen port (default 80 in the image, 3000 outside) |
-| `CONFIG_PATH` | no | default `/config/mcp.json` |
-| `DATA_PATH` | no | default `/data` |
-| `LOG_FILE` | no | additionally mirror all log output into this file, e.g. `/data/mcp-hub.log` (see below) |
-| `CLIENT_REGISTRATION` | no | which mechanisms a client may use for a `client_id`: `cimd`, `dcr` or both (default) |
-| `CIMD_ALLOWED_ORIGINS` | no | bare https origins whose metadata documents are accepted; unset → any |
-| `CIMD_ALLOW_PRIVATE_ADDRESSES` | no | local development only; relaxes the SSRF guard, warns on every start |
-| `DCR_MAX_CLIENTS` | no | ceiling on stored dynamic registrations, default `500` |
-| `DCR_PENDING_TTL_HOURS` | no | how long a never-approved registration is kept, default `24` |
-| `DCR_INACTIVE_DAYS` | no | how long an unused approved registration is kept, default `90` |
-| `IDLE_TIMEOUT_MINUTES` | no | idle minutes before an on-demand server sleeps, default `60`; `0` disables it |
-| `TOOL_CACHE_PATH` | no | snapshots of sleeping servers, default `<DATA_PATH>/tool-cache.json` |
-| `MCP_CALL_TIMEOUT_MS` | no | deadline for one forwarded tool call, default `300000` |
-| `MCP_RESET_TIMEOUT_ON_PROGRESS` | no | let progress notifications extend that deadline, default `false` |
-| `DOCKER_HOST` | with docker servers | the **policy proxy's** socket; a direct daemon socket fails closed |
+| Variable                        | Required            | Description                                                                                                                   |
+| ------------------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `EXTERNAL_URL`                  | yes                 | Public base URL, e.g. `https://mcp.example.net` (no path)                                                                     |
+| `PASSWORD_HASH`                 | one of              | bcrypt hash of the login password (`htpasswd -bnBC 10 "" 'pw' \| tr -d ':\n'`)                                                |
+| `PASSWORD`                      | one of              | plain-text alternative to `PASSWORD_HASH`                                                                                     |
+| `TRUSTED_PROXIES`               | no                  | comma-separated IPs/CIDRs allowed to set `X-Forwarded-*` (see below)                                                          |
+| `RESOURCE_BOUND_TOKENS`         | no                  | RFC 8707 tokens bound to `/hub` or one `/<name>/mcp`, default `true`; set `false` only to keep pre-0.5 unbound tokens working |
+| `DEFAULT_RESOURCE`              | no                  | server name (or `hub`) to bind tokens to when a client sends no `resource` parameter; unset → such requests are refused       |
+| `MCP_BODY_LIMIT`                | no                  | authenticated MCP JSON body limit, default `1mb`                                                                              |
+| `MCP_REQUESTS_PER_MINUTE`       | no                  | limit per OAuth client, default `120`                                                                                         |
+| `MCP_MAX_CONCURRENT_REQUESTS`   | no                  | in-flight request limit per OAuth client, default `4`                                                                         |
+| `MCP_MAX_CONCURRENT_STREAMS`    | no                  | open SSE listening streams per OAuth client — one per connected session, default `32`                                         |
+| `HTTP_HEADERS_TIMEOUT_MS`       | no                  | Node HTTP header timeout, default `10000`                                                                                     |
+| `HTTP_REQUEST_TIMEOUT_MS`       | no                  | complete request timeout, default `310000` (slightly above the tool-call timeout)                                             |
+| `PORT`                          | no                  | listen port (default 80 in the image, 3000 outside)                                                                           |
+| `CONFIG_PATH`                   | no                  | default `/config/mcp.json`                                                                                                    |
+| `DATA_PATH`                     | no                  | default `/data`                                                                                                               |
+| `LOG_FILE`                      | no                  | additionally mirror all log output into this file, e.g. `/data/mcp-hub.log` (see below)                                       |
+| `CLIENT_REGISTRATION`           | no                  | which mechanisms a client may use for a `client_id`: `cimd`, `dcr` or both (default)                                          |
+| `CIMD_ALLOWED_ORIGINS`          | no                  | bare https origins whose metadata documents are accepted; unset → any                                                         |
+| `CIMD_ALLOW_PRIVATE_ADDRESSES`  | no                  | local development only; relaxes the SSRF guard, warns on every start                                                          |
+| `DCR_MAX_CLIENTS`               | no                  | ceiling on stored dynamic registrations, default `500`                                                                        |
+| `DCR_PENDING_TTL_HOURS`         | no                  | how long a never-approved registration is kept, default `24`                                                                  |
+| `DCR_INACTIVE_DAYS`             | no                  | how long an unused approved registration is kept, default `90`                                                                |
+| `IDLE_TIMEOUT_MINUTES`          | no                  | idle minutes before an on-demand server sleeps, default `60`; `0` disables it                                                 |
+| `TOOL_CACHE_PATH`               | no                  | snapshots of sleeping servers, default `<DATA_PATH>/tool-cache.json`                                                          |
+| `MCP_CALL_TIMEOUT_MS`           | no                  | deadline for one forwarded tool call, default `300000`                                                                        |
+| `MCP_RESET_TIMEOUT_ON_PROGRESS` | no                  | let progress notifications extend that deadline, default `false`                                                              |
+| `DOCKER_HOST`                   | with docker servers | the **policy proxy's** socket; a direct daemon socket fails closed                                                            |
 
 The full table, including what applies in stdio mode, is in the
 [environment reference](https://mcp-hub.ni-c.de/reference/environment).
@@ -205,7 +207,7 @@ invalidates those unbound tokens, so every connector authorizes once more.
 
 `TRUSTED_PROXIES` decides what `req.ip` is, and therefore what the login rate
 limiter counts. List **only** your own reverse proxy, and make sure it
-*overwrites* `X-Forwarded-For` rather than appending to it — otherwise a
+_overwrites_ `X-Forwarded-For` rather than appending to it — otherwise a
 client can supply its own address and rotate it to sidestep the per-IP limit.
 If the variable is unset, every request appears to come from the proxy and
 per-IP limiting degrades to a single global counter (the hub logs a warning
@@ -235,7 +237,7 @@ With compose, copy the example and point it at the image instead of building:
 ```yaml
 services:
   mcp-hub:
-    image: ghcr.io/ni-c/mcp-hub:0.10.0   # replaces `build: .`; pin a digest in production
+    image: ghcr.io/ni-c/mcp-hub:0.10.0 # replaces `build: .`; pin a digest in production
     # ...rest of docker-compose.example.yml unchanged
 ```
 
@@ -298,7 +300,7 @@ see [client compatibility](https://mcp-hub.ni-c.de/guide/client-compatibility).
 
 Each client is confirmed once. Entering the password approves the client that
 asked; while a login session is still valid, a client you have not seen before
-gets an explicit *Approve / Deny* page instead of a code. Approved clients
+gets an explicit _Approve / Deny_ page instead of a code. Approved clients
 reconnect silently from then on.
 
 List clients or revoke one. The CLI shares `/data` with the running hub and
@@ -336,18 +338,18 @@ immediately. Per-client recipes:
 
 ## Endpoints
 
-| Path | Auth | Purpose |
-|---|---|---|
-| `/<name>`, `/<name>/mcp` | Bearer | Streamable HTTP endpoint of one server |
-| `/hub` | Bearer | aggregate endpoint with the 6 meta-tools |
-| `/livez` | none | minimal process liveness (`200`) |
-| `/health` | Bearer | per-server status (`200` all up / `503` degraded) |
-| `/authorize`, `/token`, `/register`, `/login`, `/consent`, `/revoke` | — | OAuth 2.1 · CIMD + DCR |
-| `/register/<client_id>` | registration token | RFC 7592: a client reads, changes or removes its own registration |
-| `/upstream/callback` | signed state + hub session | where an upstream returns after `upstream login` |
-| `/.well-known/mcp-hub-client/<id>.json` | none | the hub's own client metadata document, one per `cimd` upstream |
-| `/.well-known/oauth-authorization-server[/…]` | none | RFC 8414 metadata |
-| `/.well-known/oauth-protected-resource[/…]` | none | RFC 9728 metadata (path-scoped) |
+| Path                                                                 | Auth                       | Purpose                                                           |
+| -------------------------------------------------------------------- | -------------------------- | ----------------------------------------------------------------- |
+| `/<name>`, `/<name>/mcp`                                             | Bearer                     | Streamable HTTP endpoint of one server                            |
+| `/hub`                                                               | Bearer                     | aggregate endpoint with the 6 meta-tools                          |
+| `/livez`                                                             | none                       | minimal process liveness (`200`)                                  |
+| `/health`                                                            | Bearer                     | per-server status (`200` all up / `503` degraded)                 |
+| `/authorize`, `/token`, `/register`, `/login`, `/consent`, `/revoke` | —                          | OAuth 2.1 · CIMD + DCR                                            |
+| `/register/<client_id>`                                              | registration token         | RFC 7592: a client reads, changes or removes its own registration |
+| `/upstream/callback`                                                 | signed state + hub session | where an upstream returns after `upstream login`                  |
+| `/.well-known/mcp-hub-client/<id>.json`                              | none                       | the hub's own client metadata document, one per `cimd` upstream   |
+| `/.well-known/oauth-authorization-server[/…]`                        | none                       | RFC 8414 metadata                                                 |
+| `/.well-known/oauth-protected-resource[/…]`                          | none                       | RFC 9728 metadata (path-scoped)                                   |
 
 ## Notes & limitations
 
