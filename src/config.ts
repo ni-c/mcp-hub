@@ -2,6 +2,8 @@ import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import type { ToolFilterConfig } from './tool-filter.js';
+
 /**
  * One entry of the Claude-Code-style `mcpServers` map.
  *
@@ -13,7 +15,7 @@ import path from 'node:path';
  * local server from on-demand lifecycling) and `idleMinutes` (per-server
  * override of the global idle timeout).
  */
-export interface StdioServerConfig {
+export interface StdioServerConfig extends ToolFilterConfig {
   kind: 'stdio';
   command: string;
   args: string[];
@@ -57,7 +59,7 @@ export const OAUTH_MODES = new Set(['static', 'dcr', 'cimd']);
 export const OAUTH_GRANTS = new Set(['authorization_code', 'client_credentials']);
 export const OAUTH_CLIENT_AUTH = new Set(['client_secret_basic', 'client_secret_post', 'private_key_jwt']);
 
-export interface RemoteServerConfig {
+export interface RemoteServerConfig extends ToolFilterConfig {
   kind: 'remote';
   transport: 'http' | 'sse';
   url: string;
@@ -80,7 +82,7 @@ export interface RemoteServerConfig {
  * (the hub supervises). A knob that can only weaken the sandbox is a knob the
  * policy would have to defend.
  */
-export interface DockerServerConfig {
+export interface DockerServerConfig extends ToolFilterConfig {
   kind: 'docker';
   image: string;
   /** `never` (default) fails when the image is absent; `missing` lets the hub pull it. */
@@ -121,7 +123,7 @@ export interface DockerServerConfig {
  * started by whoever owns the Compose file, and the hub needs no Docker access
  * at all. A Unix socket in a shared volume even works with `network_mode: none`.
  */
-export interface SocketServerConfig {
+export interface SocketServerConfig extends ToolFilterConfig {
   kind: 'socket';
   transport: 'unix' | 'tcp';
   socketPath?: string;
@@ -328,6 +330,38 @@ function parseLifecycle(name: string, entry: Record<string, unknown>): Lifecycle
   return { keepAlive: entry.keepAlive === true, ...(idleMinutes !== undefined ? { idleMinutes: idleMinutes as number } : {}) };
 }
 
+/**
+ * Parses `allowTools` / `denyTools`.
+ *
+ * Returns a *partial* rather than always emitting the keys, unlike
+ * `parseLifecycle`: an entry without a filter must produce exactly the object it
+ * produced before, or every whole-object assertion in test/config.test.ts breaks.
+ *
+ * What can be checked here is checked here — the shape, an empty string, and a
+ * `*` anywhere but last. Whether a name matches a real tool cannot be: the
+ * upstream has not started yet. That half is reported at runtime, in supervisor.ts.
+ */
+function parseToolFilter(name: string, entry: Record<string, unknown>): ToolFilterConfig {
+  const result: ToolFilterConfig = {};
+  for (const field of ['allowTools', 'denyTools'] as const) {
+    if (entry[field] === undefined) continue;
+    const patterns = requireStringArray(name, field, entry[field]);
+    for (const pattern of patterns) {
+      if (pattern.length === 0) {
+        throw new ConfigError(`Server "${name}": "${field}" must not contain an empty string`);
+      }
+      const star = pattern.indexOf('*');
+      if (star !== -1 && star !== pattern.length - 1) {
+        throw new ConfigError(
+          `Server "${name}": "${field}" entry "${pattern}" — only a trailing "*" is supported (e.g. "list_*"); other entries are exact tool names`
+        );
+      }
+    }
+    result[field] = patterns;
+  }
+  return result;
+}
+
 function rejectLifecycle(name: string, entry: Record<string, unknown>, kind: string): void {
   for (const field of ['keepAlive', 'idleMinutes']) {
     if (entry[field] !== undefined) {
@@ -457,6 +491,7 @@ function parseSocketServer(name: string, entry: Record<string, unknown>, type: '
 function parseServer(name: string, entry: Record<string, unknown>, env: NodeJS.ProcessEnv, options?: ParseOptions): ServerConfig {
   const expand = expanderFor(env, options);
   const hub = entry.hub !== false;
+  const toolFilter = parseToolFilter(name, entry);
   if (entry.hub !== undefined && typeof entry.hub !== 'boolean') {
     throw new ConfigError(`Server "${name}": "hub" must be a boolean`);
   }
@@ -465,10 +500,10 @@ function parseServer(name: string, entry: Record<string, unknown>, env: NodeJS.P
   if (type !== undefined && typeof type !== 'string') {
     throw new ConfigError(`Server "${name}": "type" must be a string`);
   }
-  if (type === 'docker') return parseDockerServer(name, entry, expand, hub);
+  if (type === 'docker') return { ...parseDockerServer(name, entry, expand, hub), ...toolFilter };
   if (type === 'unix' || type === 'tcp') {
     rejectLifecycle(name, entry, type);
-    return parseSocketServer(name, entry, type, expand, hub);
+    return { ...parseSocketServer(name, entry, type, expand, hub), ...toolFilter };
   }
 
   const isRemote = (typeof type === 'string' && type !== 'stdio') || entry.url !== undefined;
@@ -504,6 +539,7 @@ function parseServer(name: string, entry: Record<string, unknown>, env: NodeJS.P
       url,
       headers: expandRecord(headers, expand),
       hub,
+      ...toolFilter,
       ...(oauth ? { oauth } : {})
     };
   }
@@ -519,6 +555,7 @@ function parseServer(name: string, entry: Record<string, unknown>, env: NodeJS.P
     args: args.map(expand),
     env: expandRecord(envEntry, expand),
     hub,
+    ...toolFilter,
     ...parseLifecycle(name, entry)
   };
 }

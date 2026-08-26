@@ -4,6 +4,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { ManagedServer, Supervisor } from './supervisor.js';
 import { VERSION } from './version.js';
 import { ABSOLUTE_CALL_OPTIONS, assertForwardedResultSize } from './mcp-limits.js';
+import { loggableToolName, toolAllowed } from './tool-filter.js';
 
 function text(value: unknown): CallToolResult {
   return { content: [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value, null, 2) }] };
@@ -23,6 +24,22 @@ function firstLine(description: string | undefined): string {
  * The /hub aggregate: one connector exposing every hub-enabled server through
  * six meta-tools, so a client's context holds 6 tool schemas instead of 9×N.
  */
+
+/**
+ * Refuses a tool the server's allowTools/denyTools filter removed.
+ *
+ * The message is verbatim what get_tool_schema already answers for a tool that
+ * genuinely does not exist, so a filtered tool is indistinguishable from an
+ * absent one — /hub tokens go to third-party connectors, and a refusal that
+ * enumerated what was hidden would be a disclosure. The operator's signal goes
+ * to the hub log instead.
+ */
+const requireAllowedTool = (managed: ManagedServer, tool: string, server: string): CallToolResult | undefined => {
+  if (toolAllowed(managed.config, tool)) return undefined;
+  console.warn(`[${managed.name}] refused "${loggableToolName(tool)}": not permitted by allowTools/denyTools`);
+  return toolError(`Unknown tool "${tool}" on server "${server}". Use list_tools to see available tools.`);
+};
+
 export function buildHubServer(supervisor: Supervisor): McpServer {
   const hub = new McpServer({ name: 'mcp-hub', version: VERSION });
 
@@ -116,6 +133,11 @@ export function buildHubServer(supervisor: Supervisor): McpServer {
       if (!managed) return toolError(`Unknown server "${server}". Use list_servers to see available servers.`);
       const hidden = requireExposed(managed);
       if (hidden) return hidden;
+      // Before prepare(): that background-pre-warms a sleeping server, so a
+      // forbidden name would still cost a start even though the lookup below
+      // would fail anyway.
+      const filtered = requireAllowedTool(managed, tool, server);
+      if (filtered) return filtered;
       const failed = await prepare(managed);
       if (failed) return failed;
       const found = managed.tools.find(t => t.name === tool);
@@ -140,6 +162,11 @@ export function buildHubServer(supervisor: Supervisor): McpServer {
       if (!managed) return toolError(`Unknown server "${server}". Use list_servers to see available servers.`);
       const hidden = requireExposed(managed);
       if (hidden) return hidden;
+      // Before the wake: hiding is not a boundary here, because the hub
+      // forwards by name. Refusing first also means a forbidden name cannot
+      // start a sleeping server.
+      const filtered = requireAllowedTool(managed, tool, server);
+      if (filtered) return filtered;
       if (managed.onDemand && (managed.state !== 'up' || !managed.client)) {
         try {
           await managed.wake();

@@ -89,6 +89,31 @@ describe('stdio mode', () => {
     await client.close();
   });
 
+  it('applies the tool filter in stdio mode too', async () => {
+    // buildHubServer is shared between the HTTP and stdio entry points, so this
+    // needs no stdio-specific code — which is exactly what it checks.
+    const hub = startHub(
+      writeConfig({ everything: { command: process.execPath, args: [EVERYTHING], denyTools: ['get-*'] } })
+    );
+    const client = await connect(hub);
+    // Not just `state === 'up'`: refreshTools() fills managed.tools afterwards,
+    // asynchronously, so waiting on the state alone races the list this test
+    // reads. It passed locally and failed on CI, which is the usual shape.
+    await waitFor(() => (hub.supervisor.get('everything')?.tools.length ?? 0) > 0);
+
+    const listed = (await client.callTool({ name: 'list_tools', arguments: { server: 'everything' } })) as CallToolResult;
+    expect(listed.content[0].text).toContain('echo');
+    expect(listed.content[0].text).not.toContain('get-env');
+
+    const refused = (await client.callTool({
+      name: 'call_tool',
+      arguments: { server: 'everything', tool: 'get-env', arguments: {} }
+    })) as CallToolResult;
+    expect(refused.isError).toBe(true);
+    expect(refused.content[0].text).toContain('Unknown tool');
+    await client.close();
+  });
+
   it('starts with an empty hub when the config file does not exist', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-hub-stdio-'));
     const hub = startHub(path.join(dir, 'mcp.json'));

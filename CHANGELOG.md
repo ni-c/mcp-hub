@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- #region changelog -->
 
+## [Unreleased]
+
+### Added
+
+- `allowTools` and `denyTools` on any server in `mcp.json` decide which of its
+  tools the hub exposes. Each entry is an exact tool name or a prefix with a
+  single trailing `*`; the allow list decides what is in and the deny list is
+  subtracted from it. They apply to every kind of server — stdio, remote, docker
+  and socket — because an upstream you do not control is the strongest case for
+  filtering one. Nothing changes for a server that sets neither.
+
+  **It is a boundary, not a tidy-up.** A filtered tool is absent from
+  `tools/list` on the server's own path and from `list_tools` on `/hub`, and a
+  client that calls it anyway is refused on both routes — before the server is
+  woken, so a forbidden name cannot cost a container start. The refusal is the
+  same "unknown tool" a server gives for a name it never had: `/hub` tokens go
+  to third-party connectors, and enumerating what was hidden would be a
+  disclosure in itself.
+
+  Unlike ni-c's own MCP servers, an entry that matches no tool is not a config
+  error — the hub only learns an upstream's tools once it has connected. The
+  supervisor logs it at the moment it filters, and `/health` carries `exposed`,
+  `hidden` and `unmatched` per filtered server. The latter two only once the
+  server has really listed its tools: a snapshot restored from the tool cache is
+  already filtered, so `/health` omits them rather than reporting a zero it did
+  not earn.
+
+  Filters tools only: resources, resource templates and prompts on a per-server
+  path are untouched. It also does not shrink what the hub accepts — the size
+  limits on a `tools/list` answer are measured against the raw upstream, so a
+  server that blows them still fails as a whole.
+
 ## [0.10.0] - 2026-08-25
 
 ### Added

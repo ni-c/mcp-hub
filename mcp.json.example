@@ -26,7 +26,9 @@
     "untrusted": {
       "type": "docker",
       "image": "ghcr.io/example/untrusted-mcp@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-      "env": { "SOME_SETTING": "value" },
+      "env": {
+        "SOME_SETTING": "value"
+      },
       "secretsFrom": "untrusted",
       "network": "none",
       "memory": "256m"
@@ -34,6 +36,17 @@
     "sidecar": {
       "type": "unix",
       "socket": "/run/mcp/sidecar.sock"
+    },
+    "tool-filtered": {
+      "command": "some-mcp",
+      "args": [],
+      "allowTools": [
+        "search_*",
+        "get_document"
+      ],
+      "denyTools": [
+        "delete_document"
+      ]
     }
   }
 }

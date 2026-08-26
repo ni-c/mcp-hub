@@ -49,6 +49,11 @@ replaces N containers with one process:
   through 6 meta-tools (`list_servers`, `list_tools`, `get_tool_schema`,
   `call_tool`, `wake_server`, `sleep_server`) without flooding the model
   context with N×tools schemas.
+- **Per-server tool filtering**: `allowTools` / `denyTools` on any server decide
+  which of its tools the hub exposes — exact names or `list_*` prefixes. A
+  filtered tool is hidden from `tools/list` _and_ refused if a client calls it
+  anyway, before the server is even woken, so a client holding a stale schema
+  cannot reach it.
 - **Also without HTTP**: `mcp-hub --stdio` serves that same aggregate on
   stdin/stdout for clients that can only spawn a local process (Claude Desktop,
   Codex, …) — same `mcp.json`, no TLS, no reverse proxy, no login. Auth exists
@@ -104,6 +109,11 @@ version in your image; do not download mutable packages at runtime:
       "headers": { "Authorization": "Bearer ${HA_TOKEN}" }
     },
     "private-thing": { "command": "some-mcp", "args": [], "hub": false },
+    "paperless-readonly": {
+      "command": "paperless-mcp",
+      "allowTools": ["search_*", "get_document"],
+      "denyTools": ["delete_document"]
+    },
     "untrusted": {
       "type": "docker",
       "image": "ghcr.io/example/untrusted-mcp@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -123,7 +133,10 @@ header: the hub registers itself (statically, via RFC 7591 or via a client
 metadata document), obtains the token and refreshes it, with one browser visit
 started from the admin CLI where the grant needs a person.
 `"hub": false` hides a server from the `/hub` aggregate; its own path keeps
-working. Reserved names: `mcp`, `hub`, `authorize`, `token`, `register`,
+working. `allowTools` / `denyTools` cut finer and apply to every kind of
+server: a filtered tool is absent from both `tools/list` and `/hub`, and is
+refused if called anyway — before the server is woken.
+Reserved names: `mcp`, `hub`, `authorize`, `token`, `register`,
 `login`, `consent`, `health`, `livez`, `revoke`, `upstream`, `.well-known`.
 
 All stdio children share the hub's Unix user and can read its mounted files.
