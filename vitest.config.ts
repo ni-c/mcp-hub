@@ -17,14 +17,14 @@ export default defineConfig({
       // it wires together — policy.ts, secrets.ts, server.ts — is covered
       // directly, including against a real daemon.
       exclude: ['src/admin.ts', 'src/docker-proxy/index.ts'],
-      // Measured 2026-08-18: 85.77 / 79.29 / 84.82 / 89.49. Set just below,
+      // Measured 2026-08-25: 86.54 / 80.13 / 85.97 / 90.07. Set just below,
       // with headroom on functions. Raise them when the measurement rises;
       // answer a drop with tests, never by lowering the gate.
       thresholds: {
-        statements: 85,
-        branches: 78,
-        functions: 82,
-        lines: 89
+        statements: 86,
+        branches: 79,
+        functions: 84,
+        lines: 90
       }
     }
   }

@@ -49,6 +49,20 @@ replaces N containers with one process:
   after 60 idle minutes, answering `initialize`/`tools/list` from a persistent
   snapshot meanwhile — a dozen servers cost only the memory of the ones in
   use. `keepAlive: true` exempts a server, `IDLE_TIMEOUT_MINUTES=0` the hub.
+- **CIMD-first OAuth 2.1**: clients identify themselves with a [Client ID
+  Metadata Document](https://mcp-hub.ni-c.de/guide/client-registration) — the
+  registration-free path the MCP spec now prefers — including `private_key_jwt`
+  against the keys in their own document (metadata-document clients only). RFC
+  7591 dynamic registration stays advertised beside it for older clients,
+  `mcp-hub-admin clients add` issues credentials by hand for anything that can
+  do neither, and `CLIENT_REGISTRATION` turns either mechanism off.
+- **OAuth outwards, too**: a remote server that speaks OAuth gets an `oauth`
+  block instead of a static header. The hub registers itself — with credentials
+  the upstream issued, via RFC 7591, or with its own client metadata document —
+  then obtains and refreshes the token. `client_credentials` upstreams need no
+  attention at all; where a person must sign in, `mcp-hub-admin upstream login`
+  prints one URL. An upstream that needs re-authorizing shows up as one server
+  `unauthorized`, not as a confusing 401 in your client.
 - **Supervision**: children are pinged and restarted with exponential backoff
   when they die. A down server answers 503, not silence; a crash-looping
   server nobody uses is parked instead of restarted forever.
@@ -96,13 +110,13 @@ Stdio servers (`command`/`args`/`env`) are spawned as supervised child
 processes. Remote servers (`type: "http"` or `"sse"` with `url` and optional
 `headers`) are connected as MCP clients with the configured headers injected
 on every request — the same supervision (ping, backoff reconnect, hot reload)
-applies. Upstreams that require their own *interactive* OAuth cannot be
-configured with static headers; bridge those with an
-[`mcp-remote`](https://github.com/geelen/mcp-remote) stdio entry and persist
-its token cache (`MCP_REMOTE_CONFIG_DIR`) under `/data`.
+applies. An upstream that speaks OAuth gets an `oauth` block instead of a
+header: the hub registers itself (statically, via RFC 7591 or via a client
+metadata document), obtains the token and refreshes it, with one browser visit
+started from the admin CLI where the grant needs a person.
 `"hub": false` hides a server from the `/hub` aggregate; its own path keeps
 working. Reserved names: `mcp`, `hub`, `authorize`, `token`, `register`,
-`login`, `consent`, `health`, `livez`, `revoke`.
+`login`, `consent`, `health`, `livez`, `revoke`, `upstream`, `.well-known`.
 
 All stdio children share the hub's Unix user and can read its mounted files.
 Only install fully trusted stdio servers. A server with a different trust level
@@ -127,7 +141,7 @@ and [SECURITY.md](SECURITY.md).
 For a custom image, pin every package to an exact version:
 
 ```dockerfile
-FROM ghcr.io/ni-c/mcp-hub:0.6.0   # pin @sha256:<digest> in production
+FROM ghcr.io/ni-c/mcp-hub:0.10.0   # pin @sha256:<digest> in production
 USER root
 RUN npm install -g your-mcp-package@1.2.3
 USER node
@@ -153,6 +167,20 @@ USER node
 | `CONFIG_PATH` | no | default `/config/mcp.json` |
 | `DATA_PATH` | no | default `/data` |
 | `LOG_FILE` | no | additionally mirror all log output into this file, e.g. `/data/mcp-hub.log` (see below) |
+| `CLIENT_REGISTRATION` | no | which mechanisms a client may use for a `client_id`: `cimd`, `dcr` or both (default) |
+| `CIMD_ALLOWED_ORIGINS` | no | bare https origins whose metadata documents are accepted; unset → any |
+| `CIMD_ALLOW_PRIVATE_ADDRESSES` | no | local development only; relaxes the SSRF guard, warns on every start |
+| `DCR_MAX_CLIENTS` | no | ceiling on stored dynamic registrations, default `500` |
+| `DCR_PENDING_TTL_HOURS` | no | how long a never-approved registration is kept, default `24` |
+| `DCR_INACTIVE_DAYS` | no | how long an unused approved registration is kept, default `90` |
+| `IDLE_TIMEOUT_MINUTES` | no | idle minutes before an on-demand server sleeps, default `60`; `0` disables it |
+| `TOOL_CACHE_PATH` | no | snapshots of sleeping servers, default `<DATA_PATH>/tool-cache.json` |
+| `MCP_CALL_TIMEOUT_MS` | no | deadline for one forwarded tool call, default `300000` |
+| `MCP_RESET_TIMEOUT_ON_PROGRESS` | no | let progress notifications extend that deadline, default `false` |
+| `DOCKER_HOST` | with docker servers | the **policy proxy's** socket; a direct daemon socket fails closed |
+
+The full table, including what applies in stdio mode, is in the
+[environment reference](https://mcp-hub.ni-c.de/reference/environment).
 
 `/data` holds the Ed25519 JWT key, registered OAuth clients, approvals and
 refresh tokens. **Mount it as a volume** — recreating it invalidates every
@@ -186,7 +214,7 @@ Published on every push to `main` and every `vX.Y.Z` release tag, for
 [package page](https://github.com/ni-c/mcp-hub/pkgs/container/mcp-hub).
 
 ```sh
-docker pull ghcr.io/ni-c/mcp-hub:0.6.0
+docker pull ghcr.io/ni-c/mcp-hub:0.10.0
 ```
 
 Tags: `latest` (tip of `main`), `X.Y.Z` and `X.Y` (releases), and
@@ -201,7 +229,7 @@ With compose, copy the example and point it at the image instead of building:
 ```yaml
 services:
   mcp-hub:
-    image: ghcr.io/ni-c/mcp-hub:0.6.0   # replaces `build: .`; pin a digest in production
+    image: ghcr.io/ni-c/mcp-hub:0.10.0   # replaces `build: .`; pin a digest in production
     # ...rest of docker-compose.example.yml unchanged
 ```
 
@@ -223,7 +251,7 @@ docker run -d --name mcp-hub \
   -e TRUSTED_PROXIES="192.168.1.0/24" \
   -v "$PWD/config:/config:ro" \
   -v "$PWD/data:/data" \
-  ghcr.io/ni-c/mcp-hub:0.6.0
+  ghcr.io/ni-c/mcp-hub:0.10.0
 ```
 
 Update to a newer image with `docker compose pull && docker compose up -d`
@@ -274,10 +302,17 @@ live container — a revocation takes effect on the next request:
 ```sh
 docker exec mcp-hub node /app/dist/admin.js clients list
 docker exec mcp-hub node /app/dist/admin.js clients revoke CLIENT_ID
+docker exec mcp-hub node /app/dist/admin.js clients delete CLIENT_ID
+docker exec mcp-hub node /app/dist/admin.js clients prune --dry-run
 ```
 
 Revocation removes the approval and all refresh tokens and immediately rejects
 already-issued access tokens. The next connection needs explicit approval.
+`delete` goes further and removes the registration itself, and `prune` applies
+the [registration lifecycle rules](https://mcp-hub.ni-c.de/guide/client-registration)
+on demand — registrations that were never approved expire after a day, unused
+ones after 90 days, and a dynamically registered client can also remove its own
+registration through RFC 7592.
 
 For clients that cannot do OAuth at all — the OpenAI Responses API, the xAI
 API, Gemini's `mcp_server` tool, plain-header clients — the same CLI mints
@@ -298,10 +333,13 @@ immediately. Per-client recipes:
 | Path | Auth | Purpose |
 |---|---|---|
 | `/<name>`, `/<name>/mcp` | Bearer | Streamable HTTP endpoint of one server |
-| `/hub` | Bearer | aggregate endpoint with the 4 meta-tools |
+| `/hub` | Bearer | aggregate endpoint with the 6 meta-tools |
 | `/livez` | none | minimal process liveness (`200`) |
 | `/health` | Bearer | per-server status (`200` all up / `503` degraded) |
-| `/authorize`, `/token`, `/register`, `/login`, `/consent`, `/revoke` | — | OAuth 2.1 + DCR |
+| `/authorize`, `/token`, `/register`, `/login`, `/consent`, `/revoke` | — | OAuth 2.1 · CIMD + DCR |
+| `/register/<client_id>` | registration token | RFC 7592: a client reads, changes or removes its own registration |
+| `/upstream/callback` | signed state + hub session | where an upstream returns after `upstream login` |
+| `/.well-known/mcp-hub-client/<id>.json` | none | the hub's own client metadata document, one per `cimd` upstream |
 | `/.well-known/oauth-authorization-server[/…]` | none | RFC 8414 metadata |
 | `/.well-known/oauth-protected-resource[/…]` | none | RFC 9728 metadata (path-scoped) |
 

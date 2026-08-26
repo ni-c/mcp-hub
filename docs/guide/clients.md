@@ -10,7 +10,7 @@ ChatGPT to the header-only APIs, lives on the
 
 | URL | Use it for |
 |---|---|
-| `https://mcp.example.net/hub` | one connector for everything, four meta-tools, minimal context cost |
+| `https://mcp.example.net/hub` | one connector for everything, six meta-tools, minimal context cost |
 | `https://mcp.example.net/<name>/mcp` | a single server with its native tools, for the ones you use constantly |
 
 Both can be registered at the same time. A common setup is one `/hub`
@@ -24,10 +24,11 @@ canonicalized to `/<name>/mcp`.
 
 Settings → Connectors → **Add custom connector**, then enter the URL.
 
-Claude registers itself through dynamic client registration, opens the hub's
-login page, and asks for the password. Entering it correctly signs you in and
-approves that client in one step. From then on the connector reconnects on its
-own.
+Claude identifies itself — through dynamic client registration, or a [metadata
+document](/guide/client-registration) on builds that support one — opens the
+hub's login page, and asks for the password. Entering it correctly signs you in
+and approves that client in one step. From then on the connector reconnects on
+its own.
 
 ::: tip One login, several connectors
 The login session lasts 30 minutes. Adding a second connector within that
@@ -61,17 +62,17 @@ probing `/mcp`, and all you see is
 Use `https://mcp.example.net/hub` or `https://mcp.example.net/<name>/mcp`.
 :::
 
-Open **Advanced OAuth settings** and fill in the five fields under *OAuth
-endpoints*. ChatGPT keeps *Dynamic Client Registration (DCR)* greyed out until
-a registration URL is present in the form, so entering them by hand is what
-unlocks the registration method you want. CIMD is not supported by the hub —
-ChatGPT reports it as unavailable on its own.
+Open **Advanced OAuth settings** and fill in the fields under *OAuth endpoints*.
+The hub supports both registration methods ChatGPT offers, so either works:
+**CIMD** is what it picks by default and needs no registration URL, while
+*Dynamic Client Registration (DCR)* stays greyed out until one is present in the
+form. See [client registration](/guide/client-registration) for what the two do.
 
 | Field | Value |
 |---|---|
 | Auth URL | `https://mcp.example.net/authorize` |
 | Token URL | `https://mcp.example.net/token` |
-| Registration URL | `https://mcp.example.net/register` |
+| Registration URL | `https://mcp.example.net/register` (only for DCR) |
 | Authorization server base | `https://mcp.example.net` (no trailing slash) |
 | Resource | the connector URL, e.g. `https://mcp.example.net/hub` |
 
@@ -85,8 +86,11 @@ Two settings stay untouched: leave *Base scopes* and *Default scopes* empty
 8414 document at the [OIDC discovery path](/reference/endpoints#discovery-documents),
 it is not an OpenID Connect provider.
 
-Press *Create*, and ChatGPT registers itself, opens the hub's login page and
-asks for the password. From then on the connector reconnects on its own.
+Press *Create*, and ChatGPT identifies itself, opens the hub's login page and
+asks for the password. On the CIMD path the login page names the connector's
+metadata document URL under *Identified by*; on the DCR path the hub logs a
+`registered OAuth client` line instead. From then on the connector reconnects
+on its own.
 
 ::: tip Sign in appears to do nothing?
 On hubs older than 0.7.0 the interactive pages sent a `form-action 'self'`
@@ -220,10 +224,12 @@ the standard discovery documents, so a client only needs the endpoint URL:
 Clients that want the endpoints typed in rather than discovered will find every
 path, with what guards it, under [HTTP endpoints](/reference/endpoints).
 
-Dynamic client registration (`/register`) is open, as the MCP specification
-intends. Registration alone grants nothing: a client only receives an
-authorization code after you have confirmed it, and only at the redirect URI
-you confirmed.
+Obtaining a `client_id` is open, as the MCP specification intends — whether the
+client points at a [metadata document it hosts
+itself](/guide/client-registration#client-id-metadata-documents) or registers
+dynamically at `/register`. Neither grants anything on its own: a client only
+receives an authorization code after you have confirmed it, and only at the
+redirect URI you confirmed.
 
 ## The approval flow
 
@@ -324,7 +330,7 @@ old behaviour, logs a warning on every start, and is meant to be removed again
 ## Revoking a client
 
 Use the offline admin command; it is covered on the
-[deployment page](/guide/deployment#revoking-a-client).
+[deployment page](/guide/deployment#managing-clients).
 
 ## Notification support
 

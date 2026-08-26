@@ -24,12 +24,47 @@ export interface StdioServerConfig {
   idleMinutes?: number;
 }
 
+/**
+ * How the hub proves itself to an upstream that speaks OAuth.
+ *
+ * `mode` says where the client identity comes from, `grant` says how the token
+ * is obtained. They are independent: a statically issued client_id can drive
+ * either grant, and a dynamically registered one usually drives
+ * authorization_code.
+ */
+export interface UpstreamOAuthConfig {
+  /** static = pre-registered credentials; dcr = RFC 7591; cimd = the hub's own metadata document URL. */
+  mode: 'static' | 'dcr' | 'cimd';
+  grant: 'authorization_code' | 'client_credentials';
+  /** Required for `static`, assigned by the upstream for the other two. */
+  clientId?: string;
+  /** Optional even for `static`: a public client has none. */
+  clientSecret?: string;
+  /**
+   * How the hub proves itself at the upstream's token endpoint.
+   *
+   * Absent means "let the authorization server's metadata decide", which is
+   * what nearly every upstream wants. Naming `private_key_jwt` explicitly is
+   * the exception: the hub then signs an assertion with its own key instead of
+   * presenting a shared secret, and publishes the public half in the client
+   * document it registers with.
+   */
+  clientAuth?: 'client_secret_basic' | 'client_secret_post' | 'private_key_jwt';
+  scopes: string[];
+}
+
+export const OAUTH_MODES = new Set(['static', 'dcr', 'cimd']);
+export const OAUTH_GRANTS = new Set(['authorization_code', 'client_credentials']);
+export const OAUTH_CLIENT_AUTH = new Set(['client_secret_basic', 'client_secret_post', 'private_key_jwt']);
+
 export interface RemoteServerConfig {
   kind: 'remote';
   transport: 'http' | 'sse';
   url: string;
   headers: Record<string, string>;
   hub: boolean;
+  /** Absent means the upstream is reached with `headers` alone, as before. */
+  oauth?: UpstreamOAuthConfig;
 }
 
 /**
@@ -100,7 +135,22 @@ export type ServerConfig = StdioServerConfig | RemoteServerConfig | DockerServer
 export type HubConfig = Map<string, ServerConfig>;
 
 const NAME_PATTERN = /^[a-zA-Z0-9_-]+$/;
-const RESERVED_NAMES = new Set(['mcp', 'hub', 'authorize', 'token', 'register', 'login', 'consent', 'health', 'livez', 'revoke', '.well-known']);
+const RESERVED_NAMES = new Set([
+  'mcp',
+  'hub',
+  'authorize',
+  'token',
+  'register',
+  'login',
+  'consent',
+  'health',
+  'livez',
+  'revoke',
+  '.well-known',
+  // The upstream OAuth callback lives under /upstream/…; a server of that name
+  // would be reachable at /upstream and is too close for comfort.
+  'upstream'
+]);
 const REMOTE_TYPES = new Set(['http', 'sse', 'streamable-http', 'streamable_http']);
 const SECRETS_NAME_PATTERN = /^[a-zA-Z0-9_-]+$/;
 const VOLUME_SOURCE_PATTERN = /^(?:\/[^:]*|[a-zA-Z0-9][a-zA-Z0-9_.-]*)$/;
@@ -158,6 +208,73 @@ function requireStringRecord(name: string, field: string, value: unknown): Recor
     throw new ConfigError(`Server "${name}": "${field}" must be an object of string values`);
   }
   return value as Record<string, string>;
+}
+
+/**
+ * The `oauth` block on a remote server.
+ *
+ * Unknown keys are rejected here even though the rest of the parser ignores
+ * them: a typo in an authentication block would otherwise read as "no
+ * authentication at all" and only show up as an upstream that will not
+ * connect. `${VAR}` stays allowed — putting the client secret in the
+ * environment rather than the config file is the intended use, exactly as for
+ * `headers`.
+ */
+function parseUpstreamOAuth(name: string, value: unknown, expand: ExpandFn): UpstreamOAuthConfig | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new ConfigError(`Server "${name}": "oauth" must be an object`);
+  }
+  const entry = value as Record<string, unknown>;
+  const known = new Set(['mode', 'grant', 'clientId', 'clientSecret', 'clientAuth', 'scopes']);
+  const unknown = Object.keys(entry).filter(key => !known.has(key));
+  if (unknown.length > 0) {
+    throw new ConfigError(`Server "${name}": unknown "oauth" field(s) ${unknown.join(', ')} (supported: ${[...known].join(', ')})`);
+  }
+  if (typeof entry.mode !== 'string' || !OAUTH_MODES.has(entry.mode)) {
+    throw new ConfigError(`Server "${name}": "oauth.mode" must be one of ${[...OAUTH_MODES].join(', ')}`);
+  }
+  if (typeof entry.grant !== 'string' || !OAUTH_GRANTS.has(entry.grant)) {
+    throw new ConfigError(`Server "${name}": "oauth.grant" must be one of ${[...OAUTH_GRANTS].join(', ')}`);
+  }
+  const mode = entry.mode as UpstreamOAuthConfig['mode'];
+  const grant = entry.grant as UpstreamOAuthConfig['grant'];
+  for (const field of ['clientId', 'clientSecret'] as const) {
+    if (entry[field] !== undefined && (typeof entry[field] !== 'string' || (entry[field] as string).length === 0)) {
+      throw new ConfigError(`Server "${name}": "oauth.${field}" must be a non-empty string`);
+    }
+  }
+  if (mode === 'static' && entry.clientId === undefined) {
+    throw new ConfigError(`Server "${name}": "oauth.clientId" is required when mode is "static"`);
+  }
+  if (mode !== 'static' && entry.clientId !== undefined) {
+    // The identifier is assigned by the upstream (dcr) or is the hub's own
+    // document URL (cimd); a configured one would silently be ignored.
+    throw new ConfigError(`Server "${name}": "oauth.clientId" only applies to mode "static"`);
+  }
+  if (mode !== 'static' && entry.clientSecret !== undefined) {
+    throw new ConfigError(`Server "${name}": "oauth.clientSecret" only applies to mode "static"`);
+  }
+  if (entry.clientAuth !== undefined && (typeof entry.clientAuth !== 'string' || !OAUTH_CLIENT_AUTH.has(entry.clientAuth))) {
+    throw new ConfigError(`Server "${name}": "oauth.clientAuth" must be one of ${[...OAUTH_CLIENT_AUTH].join(', ')}`);
+  }
+  const clientAuth = entry.clientAuth as UpstreamOAuthConfig['clientAuth'] | undefined;
+  if (clientAuth === 'private_key_jwt' && entry.clientSecret !== undefined) {
+    // One or the other. A key and a shared secret are two different identities
+    // as far as the upstream is concerned, and only one of them is presented.
+    throw new ConfigError(`Server "${name}": "oauth.clientAuth" of "private_key_jwt" cannot be combined with a clientSecret`);
+  }
+  if (clientAuth !== undefined && clientAuth !== 'private_key_jwt' && entry.clientSecret === undefined) {
+    throw new ConfigError(`Server "${name}": "oauth.clientAuth" of "${clientAuth}" needs a clientSecret`);
+  }
+  return {
+    mode,
+    grant,
+    ...(clientAuth ? { clientAuth } : {}),
+    ...(entry.clientId !== undefined ? { clientId: expand(entry.clientId as string) } : {}),
+    ...(entry.clientSecret !== undefined ? { clientSecret: expand(entry.clientSecret as string) } : {}),
+    scopes: requireStringArray(name, 'oauth.scopes', entry.scopes ?? [])
+  };
 }
 
 /** "512m" / "1g" / "1048576" -> bytes. */
@@ -374,12 +491,20 @@ function parseServer(name: string, entry: Record<string, unknown>, env: NodeJS.P
     } catch {
       throw new ConfigError(`Server "${name}": "url" is not a valid URL`);
     }
+    const oauth = parseUpstreamOAuth(name, entry.oauth, expand);
+    if (oauth && Object.keys(headers).some(key => key.toLowerCase() === 'authorization')) {
+      // The transport merges requestInit headers last, so the static one would
+      // win and OAuth would silently do nothing — and the header would also be
+      // carried to the authorization server, leaking whatever it holds.
+      throw new ConfigError(`Server "${name}": "oauth" and an "Authorization" header cannot both be set`);
+    }
     return {
       kind: 'remote',
       transport: type === 'sse' ? 'sse' : 'http',
       url,
       headers: expandRecord(headers, expand),
-      hub
+      hub,
+      ...(oauth ? { oauth } : {})
     };
   }
 

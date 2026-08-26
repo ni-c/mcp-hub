@@ -19,6 +19,21 @@ the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html
 
 Not a roadmap with dates — an honest list of what is missing and why.
 
+**An upstream login is per hub, not per user.** A credential the hub holds for
+a remote server belongs to the deployment. The hub does not act on behalf of the
+individual client that made the call, and there is no way to give two clients
+two different upstream identities.
+
+**An upstream that needs re-authorizing stays down until someone acts.** That is
+deliberate — retrying cannot help — but it does mean an expired refresh token is
+an outage until `mcp-hub-admin upstream login` is run. There is no notification;
+watch for `unauthorized` in `/health`.
+
+**Upstream tokens are stored in the clear.** They have to be presented, so they
+cannot be hashed like the hub's own refresh tokens. `state.json` is mode 0600
+and was already a secret, but with upstream OAuth in use it holds credentials to
+a third party — treat the volume accordingly.
+
 **Server-initiated messages are not delivered.** `listChanged`, resource
 subscriptions and sampling stop at the hub. Forwarding them needs per-client
 session state, which is exactly what the

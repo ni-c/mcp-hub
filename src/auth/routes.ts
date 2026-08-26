@@ -5,48 +5,27 @@ import { mcpAuthRouter, createOAuthMetadata } from '@modelcontextprotocol/sdk/se
 import { HubOAuthProvider, SESSION_TTL_MS } from './provider.js';
 import { renderLoginPage } from './login-page.js';
 import { allowFormActionTo, contentSecurityPolicy } from './headers.js';
+import type { CimdResolver } from './cimd.js';
+import { isLoopbackOnly } from './redirect-uri.js';
+import { logSafe } from './text.js';
+import { privateKeyJwtAuth } from './private-key-jwt.js';
+import { earlyRateLimit } from './rate-limit.js';
+import { createRegistrationManagementRoutes } from './registration.js';
+import type { AuthStore } from './store.js';
 
 const LOGIN_MAX_ATTEMPTS = 10;
 const LOGIN_WINDOW_MS = 15 * 60_000;
 const LOGIN_MAX_ATTEMPTS_TOTAL = 100;
 
-function earlyRateLimit(windowMs: number, maxPerIp: number, maxTotal: number) {
-  const byIp = new Map<string, { count: number; resetAt: number }>();
-  let total = { count: 0, resetAt: 0 };
-  return (req: express.Request, res: express.Response, next: express.NextFunction): void => {
-    const now = Date.now();
-    if (total.resetAt <= now) total = { count: 0, resetAt: now + windowMs };
-    const ip = req.ip ?? 'unknown';
-    let entry = byIp.get(ip);
-    if (entry && entry.resetAt <= now) {
-      byIp.delete(ip);
-      entry = undefined;
-    }
-    // Reject before inserting anything: a flood of distinct rejected IPs must
-    // not grow the map. Accepted requests bound it at maxTotal per window.
-    if ((entry?.count ?? 0) >= maxPerIp || total.count >= maxTotal) {
-      res.set('Retry-After', String(Math.max(1, Math.ceil((Math.min(entry?.resetAt ?? Infinity, total.resetAt) - now) / 1000))));
-      res.status(429).json({ error: 'too_many_requests', error_description: 'Request rate limit exceeded' });
-      return;
-    }
-    if (!entry) {
-      if (byIp.size >= maxTotal) {
-        for (const [candidateIp, candidate] of byIp) if (candidate.resetAt <= now) byIp.delete(candidateIp);
-      }
-      entry = { count: 0, resetAt: now + windowMs };
-      byIp.set(ip, entry);
-    }
-    entry.count++;
-    total.count++;
-    next();
-  };
-}
-
 export interface AuthRoutesOptions {
   provider: HubOAuthProvider;
+  /** Backs the RFC 7592 registration management endpoints. */
+  store: AuthStore;
   externalUrl: string;
   passwordHash?: string; // bcrypt
   password?: string; // plain, fallback for parity with mcp-auth-proxy
+  /** Present when Client ID Metadata Documents are accepted. */
+  cimd?: CimdResolver;
 }
 
 export class LoginRateLimiter {
@@ -112,6 +91,15 @@ export function createAuthRoutes(options: AuthRoutesOptions): Router {
     next();
   });
 
+  // RFC 7592 registration management. It goes first for two reasons: the SDK's
+  // registration router is mounted on the /register prefix and answers 405 to
+  // anything that is not a POST, and the registration budget below is also
+  // prefix-scoped — routine management would otherwise use up a client's
+  // ability to register at all. It brings its own, more generous limit.
+  if (provider.clientsStore.registerClient) {
+    router.use(createRegistrationManagementRoutes({ store: options.store, externalUrl: issuerUrl.href }));
+  }
+
   // These run before the SDK's JSON/form parsers. The SDK applies its own
   // endpoint limits too, but those otherwise happen only after body parsing.
   router.use('/register', earlyRateLimit(60 * 60_000, 20, 200));
@@ -120,6 +108,51 @@ export function createAuthRoutes(options: AuthRoutesOptions): Router {
   router.use('/login', earlyRateLimit(15 * 60_000, 100, 500));
   router.use('/consent', earlyRateLimit(15 * 60_000, 100, 500));
 
+  // Advertised capabilities. The SDK's document knows nothing about Client ID
+  // Metadata Documents, so the two fields clients key their registration
+  // choice on are added here: client_id_metadata_document_supported is what
+  // makes a spec-compliant client prefer CIMD over dynamic registration, and
+  // private_key_jwt is how a CIMD client authenticates at the token endpoint —
+  // it can hold no shared secret.
+  const asMetadata = {
+    ...createOAuthMetadata({ provider, issuerUrl }),
+    ...(options.cimd
+      ? {
+          client_id_metadata_document_supported: true,
+          token_endpoint_auth_methods_supported: ['client_secret_post', 'none', 'private_key_jwt'],
+          token_endpoint_auth_signing_alg_values_supported: ['RS256', 'RS384', 'RS512', 'PS256', 'PS384', 'PS512', 'ES256', 'ES384', 'ES512', 'EdDSA']
+        }
+      : {})
+  };
+
+  if (options.cimd) {
+    // Ahead of mcpAuthRouter so it wins the route, and ahead of the SDK's own
+    // body parser — which is harmless, because body-parser leaves an
+    // already-read request alone and req.body survives into the SDK handler.
+    router.use(
+      '/token',
+      express.urlencoded({ extended: false }),
+      privateKeyJwtAuth({ resolver: options.cimd, externalUrl: issuerUrl.href, tokenEndpoint: asMetadata.token_endpoint })
+    );
+    // mcpAuthRouter serves the root RFC 8414 document itself, so the enriched
+    // one has to be registered before it to take precedence.
+    router.get('/.well-known/oauth-authorization-server', (_req, res) => {
+      res.json(asMetadata);
+    });
+  }
+
+  if (!provider.clientsStore.registerClient) {
+    // With dynamic registration off the SDK never mounts /register, and the
+    // request would otherwise fall through to the MCP routes and come back as
+    // a 401 — telling a client to authenticate at an endpoint that no longer
+    // exists. Say what actually happened instead.
+    router.all('/register', (_req, res) => {
+      res
+        .status(404)
+        .json({ error: 'not_found', error_description: 'Dynamic client registration is disabled; use a client ID metadata document' });
+    });
+  }
+
   // Standard AS endpoints: /.well-known/*, /authorize, /token, /register, /revoke
   router.use(mcpAuthRouter({ provider, issuerUrl, resourceName: 'mcp-hub' }));
 
@@ -127,7 +160,6 @@ export function createAuthRoutes(options: AuthRoutesOptions): Router {
   // up /.well-known/oauth-protected-resource/<name>/mcp before falling back to
   // the root document, and RFC 8414 has an equivalent path-insertion form for
   // AS metadata. Serve both for any suffix; one AS covers all resources.
-  const asMetadata = createOAuthMetadata({ provider, issuerUrl });
   router.get('/.well-known/oauth-authorization-server/{*splat}', (_req, res) => {
     res.json(asMetadata);
   });
@@ -167,20 +199,37 @@ export function createAuthRoutes(options: AuthRoutesOptions): Router {
       return;
     }
     if (rateLimiter.isBlocked(ip)) {
-      console.warn(`mcp-hub: login rate limit exceeded from ${ip}`);
+      console.warn(`mcp-hub: login rate limit exceeded from ${logSafe(ip)}`);
       res.status(429).type('html').send('<p>Too many attempts. Try again later.</p>');
       return;
     }
     if (typeof password !== 'string' || !checkPassword(password)) {
       rateLimiter.recordFailure(ip);
-      console.warn(`mcp-hub: authentication failure from ${ip}`);
-      // The retry form has to reach the same redirect as the first attempt.
+      console.warn(`mcp-hub: authentication failure from ${logSafe(ip)}`);
+      // The retry form has to reach the same redirect as the first attempt,
+      // and say the same things about who is asking.
+      const retryClient = await provider.clientsStore.getClient(pending.clientId);
       allowFormActionTo(res, pending.redirectUri);
-      res.status(401).type('html').send(renderLoginPage(request!, pending.redirectUri, undefined, 'Wrong password', pending.resource));
+      res
+        .status(401)
+        .type('html')
+        .send(
+          renderLoginPage(
+            request!,
+            pending.redirectUri,
+            {
+              clientName: retryClient?.client_name,
+              resource: pending.resource,
+              clientId: provider.isMetadataDocumentClient(pending.clientId) ? pending.clientId : undefined,
+              loopbackOnly: isLoopbackOnly(retryClient?.redirect_uris)
+            },
+            'Wrong password'
+          )
+        );
       return;
     }
     rateLimiter.reset(ip);
-    console.log(`mcp-hub: successful login from ${ip}`);
+    console.log(`mcp-hub: successful login from ${logSafe(ip)}`);
     res.cookie(provider.sessionCookieName, provider.createSessionCookie(), {
       httpOnly: true,
       secure: issuerUrl.protocol === 'https:',
@@ -213,7 +262,7 @@ export function createAuthRoutes(options: AuthRoutesOptions): Router {
       return;
     }
     if (!provider.verifyCsrfToken(session, csrf)) {
-      console.warn(`mcp-hub: consent with an invalid CSRF token from ${req.ip ?? 'unknown'}`);
+      console.warn(`mcp-hub: consent with an invalid CSRF token from ${logSafe(req.ip ?? 'unknown')}`);
       res.status(403).type('html').send('<p>Invalid request. Close this window and connect again.</p>');
       return;
     }

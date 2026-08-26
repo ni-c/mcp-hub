@@ -29,6 +29,19 @@ it. Use it only for a throwaway test.
 | `RESOURCE_BOUND_TOKENS` | `true` | RFC 8707 resource binding: a token is valid only for `/hub` (which covers `/health`) or the one `/<name>/mcp` it was issued for. `false`/`0` restores the pre-0.5 behaviour where unbound tokens reach every path — a migration mode that logs a warning on every start. |
 | `DEFAULT_RESOURCE` | *(unset)* | Server name (or `hub`) to bind a token to when the OAuth client sends **no** `resource` parameter at all (older Codex logins, Google ADK, Gemini Enterprise). Unset → such requests are refused with `invalid_target`. The token is still bound either way — never global. |
 
+## Client registration
+
+See [Client registration](/guide/client-registration) for what these do.
+
+| Variable | Default | Description |
+|---|---|---|
+| `CLIENT_REGISTRATION` | `cimd,dcr` | Which mechanisms a client may use to obtain a `client_id`, comma-separated. `cimd` = [Client ID Metadata Documents](/guide/client-registration#client-id-metadata-documents), `dcr` = [RFC 7591 dynamic registration](/guide/client-registration#dynamic-client-registration). Dropping `dcr` removes `registration_endpoint` from the discovery document and makes `/register` answer `404`; dropping `cimd` removes `client_id_metadata_document_supported` and treats a URL `client_id` as unknown. An unknown value exits at startup. |
+| `CIMD_ALLOWED_ORIGINS` | *(unset)* | Comma-separated bare https origins whose metadata documents are accepted, e.g. `https://chatgpt.com,https://vscode.dev`. Unset → every https origin is admitted and the consent page is the gate. Only origins can be pinned: ChatGPT's per-connector document path is random. An entry that is not a bare origin exits at startup. |
+| `CIMD_ALLOW_PRIVATE_ADDRESSES` | `false` | Local development only. Lets metadata documents be fetched from private, loopback and link-local addresses. Logs a warning on every start — leaving it on in production is what a `client_id` aimed at your internal network or a cloud metadata endpoint needs to succeed. |
+| `DCR_MAX_CLIENTS` | `500` | Ceiling on stored dynamic registrations. When it is reached the hub evicts the oldest never-approved ones; if every registration under the ceiling has been approved, a new registration is refused rather than a working connector being dropped. Only applies to dynamic registration — metadata documents are never stored. |
+| `DCR_PENDING_TTL_HOURS` | `24` | How long a registration may sit without ever being approved before it is removed. Opening the authorization page counts as use and starts the window again, so a slow login is not cut short. |
+| `DCR_INACTIVE_DAYS` | `90` | How long an approved registration may sit unused before it is removed together with its approval and refresh tokens. Use means an authorization or a token exchange. Approvals for metadata-document clients are left alone. |
+
 ## Sandboxed servers
 
 Only relevant with `type: "docker"` entries — see [sandboxing](/guide/sandboxing).
@@ -92,11 +105,12 @@ apply. What it reads:
 | `CONFIG_PATH` | `mcp.json` in the working directory | Same file, same hot reload. A missing file starts an empty hub instead of failing — the client that spawned the process has nowhere to show a startup error. |
 | `IDLE_TIMEOUT_MINUTES` | `60` | As above. Worth keeping on: a hub spawned per client session would otherwise start every configured server at every launch. |
 | `TOOL_CACHE_PATH` | `.mcp-hub/tool-cache.json` beside the config | As above, but there is no `DATA_PATH` here to derive it from. |
+| `DATA_PATH` | *(unset)* | Optional here, unlike over HTTP. Point it at an HTTP hub's `/data` to reuse and refresh an [upstream OAuth token](/guide/configuration#upstreams-that-speak-oauth) authorized there. Without it, a server with an `oauth` block is skipped — there is no listener for a browser to return to. |
 | `LOG_FILE` | *(unset)* | Same as above. Logging otherwise goes to stderr: in stdio mode stdout carries the protocol, so `console.log` output is moved out of the way. |
 
 Everything else — `EXTERNAL_URL`, `PASSWORD*`, `TRUSTED_PROXIES`,
-`RESOURCE_BOUND_TOKENS`, `DEFAULT_RESOURCE`, `PORT`, `DATA_PATH`, the
-rate limits and the HTTP timeouts — is HTTP-only and ignored. The call
+`RESOURCE_BOUND_TOKENS`, `DEFAULT_RESOURCE`, `PORT`, the rate limits and the
+HTTP timeouts — is HTTP-only and ignored. The call
 timeouts (`MCP_CALL_TIMEOUT_MS` and friends) apply, since they belong to the
 proxying path.
 

@@ -7,6 +7,193 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- #region changelog -->
 
+## [0.10.0] - 2026-08-25
+
+### Added
+
+- **Client ID Metadata Documents (CIMD), the registration mechanism the MCP
+  specification now prefers.** A client may use an HTTPS URL as its `client_id`
+  and host its own metadata there; the hub fetches that document, checks that it
+  vouches for itself and takes the client's name and redirect URIs from it.
+  Nothing is registered and nothing is stored, so a client that reinstalls or
+  moves to another machine is still recognised as the same client, and the
+  approval you gave it still holds. Dynamic registration remains available and
+  advertised beside it, so nothing that works today stops working: a
+  spec-compliant client picks CIMD on its own, everything else falls back.
+  Closes [#18](https://github.com/ni-c/mcp-hub/issues/18).
+
+- **`private_key_jwt` client authentication.** A CIMD client cannot hold a
+  shared secret, so a confidential one proves itself with a JWT signed by a key
+  it publishes in its own document (`jwks` or `jwks_uri`). This is the path
+  ChatGPT's connectors take; without it they were refused with `invalid_client`.
+  The assertion must name the client as both `iss` and `sub`, target the token
+  endpoint or the issuer, carry a `jti` that is accepted exactly once, and
+  expire within five minutes.
+
+- **`CLIENT_REGISTRATION`** names the mechanisms a client may use to obtain a
+  `client_id` — `cimd`, `dcr`, or both, which is the default. Dropping `dcr`
+  removes `registration_endpoint` from the discovery document and makes
+  `/register` answer `404`, which is how you retire dynamic registration once
+  every client you use supports CIMD. `CIMD_ALLOWED_ORIGINS` restricts which
+  origins may serve a metadata document (only origins can be pinned — ChatGPT's
+  per-connector document path is random), and `CIMD_ALLOW_PRIVATE_ADDRESSES`
+  relaxes the SSRF guard for local development only.
+
+- **The authorization page names what cannot be forged.** For a
+  metadata-document client it shows the document URL under *Identified by*: the
+  name in that document is self-declared, the origin serving it is not. When
+  every redirect URI is a loopback address the page says so outright, because a
+  code sent to `http://127.0.0.1:…` could be collected by any program on that
+  machine.
+
+- **The hub can authenticate itself to upstream MCP servers with OAuth.** A
+  remote server may carry an `oauth` block instead of a static `Authorization`
+  header, and the hub then obtains and refreshes the token itself — no
+  `mcp-remote` bridge, no token cache to babysit. It identifies itself with
+  credentials the upstream issued (`mode: "static"`, with an optional
+  `clientSecret` from `${VAR}`), by registering dynamically (`"dcr"`, RFC 7591)
+  or with its own client metadata document (`"cimd"`), and uses either the
+  `client_credentials` grant, which needs no attention at all, or
+  `authorization_code`, which needs one browser visit started with
+  `mcp-hub-admin upstream login <server>`. The CLI prints a URL, the upstream
+  redirects back to the hub, and the server connects. `upstream list`, `status`,
+  `register`, `refresh` and `logout` cover the rest; `logout` also revokes the
+  token (RFC 7009) and deletes a dynamic registration (RFC 7592) at the upstream.
+  Replaces the `mcp-remote` workaround the configuration guide used to recommend.
+
+- **`mcp-hub-admin clients add`** issues a `client_id` and secret by hand, for a
+  client that supports neither dynamic registration nor a metadata document —
+  the one case that previously had no answer but an API token. Creating it
+  counts as approving it for the redirect URI you named, and it is exempt from
+  the lifecycle rules: nothing removes it but `clients delete`.
+
+- **Outbound `private_key_jwt`.** An upstream can be told
+  `"clientAuth": "private_key_jwt"` and the hub signs an RFC 7523 assertion
+  instead of presenting a shared secret. The signing key lives at
+  `<DATA_PATH>/upstream-key.pem` and is deliberately not the key that signs the
+  hub's own access tokens; its public half travels with the client metadata
+  document or the registration request, which is how the upstream verifies it.
+
+- **A client metadata document per upstream.** The hub previously published one
+  document built from the first server using `mode: "cimd"`, so a second such
+  server was registered with the first one's scopes. Each now has its own at
+  `/.well-known/mcp-hub-client/<id>.json`, where the identifier is derived from
+  the server name rather than being it — the URL is public, the names are not.
+
+- **A remote server whose authorization is missing or refused enters a new
+  `unauthorized` state** instead of restarting every five minutes for ever. It
+  is reported in `/health` and `list_servers`, and the log names the command to
+  run. A completed login brings it up again without a restart of the hub.
+
+- **A registration lifecycle for dynamic clients.** Anyone may register, so
+  registrations no longer stay forever: one that is never approved is dropped
+  after `DCR_PENDING_TTL_HOURS` (24), an approved one nobody has used after
+  `DCR_INACTIVE_DAYS` (90) along with its approval and refresh tokens, and the
+  store holds at most `DCR_MAX_CLIENTS` (500). Reaching the ceiling evicts the
+  oldest never-approved registrations; when every one of them has been approved
+  the newcomer is refused instead, so registering repeatedly cannot push a
+  working connector out. Opening the authorization page counts as use, so a slow
+  login is not cut short. The sweep runs at startup and every fifteen minutes,
+  and an existing state file is given a fresh clock rather than being read as
+  idle since the day each client registered. Client ID Metadata Document clients
+  are unaffected — they are never stored.
+
+- **Clients can manage their own registration (RFC 7592).** The registration
+  response now carries `registration_access_token` and
+  `registration_client_uri`, and `GET`, `PUT` and `DELETE` on
+  `/register/<client_id>` let a client read, change or remove what it
+  registered. Only a hash of the token is stored, so it is shown exactly once.
+  `DELETE` takes the approval and every refresh token with it. Changing the
+  redirect URIs through `PUT` withdraws the approval — consent was given for a
+  destination and does not transfer to a new one — while changing a name or a
+  logo leaves it in place. A wrong token and an unknown `client_id` get the same
+  answer, so the endpoint cannot be used to enumerate registrations. None of
+  this comes from the SDK, whose registration router accepts `POST` and nothing
+  else.
+
+- `mcp-hub-admin clients delete <client-id>` removes a registration outright,
+  where `clients revoke` withdraws access but keeps it, and
+  `mcp-hub-admin clients prune [--dry-run]` applies the lifecycle rules on
+  demand instead of waiting for the next sweep.
+
+- `mcp-hub-admin clients list` now also lists clients that were approved
+  without ever being registered, and says which mechanism each one came in
+  through. A metadata-document client leaves no registration behind, so its
+  approval is the whole record; `clients revoke` works on it either way.
+
+### Changed
+
+- The authorization-server metadata advertises
+  `client_id_metadata_document_supported`, and `private_key_jwt` alongside
+  `client_secret_post` and `none` in `token_endpoint_auth_methods_supported`.
+  The enriched document is served at the root path, the RFC 8414 path-inserted
+  form and the OpenID Connect discovery alias alike.
+
+### Security
+
+- Metadata documents are fetched from a URL an unauthenticated caller chose, so
+  the request is treated as hostile: `https` only, redirects never followed,
+  private, loopback, link-local and CGNAT addresses refused after DNS
+  resolution, a 5 kB cap enforced while reading, a 5-second timeout and a JSON
+  content type required. Documents carrying a `client_secret` or declaring a
+  symmetric authentication method are refused outright. Concurrent lookups of
+  one URL collapse into a single request, rejections are remembered for 30
+  seconds and the cache is bounded, so a `client_id` cannot be used to point the
+  hub at a third party. Every rejection answers a bare `invalid_client`; the
+  reason goes to the log only, so the admission policy cannot be mapped by
+  probing.
+
+- **A client declaring `private_key_jwt` must present an assertion.** Client
+  authentication is driven by the stored record, and a metadata-document client
+  never has a `client_secret` — so a token request that simply omitted
+  `client_assertion` was treated as a public client and accepted on its
+  `client_id` alone. A leaked refresh token or authorization code was therefore
+  redeemable without the private key that exists to prevent exactly that. The
+  assertion is now required whenever the document declares it.
+
+- **The connection is pinned to the address that was checked.** The SSRF guard
+  resolved the hostname and then handed the name to `fetch`, which resolved it
+  again; a zone answering differently the second time could move the request
+  onto an internal address or a cloud metadata endpoint. The vetted address is
+  now what the socket connects to, with the certificate still validated against
+  the hostname. The IPv6 forms that carry an IPv4 address (NAT64 `64:ff9b::/96`,
+  6to4 `2002::/16`) and several reserved IPv4 ranges are refused as well.
+
+- **The `jwks_uri` fetch is capped at 64 kB.** It inherited the redirect,
+  timeout and address guards but not the size limit, and the JWKS is parsed
+  whole — an unauthenticated token request naming a document with a hostile
+  `jwks_uri` could push an unbounded body into the heap and take the hub, and
+  every MCP server it supervises, down with it. The cache of remote key sets is
+  now bounded too; entries were created before the signature was checked.
+
+- **Untrusted values can no longer forge a log record.** A `client_id` may
+  contain newlines — the URL parser strips them, so the value passed every
+  structural check while the raw string reached the log, where each line is
+  given a valid timestamp. A forged `mcp-hub: authentication failure from …`
+  line matches the fail2ban filter this project ships, which made it possible
+  to have any address banned by sending unauthenticated requests. Client-chosen
+  values are escaped and capped at the point they enter a log line.
+
+- **Redirect URIs are held to one rule for both registration mechanisms.**
+  Dynamic registration accepted anything outside the SDK's three-scheme
+  denylist, including a plaintext `http://` callback on a remote host, which
+  delivers the authorization code in the clear. Registration now requires
+  `https`, a loopback address, or an application-specific scheme for native
+  clients, and answers `400 invalid_client_metadata` otherwise.
+
+- Self-declared client names are reduced to a single short line before they are
+  stored or shown. They were escaped but unbounded, so a name of several hundred
+  characters could push the redirect target and the loopback warning off the
+  consent page.
+
+- `/health` is authenticated and bound to the `hub` resource; only `/livez` is
+  public. A stale comment claimed the opposite, which would have justified
+  exposing the deployment topology.
+
+- Revocation markers are dropped once they are older than the longest-lived
+  refresh token they could reject. They were the one part of the state file
+  that only ever grew.
+
 ## [0.9.2] - 2026-08-24
 
 ### Fixed

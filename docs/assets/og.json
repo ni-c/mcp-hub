@@ -3,7 +3,12 @@
   "title": "mcp-hub",
   "tagline": [
     "One endpoint for every MCP server you run — path routing,",
-    "a built-in OAuth 2.1 server, and a supervisor that keeps them up."
+    "OAuth 2.1 in both directions, and a supervisor that keeps them up."
   ],
-  "badges": ["one container", "OAuth 2.1", "MIT", "Node ≥22"]
+  "badges": [
+    "one container",
+    "OAuth 2.1 both ways",
+    "MIT",
+    "Node ≥22"
+  ]
 }

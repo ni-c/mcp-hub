@@ -5,9 +5,20 @@ import type { OAuthServerProvider, AuthorizationParams } from '@modelcontextprot
 import type { OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/server/auth/clients.js';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import type { OAuthClientInformationFull, OAuthTokens, OAuthTokenRevocationRequest } from '@modelcontextprotocol/sdk/shared/auth.js';
-import { InvalidGrantError, InvalidTargetError, InvalidTokenError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
+import {
+  InvalidClientMetadataError,
+  InvalidGrantError,
+  InvalidTargetError,
+  InvalidTokenError,
+  TooManyRequestsError
+} from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import { redirectUriMatches } from '@modelcontextprotocol/sdk/server/auth/handlers/authorize.js';
 import type { AuthStore } from './store.js';
+import { CimdResolver, isClientIdMetadataUrl } from './cimd.js';
+import { isLoopbackOnly, isSafeRedirectUri } from './redirect-uri.js';
+import { registrationClientUri } from './registration.js';
+import { readSignedPayload, sign, signPayload, signatureMatches } from './signed-token.js';
+import { clampDisplayName, logSafe } from './text.js';
 import { renderLoginPage } from './login-page.js';
 import { renderConsentPage } from './consent-page.js';
 import { allowFormActionTo } from './headers.js';
@@ -51,10 +62,11 @@ export interface HubOAuthProviderOptions {
   resolveResource?: (resource: URL) => URL | undefined;
   /** Bind tokens here when a client sends no resource parameter at all. */
   defaultResource?: URL;
-}
-
-function sign(value: string, secret: string): string {
-  return crypto.createHmac('sha256', secret).update(value).digest('base64url');
+  /** Resolves https URL client_ids into clients; absent turns CIMD off. */
+  cimd?: CimdResolver;
+  /** Defaults to true. False drops /register and the registration_endpoint
+   *  from the discovery document, leaving CIMD as the only way in. */
+  allowDynamicRegistration?: boolean;
 }
 
 /** Distinguishes admin-minted API tokens from interactive OAuth tokens. */
@@ -103,31 +115,88 @@ export class HubOAuthProvider implements OAuthServerProvider {
     this.sessionCookieName = sessionCookieName(externalUrl);
   }
 
+  /**
+   * Both registration mechanisms meet here, and this is the only place the SDK
+   * looks a client up — the authorize handler, the token handler's client
+   * authentication and the revocation endpoint all go through it. A client_id
+   * that is an https URL is a Client ID Metadata Document and is fetched from
+   * the client; anything else is a locally registered DCR client.
+   */
   get clientsStore(): OAuthRegisteredClientsStore {
     const store = this.store;
-    return {
-      getClient: clientId => store.getClient(clientId),
-      registerClient: client => {
-        const isPublic = client.token_endpoint_auth_method === 'none';
-        const stored: OAuthClientInformationFull = {
-          ...client,
-          client_id: crypto.randomBytes(16).toString('base64url'),
-          client_id_issued_at: Math.floor(Date.now() / 1000),
-          // Secrets never expire: ChatGPT registers once per connector and
-          // never re-registers, so an expiring secret bricks the connector
-          // when it runs out (the SDK default is 30 days).
-          client_secret_expires_at: 0
-        };
-        // A stored secret makes the SDK demand it on every token request, so a
-        // public client must be persisted without one — but ChatGPT expects a
-        // client_secret in the registration response even for "none" and
-        // refuses its own registration otherwise. Hand it one in the response
-        // only; token requests from public clients ignore it.
-        if (isPublic) delete stored.client_secret;
-        store.saveClient(stored);
-        console.log(`mcp-hub: registered OAuth client ${stored.client_id} (${stored.client_name ?? 'unnamed'})`);
-        return isPublic ? { ...stored, client_secret: crypto.randomBytes(32).toString('hex'), client_secret_expires_at: 0 } : stored;
+    const cimd = this.options.cimd;
+    const registerClient = (client: OAuthClientInformationFull): OAuthClientInformationFull => {
+      // The SDK only keeps javascript:, data: and vbscript: out, so without
+      // this a client could register a plaintext http:// callback on a remote
+      // host and have its authorization code delivered in the clear. Metadata
+      // documents have always been held to this; dynamic registration was not.
+      for (const uri of client.redirect_uris ?? []) {
+        if (!isSafeRedirectUri(uri, { allowPrivateUseSchemes: true })) {
+          throw new InvalidClientMetadataError(`redirect_uri ${uri} must be https, a loopback address or a private-use scheme`);
+        }
       }
+      const isPublic = client.token_endpoint_auth_method === 'none';
+      const stored: OAuthClientInformationFull = {
+        ...client,
+        // Self-declared and shown on the consent page, so held to one line.
+        client_name: clampDisplayName(client.client_name),
+        client_id: crypto.randomBytes(16).toString('base64url'),
+        client_id_issued_at: Math.floor(Date.now() / 1000),
+        // Secrets never expire: ChatGPT registers once per connector and
+        // never re-registers, so an expiring secret bricks the connector
+        // when it runs out (the SDK default is 30 days).
+        client_secret_expires_at: 0
+      };
+      // A stored secret makes the SDK demand it on every token request, so a
+      // public client must be persisted without one — but ChatGPT expects a
+      // client_secret in the registration response even for "none" and
+      // refuses its own registration otherwise. Hand it one in the response
+      // only; token requests from public clients ignore it.
+      if (isPublic) delete stored.client_secret;
+      // RFC 7592: the credential that later lets this client read, change or
+      // delete its own registration. Only its hash is kept, so this is the one
+      // moment the client can learn it.
+      const registrationToken = crypto.randomBytes(32).toString('base64url');
+      if (!store.addClient(stored, registrationToken)) {
+        console.warn(`mcp-hub: refused a registration: the hub is at its limit of ${store.clientLimits.maxClients} clients`);
+        throw new TooManyRequestsError('This hub is at its client registration limit; ask the operator to remove unused registrations');
+      }
+      console.log(`mcp-hub: registered OAuth client ${stored.client_id} (${logSafe(stored.client_name ?? 'unnamed')})`);
+      // The SDK's type describes RFC 7591 only, but it serializes whatever this
+      // returns — which is how the RFC 7592 fields reach the client. They are
+      // response-only and never stored: the record keeps a hash of the token.
+      return {
+        ...stored,
+        registration_access_token: registrationToken,
+        registration_client_uri: registrationClientUri(this.externalUrl, stored.client_id),
+        ...(isPublic ? { client_secret: crypto.randomBytes(32).toString('hex'), client_secret_expires_at: 0 } : {})
+      } as OAuthClientInformationFull;
+    };
+    return {
+      getClient: clientId => (cimd && isClientIdMetadataUrl(clientId) ? cimd.resolve(clientId) : store.getClient(clientId)),
+      // Leaving this undefined is what removes registration_endpoint from the
+      // discovery document and unmounts /register: the SDK derives both from
+      // the presence of this method.
+      ...(this.options.allowDynamicRegistration === false ? {} : { registerClient })
+    };
+  }
+
+  /** True for a client that proved itself with a metadata document rather than
+   *  a registration. The pages use it to name the origin that vouched. */
+  isMetadataDocumentClient(clientId: string): boolean {
+    return this.options.cimd !== undefined && isClientIdMetadataUrl(clientId);
+  }
+
+  /**
+   * What the login and consent pages need to say about who is asking: the
+   * metadata document URL when there is one (draft §6.4 asks for its hostname
+   * to be shown) and whether every redirect URI is local, which the MCP
+   * security considerations single out as impossible to attribute.
+   */
+  private clientIdentity(client: OAuthClientInformationFull): { clientId?: string; loopbackOnly: boolean } {
+    return {
+      clientId: this.isMetadataDocumentClient(client.client_id) ? client.client_id : undefined,
+      loopbackOnly: isLoopbackOnly(client.redirect_uris)
     };
   }
 
@@ -144,6 +213,10 @@ export class HubOAuthProvider implements OAuthServerProvider {
    * after the response has gone out.
    */
   async authorize(client: OAuthClientInformationFull, params: AuthorizationParams, res: Response): Promise<void> {
+    // Asking to authorize is use: it keeps a registration out of the sweep for
+    // never-confirmed clients, so a user who takes their time over the password
+    // does not have the registration deleted underneath them.
+    this.store.touchClient(client.client_id);
     const resource = this.resolveResource(params.resource);
     const session = this.readSessionCookie(res.req.headers.cookie);
     if (session && this.isApproved(client, params.redirectUri)) {
@@ -151,9 +224,12 @@ export class HubOAuthProvider implements OAuthServerProvider {
       return;
     }
     const request = this.signPending(client, { ...params, resource });
+    // A metadata-document client is identified by a URL nobody can forge, so
+    // the page can show where the self-declared name came from.
+    const identity = { clientName: client.client_name, resource: resource?.href, ...this.clientIdentity(client) };
     const page = session
-      ? renderConsentPage(request, this.csrfToken(session), params.redirectUri, client.client_name, resource?.href)
-      : renderLoginPage(request, params.redirectUri, client.client_name, undefined, resource?.href);
+      ? renderConsentPage(request, this.csrfToken(session), params.redirectUri, identity)
+      : renderLoginPage(request, params.redirectUri, identity);
     // Submitting either form ends in a redirect to this client's redirect_uri,
     // which the SDK has already matched against its registration.
     allowFormActionTo(res, params.redirectUri);
@@ -173,8 +249,7 @@ export class HubOAuthProvider implements OAuthServerProvider {
       exp: Date.now() + CODE_TTL_MS,
       resource: resource?.href
     };
-    const payload = Buffer.from(JSON.stringify(pending)).toString('base64url');
-    return `${payload}.${sign(payload, this.store.cookieSecret)}`;
+    return signPayload(pending, this.store.cookieSecret);
   }
 
   isApproved(client: OAuthClientInformationFull, redirectUri: string): boolean {
@@ -186,16 +261,14 @@ export class HubOAuthProvider implements OAuthServerProvider {
 
   approve(client: OAuthClientInformationFull, redirectUri: string): void {
     this.store.saveApproval(client.client_id, redirectUri, client.client_name);
-    console.log(`mcp-hub: approved OAuth client ${client.client_id} (${client.client_name ?? 'unnamed'}) for ${redirectUri}`);
+    console.log(
+      `mcp-hub: approved OAuth client ${logSafe(client.client_id)} (${logSafe(client.client_name ?? 'unnamed')}) for ${logSafe(redirectUri)}`
+    );
   }
 
   decodePendingAuthorization(token: string): PendingAuthorization | undefined {
-    const [payload, signature] = token.split('.');
-    if (!payload || !signature) return undefined;
-    const expected = sign(payload, this.store.cookieSecret);
-    if (signature.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) return undefined;
-    const pending = JSON.parse(Buffer.from(payload, 'base64url').toString()) as PendingAuthorization;
-    if (pending.exp < Date.now()) return undefined;
+    const pending = readSignedPayload<PendingAuthorization>(token, this.store.cookieSecret);
+    if (!pending || pending.exp < Date.now()) return undefined;
     return pending;
   }
 
@@ -254,8 +327,7 @@ export class HubOAuthProvider implements OAuthServerProvider {
     const value = decodeURIComponent(match[1]);
     const [expires, signature] = value.split('.');
     if (!expires || !signature) return undefined;
-    const expected = sign(expires, this.store.cookieSecret);
-    if (signature.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) return undefined;
+    if (!signatureMatches(expires, signature, this.store.cookieSecret)) return undefined;
     return Number(expires) > Date.now() ? value : undefined;
   }
 
@@ -269,8 +341,7 @@ export class HubOAuthProvider implements OAuthServerProvider {
 
   verifyCsrfToken(sessionValue: string, token: unknown): boolean {
     if (typeof token !== 'string') return false;
-    const expected = this.csrfToken(sessionValue);
-    return token.length === expected.length && crypto.timingSafeEqual(Buffer.from(token), Buffer.from(expected));
+    return signatureMatches(`csrf:${sessionValue}`, token, this.store.cookieSecret);
   }
 
   // --- Token endpoint ------------------------------------------------------
@@ -300,6 +371,7 @@ export class HubOAuthProvider implements OAuthServerProvider {
       throw new InvalidGrantError('resource does not match the authorization request');
     }
     this.codes.delete(authorizationCode); // single use
+    this.store.touchClient(client.client_id);
     return this.issueTokens(client.client_id, pending.scopes, undefined, pending.resource);
   }
 
@@ -316,7 +388,7 @@ export class HubOAuthProvider implements OAuthServerProvider {
       const consumed = this.store.wasConsumed(refreshToken);
       if (consumed) {
         const revoked = this.store.revokeFamily(consumed.familyId);
-        console.warn(`mcp-hub: refresh token replay from client ${client.client_id}, revoked ${revoked} token(s)`);
+        console.warn(`mcp-hub: refresh token replay from client ${logSafe(client.client_id)}, revoked ${revoked} token(s)`);
       }
       throw new InvalidGrantError('Invalid refresh token');
     }
@@ -332,6 +404,7 @@ export class HubOAuthProvider implements OAuthServerProvider {
     if (this.options.requireResource && !tokenResource) throw new InvalidTargetError('A resource indicator is required');
     // Tokens issued before families existed adopt one on their first rotation.
     const familyId = record.familyId ?? crypto.randomBytes(16).toString('base64url');
+    this.store.touchClient(client.client_id);
     this.store.consumeRefreshToken(refreshToken, familyId, record.expiresAt);
     return this.issueTokens(client.client_id, scopes ?? record.scopes, familyId, tokenResource);
   }

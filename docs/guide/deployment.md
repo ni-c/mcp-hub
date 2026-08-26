@@ -9,7 +9,7 @@ Recommended. Multi-arch images (`linux/amd64`, `linux/arm64`) are published on
 every push to `main` and on every `vX.Y.Z` release tag.
 
 ```sh
-docker pull ghcr.io/ni-c/mcp-hub:0.6.0
+docker pull ghcr.io/ni-c/mcp-hub:0.10.0
 ```
 
 | Tag | Points at |
@@ -21,7 +21,7 @@ docker pull ghcr.io/ni-c/mcp-hub:0.6.0
 
 Use a version tag, not `latest`, so updates happen when you decide. For a truly
 immutable deployment, record the resolved digest from `docker image inspect`
-and pin `ghcr.io/ni-c/mcp-hub:0.6.0@sha256:…`.
+and pin `ghcr.io/ni-c/mcp-hub:0.10.0@sha256:…`.
 
 Update with `docker compose pull && docker compose up -d`.
 
@@ -60,7 +60,7 @@ The parts that matter:
 ```yaml
 services:
   mcp-hub:
-    image: ghcr.io/ni-c/mcp-hub:0.6.0   # pin a digest in production
+    image: ghcr.io/ni-c/mcp-hub:0.10.0   # pin a digest in production
     container_name: mcp-hub
     restart: unless-stopped
 
@@ -179,7 +179,7 @@ The published image contains Node, `npx`, `uv`/`uvx`, Python 3 and `git`, but
 no MCP servers. Install the ones you need at exact versions in your own layer:
 
 ```dockerfile
-FROM ghcr.io/ni-c/mcp-hub:0.6.0   # pin @sha256:<digest> in production
+FROM ghcr.io/ni-c/mcp-hub:0.10.0   # pin @sha256:<digest> in production
 USER root
 RUN npm install -g paperless-mcp@1.2.3 \
  && uv tool install --python 3.12 some-python-mcp==0.4.1
@@ -216,11 +216,16 @@ and whether it is part of `/hub`:
 {
   "status": "degraded",
   "servers": {
-    "paperless":     { "state": "up",   "restarts": 0, "tools": 14, "hub": true },
-    "homeassistant": { "state": "down", "restarts": 3, "tools": 0,  "hub": true }
+    "paperless":     { "state": "up",           "kind": "stdio",  "restarts": 0, "tools": 14, "hub": true },
+    "homeassistant": { "state": "down",         "kind": "remote", "restarts": 3, "tools": 0,  "hub": true },
+    "some-saas":     { "state": "unauthorized", "kind": "remote", "restarts": 0, "tools": 0,  "hub": true }
   }
 }
 ```
+
+`unauthorized` is the one state a restart cannot clear: that upstream needs
+`mcp-hub-admin upstream login <name>`. See the
+[admin CLI reference](/reference/admin-cli#upstream).
 
 A degraded child deliberately does **not** mark the container unhealthy —
 restarting the whole hub would not fix one broken upstream.
@@ -300,26 +305,51 @@ connection, and such a jail will happily ban your own clients. Exclude the
 hub's vhost.
 :::
 
-## Revoking a client
+## Managing clients
 
-Both commands share `/data` with the running hub. Each side re-reads the state
-file before it reads or writes, so the hub does not need to be stopped and a
-revocation is visible to it on the next request:
+The CLI shares `/data` with the running hub. Each side re-reads the state file
+before it reads or writes, so the hub does not need to be stopped and a change
+is visible to it on the next request:
 
 ```sh
 docker exec mcp-hub node /app/dist/admin.js clients list
 docker exec mcp-hub node /app/dist/admin.js clients revoke CLIENT_ID
+docker exec mcp-hub node /app/dist/admin.js clients delete CLIENT_ID
+docker exec mcp-hub node /app/dist/admin.js clients prune --dry-run
+docker exec mcp-hub node /app/dist/admin.js clients add --name "Legacy app" --redirect-uri https://app.example/cb
 ```
 
-`clients list` prints each registered client with its registered and approved
-redirect URIs and the time it was approved. `clients revoke` removes the
-approval and every refresh token, and rejects already-issued access tokens
-immediately. The next connection from that client needs explicit approval
-again.
+`revoke` removes the approval and every refresh token, and rejects
+already-issued access tokens immediately; the registration itself stays, so the
+client can be approved again. `delete` removes the registration too. `prune`
+applies the [lifecycle rules](/guide/client-registration#registrations-do-not-accumulate)
+on demand. `add` issues a `client_id` and secret by hand, for a client that can
+do neither dynamic registration nor a metadata document — it is approved on
+creation and is never touched by the lifecycle rules.
 
-Installed from npm, the same commands are `mcp-hub-admin clients list` and
-`mcp-hub-admin clients revoke <id>` with `DATA_PATH` pointing at the state
-directory.
+## Authorizing an upstream
+
+A remote server with an [`oauth` block](/guide/configuration#upstreams-that-speak-oauth)
+that uses the `authorization_code` grant needs one browser visit before it can
+connect. Until then it sits in `unauthorized` and says so in `/health`:
+
+```sh
+docker exec mcp-hub node /app/dist/admin.js upstream list
+docker exec mcp-hub node /app/dist/admin.js upstream login some-saas
+```
+
+`login` prints a URL. Open it in a browser **that is signed in to this hub** —
+the callback requires both a signed, single-use `state` and a valid hub session
+— and the server comes up on its own. `status`, `register`, `refresh` and
+`logout` round it out; the full list is in the
+[admin CLI reference](/reference/admin-cli).
+
+`upstream` commands read `CONFIG_PATH` as well as `DATA_PATH`, so run them
+inside the hub container where both are already set.
+
+Installed from npm, the same commands are `mcp-hub-admin clients list`,
+`mcp-hub-admin upstream login <server>` and so on, with `DATA_PATH` — and, for
+`upstream`, `CONFIG_PATH` — pointing at the same files the hub uses.
 
 ## API tokens
 

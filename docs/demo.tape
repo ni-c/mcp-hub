@@ -36,7 +36,7 @@ Type "cat config/mcp.json"
 Enter
 Sleep 3.5s
 
-Type "# one endpoint — four meta-tools"
+Type "# one endpoint — six meta-tools"
 Enter
 Type `curl -s localhost:7690/hub -H "Authorization: Bearer $TOKEN" -H @headers -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_servers","arguments":{}}}' | jq -r '.result.content[0].text'`
 Enter

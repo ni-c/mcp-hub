@@ -36,11 +36,11 @@ back out.
 
   <rect class="node" x="412" y="40" width="150" height="56" rx="10" />
   <text x="487" y="64" text-anchor="middle" class="label-title">OAuth 2.1 AS</text>
-  <text x="487" y="82" text-anchor="middle" class="label-muted">DCR · PKCE · consent</text>
+  <text x="487" y="82" text-anchor="middle" class="label-muted">CIMD · DCR · PKCE · consent</text>
 
   <rect class="node" x="412" y="122" width="150" height="56" rx="10" />
   <text x="487" y="146" text-anchor="middle" class="label-title">/hub server</text>
-  <text x="487" y="164" text-anchor="middle" class="label-muted">4 meta-tools</text>
+  <text x="487" y="164" text-anchor="middle" class="label-muted">6 meta-tools</text>
 
   <rect class="node" x="412" y="204" width="150" height="56" rx="10" />
   <text x="487" y="228" text-anchor="middle" class="label-title">proxy server</text>
@@ -128,8 +128,8 @@ actually declared.
 ## Supervisor lifecycle
 
 <figure class="hub-diagram">
-<svg viewBox="0 0 760 250" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="life-title">
-  <title id="life-title">Supervisor state machine: starting, up, down, backoff, restart</title>
+<svg viewBox="0 0 760 360" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="life-title">
+  <title id="life-title">Supervisor state machine: starting, up, down, backoff, plus sleeping for idle on-demand servers and unauthorized for an upstream awaiting a login</title>
   <defs>
     <marker id="arrow-life" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M0 0 L10 5 L0 10 z" />
@@ -160,10 +160,29 @@ actually declared.
   <path class="edge" d="M692 90 C 692 40, 400 34, 89 34 L89 86" marker-end="url(#arrow-life)" />
   <text x="392" y="26" text-anchor="middle" class="label-muted">restart after the delay, doubling each time</text>
 
-  <path class="edge edge-dashed" d="M303 142 C 303 196, 420 200, 480 200 C 620 200, 692 190, 692 146" marker-end="url(#arrow-life)" />
-  <text x="470" y="220" text-anchor="middle" class="label-muted">5 minutes of uptime resets the delay to 1 s</text>
+  <path class="edge edge-dashed" d="M330 142 C 340 180, 560 186, 692 168 L692 146" marker-end="url(#arrow-life)" />
+  <text x="516" y="200" text-anchor="middle" class="label-muted">5 minutes of uptime resets the delay to 1 s</text>
+
+  <rect class="node" x="238" y="245" width="130" height="52" rx="10" />
+  <text x="303" y="269" text-anchor="middle" class="label-title">sleeping</text>
+  <text x="303" y="286" text-anchor="middle" class="label-muted">answers from cache</text>
+
+  <rect class="node" x="452" y="245" width="160" height="52" rx="10" />
+  <text x="532" y="269" text-anchor="middle" class="label-title">unauthorized</text>
+  <text x="532" y="286" text-anchor="middle" class="label-muted">upstream wants a login</text>
+
+  <path class="edge" d="M272 142 L272 241" marker-end="url(#arrow-life)" />
+  <text x="228" y="196" text-anchor="end" class="label-muted">idle</text>
+  <path class="edge" d="M336 241 L336 146" marker-end="url(#arrow-life)" />
+  <text x="352" y="196" text-anchor="start" class="label-muted">on use</text>
+
+  <path class="edge" d="M517 142 L517 241" marker-end="url(#arrow-life)" />
+  <text x="533" y="196" text-anchor="start" class="label-muted">no usable token</text>
+
+  <path class="edge" d="M532 297 C 532 330, 400 336, 89 336 L89 146" marker-end="url(#arrow-life)" />
+  <text x="300" y="352" text-anchor="middle" class="label-muted">after mcp-hub-admin upstream login</text>
 </svg>
-<figcaption>The backoff never gives up — a server whose dependency is down recovers on its own once the dependency returns.</figcaption>
+<figcaption>The backoff never gives up — a server whose dependency is down recovers on its own once the dependency returns. The two states below it are the ones a restart cannot reach: an idle on-demand server rests until it is used, and an upstream whose OAuth token is missing or refused waits for a person.</figcaption>
 </figure>
 
 The numbers, all fixed:
@@ -207,7 +226,7 @@ is logged and ignored — the previous configuration stays live.
 
 Registering nine connectors puts nine servers' worth of tool schemas into the
 model's context before a question is asked. `/hub` inverts that: one connector,
-four meta-tools, and schemas fetched only when needed.
+six meta-tools, and schemas fetched only when needed.
 
 <figure class="hub-diagram">
 <svg viewBox="0 0 760 210" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="hub-title">

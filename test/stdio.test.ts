@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -36,7 +36,7 @@ const started: Array<Awaited<ReturnType<typeof createStdioHub>>> = [];
 // idleTimeoutMinutes: 0 unless a test is about the lifecycle — every other
 // assertion here is about the transport, and on-demand would make "is the
 // child up" a moving target.
-function startHub(configPath: string, options: { idleTimeoutMinutes?: number; toolCachePath?: string } = {}) {
+function startHub(configPath: string, options: { idleTimeoutMinutes?: number; toolCachePath?: string; dataPath?: string } = {}) {
   const hub = createStdioHub({ configPath, idleTimeoutMinutes: 0, ...options });
   started.push(hub);
   return hub;
@@ -232,4 +232,61 @@ describe('the --stdio entrypoint', () => {
       fs.rmSync(binDir, { recursive: true, force: true });
     }
   }, 30_000);
+});
+
+describe('upstream OAuth in stdio mode', () => {
+  /** A config with one remote server that needs an upstream token. */
+  function oauthConfig(): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-hub-stdio-oauth-'));
+    const configPath = path.join(dir, 'mcp.json');
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        mcpServers: {
+          saas: { type: 'http', url: 'https://saas.example/mcp', oauth: { mode: 'dcr', grant: 'authorization_code' } }
+        }
+      })
+    );
+    return configPath;
+  }
+
+  it('says why an OAuth upstream cannot work without a state directory', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      // There is nowhere to read a token from here, and no listener for a
+      // browser to come back to — so say so once instead of failing silently.
+      startHub(oauthConfig());
+      const said = warn.mock.calls.map(call => String(call[0])).join('\n');
+      expect(said).toContain('saas');
+      expect(said).toContain('DATA_PATH');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('says the credentials have to be authorized against the HTTP hub first', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      // A state directory that no hub has ever run against holds no issuer, so
+      // there is nothing to reuse yet.
+      const dataPath = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-hub-stdio-data-'));
+      startHub(oauthConfig(), { dataPath });
+      expect(warn.mock.calls.map(call => String(call[0])).join('\n')).toContain('authorize them against the HTTP hub');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('stays quiet when no server needs one', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-hub-stdio-plain-'));
+      const configPath = path.join(dir, 'mcp.json');
+      fs.writeFileSync(configPath, JSON.stringify({ mcpServers: { plain: { type: 'http', url: 'https://plain.example/mcp' } } }));
+      startHub(configPath);
+      expect(warn.mock.calls.map(call => String(call[0])).join('\n')).not.toContain('DATA_PATH');
+    } finally {
+      warn.mockRestore();
+    }
+  });
 });

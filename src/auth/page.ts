@@ -2,6 +2,40 @@ export function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
 }
 
+/** What the login and consent pages say about the client that is asking. */
+export interface ClientIdentity {
+  clientName?: string;
+  /** Canonical resource the token would be bound to. */
+  resource?: string;
+  /** The Client ID Metadata Document URL, for clients that have one. */
+  clientId?: string;
+  /** Every redirect URI points at this machine. */
+  loopbackOnly?: boolean;
+}
+
+/**
+ * The block both pages share: what access is requested, where codes would go
+ * and — for a Client ID Metadata Document client — the URL that vouches for
+ * the name above it. The document URL is the one part of a CIMD client's
+ * identity that cannot be invented, which is why the specification asks for it
+ * to be shown; a client whose redirect URIs are all local cannot be attributed
+ * to anything at all, so that gets said outright.
+ */
+export function renderIdentity(redirectUri: string, identity: ClientIdentity): string {
+  const lines = [
+    '  <p class="label">Requested access</p>',
+    `  <code class="target">${escapeHtml(identity.resource ?? 'Every server on this hub')}</code>`
+  ];
+  if (identity.clientId) {
+    lines.push('  <p class="label">Identified by</p>', `  <code class="target">${escapeHtml(identity.clientId)}</code>`);
+  }
+  lines.push('  <p class="label">Codes will be sent to</p>', `  <code class="target">${escapeHtml(redirectUri)}</code>`);
+  if (identity.loopbackOnly) {
+    lines.push('  <p class="error">This client only accepts codes on this machine, so any program running here could be the one asking.</p>');
+  }
+  return lines.join('\n');
+}
+
 /** Shared chrome for the two interactive pages, login and consent. */
 export function renderPage(title: string, body: string): string {
   return `<!doctype html>
