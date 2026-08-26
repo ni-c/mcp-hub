@@ -20,6 +20,11 @@ export default defineConfig({
   lastUpdated: true,
   sitemap: { hostname: site },
 
+  // The "try it locally" page links into the reader's own machine — the demo
+  // hub on :7690 and an inspector on :6274. The dead-link check cannot follow
+  // those and should not try; they are the point of the page.
+  ignoreDeadLinks: [/^https?:\/\/localhost(:\d+)?(\/|$)/],
+
   head: [
     ['link', { rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' }],
     ['meta', { name: 'theme-color', content: '#6366f1' }],
@@ -57,6 +62,7 @@ export default defineConfig({
           text: 'Introduction',
           items: [
             { text: 'What is mcp-hub?', link: '/guide/' },
+            { text: 'Try it locally', link: '/guide/demo' },
             { text: 'Getting started', link: '/guide/getting-started' },
             { text: 'Connecting clients', link: '/guide/clients' },
             { text: 'Client compatibility', link: '/guide/client-compatibility' }

@@ -121,6 +121,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through. A metadata-document client leaves no registration behind, so its
   approval is the whole record; `clients revoke` works on it either way.
 
+- **A `demo/` directory you can run without owning anything.**
+  `docker compose up -d` brings up a hub with three fake MCP servers —
+  weather, tickets and a small index of these docs — and
+  [the page that goes with it](https://mcp-hub.ni-c.de/guide/demo) shows how to
+  point the MCP Inspector or MCPJam at it. The servers answer from tables
+  compiled into them: no network, no filesystem, no stored state, so the same
+  call gives the same answer and nothing a visitor does outlasts the request.
+  `demo/token.sh` mints the API tokens. It exists because the first question
+  about a gateway is what it looks like from the client side, and until now the
+  only way to find out was to deploy one.
+
 ### Changed
 
 - The authorization-server metadata advertises

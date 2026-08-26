@@ -1,7 +1,10 @@
 node_modules/
 dist/
-data/
-config/
+# Anchored: these are the runtime directories a local `docker compose up`
+# creates beside the compose file. Unanchored they also swallowed
+# demo/config/, which is checked in on purpose.
+/data/
+/config/
 docs/.vitepress/cache/
 *.log
 .env

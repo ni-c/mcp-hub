@@ -1,0 +1,61 @@
+# A hub you can throw away. Three fake servers, one password, no reverse proxy.
+#
+# This is NOT a deployment template — see docker-compose.example.yml in the
+# repository root for that. The differences are deliberate and all of them are
+# wrong for a real host: a published password, plain HTTP, a one-minute idle
+# timeout, and data in a volume nobody backs up.
+services:
+  mcp-hub:
+    build:
+      context: .
+      args:
+        # Override with MCP_HUB_IMAGE=mcp-hub:local to demo the working tree.
+        BASE_IMAGE: ${MCP_HUB_IMAGE:-ghcr.io/ni-c/mcp-hub:latest}
+    image: mcp-hub-demo:local
+    container_name: mcp-hub-demo
+    mem_limit: 1g
+    read_only: true
+    restart: unless-stopped
+
+    ports:
+      # Localhost only. The demo has no TLS and a password everyone knows.
+      - "127.0.0.1:7690:80"
+
+    environment:
+      EXTERNAL_URL: "http://localhost:7690"
+      PASSWORD: "demo"
+
+      # One minute instead of the default hour, so idle sleep is something you
+      # can watch happen rather than read about.
+      IDLE_TIMEOUT_MINUTES: "1"
+
+      # Both inspectors register themselves through Dynamic Client
+      # Registration, which needs nothing else here. A client that identifies
+      # itself with a metadata document served from localhost additionally
+      # needs CIMD_ALLOW_PRIVATE_ADDRESSES=true — left off because it warns on
+      # every start, and that warning is right everywhere but here.
+
+    volumes:
+      # The directory, not the file: editors save via rename, and a single-file
+      # bind mount cannot follow the new inode. Edit config/mcp.json while the
+      # hub runs and it reloads.
+      - "./config:/config:ro"
+      # A named volume rather than a bind mount, so there is no `chown 1000`
+      # step before the first start. `docker compose down -v` resets the demo
+      # to a blank slate, tokens and client registrations included.
+      - "demo-data:/data"
+
+    pids_limit: 300
+
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      - /home/node/.cache:size=128m,mode=0700,uid=1000,gid=1000
+
+    security_opt:
+      - no-new-privileges:true
+
+    cap_drop:
+      - ALL
+
+volumes:
+  demo-data:
