@@ -139,10 +139,16 @@ export class ManagedServer {
   serverInfo?: Implementation;
   capabilities?: ServerCapabilities;
   tools: Tool[] = [];
-  /** How many tools the filter removed, for /health. Zero when unfiltered. */
-  toolsHidden = 0;
-  /** Filter entries that matched no tool the upstream offers. */
-  filterUnmatched: string[] = [];
+  /**
+   * How many tools the filter removed, for /health, and which entries matched
+   * nothing. Both stay `undefined` until the server has actually listed its
+   * tools: a snapshot restored from tool-cache.json is *already* filtered, so
+   * neither can be recomputed from it — every denyTools entry would look
+   * unmatched. `undefined` means "not measured yet", and /health omits it
+   * rather than reporting a zero it did not earn.
+   */
+  toolsHidden?: number;
+  filterUnmatched?: string[];
   restarts = 0;
   lastError?: string;
   /** Last time a request was actually forwarded; the idle sweep measures from here. */

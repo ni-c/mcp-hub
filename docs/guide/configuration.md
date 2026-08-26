@@ -284,7 +284,15 @@ looking — a filter edit bounces that one server and reprints the line:
 [paperless] tool filter: no tool matches "search_document"
 ```
 
-`/health` carries the same counts per server under `toolFilter`.
+`/health` carries the same counts per server under `toolFilter` — `hidden` and
+`unmatched` from the moment the server has listed its tools, `exposed` always.
+
+**It does not shrink what the hub accepts, only what it passes on.** The limits
+on a `tools/list` answer — how many tools and how many bytes of metadata — are
+measured against what the upstream actually sent, before the filter runs. An
+upstream that blows them fails as a whole, and `allowTools` will not rescue it:
+otherwise a server could bury payload in tools it knows are filtered out. If a
+server is too large, the knob for that is on the server, not here.
 
 ::: tip Prefer the upstream's own knob where it has one
 ni-c's MCP servers take `<PREFIX>_ALLOW_TOOLS` in `env`, with the same syntax —

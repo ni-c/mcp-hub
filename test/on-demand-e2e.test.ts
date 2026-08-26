@@ -180,6 +180,19 @@ describe('on-demand boot', () => {
     expect(hub.supervisor.get('lazyfiltered')!.state).toBe('sleeping');
   });
 
+  it('reports exposed but not hidden while the server is still asleep', async () => {
+    // Runs before the wake below, deliberately. The seeded snapshot is already
+    // filtered, so "how many did the filter remove" has no honest answer yet —
+    // and neither has "which entries matched nothing", because every denyTools
+    // entry would look unmatched against an array those tools were cut from.
+    const response = await request(hub.app).get('/health').set('Authorization', `Bearer ${accessToken}`);
+    const filter = response.body.servers.lazyfiltered.toolFilter as Record<string, unknown>;
+    expect(hub.supervisor.get('lazyfiltered')!.state).toBe('sleeping');
+    expect(filter.exposed).toBe(1);
+    expect(filter).not.toHaveProperty('hidden');
+    expect(filter).not.toHaveProperty('unmatched');
+  });
+
   it('still filters once the server is awake, on the live branch', async () => {
     const client = await mcpClient('/lazyfiltered/mcp');
     await client.callTool({ name: 'echo', arguments: { message: 'hi' } });
@@ -187,6 +200,24 @@ describe('on-demand boot', () => {
     // Now answered live by the real child, not from the seeded snapshot.
     expect((await client.listTools()).tools.map(t => t.name)).toEqual(['echo']);
     await client.close();
+  });
+
+  it('fills in hidden and unmatched once the server has really listed its tools', async () => {
+    // Waiting on the field, not on the state: refreshTools() populates it after
+    // the wake and asynchronously, so `state === 'up'` alone races it.
+    const server = hub.supervisor.get('lazyfiltered')!;
+    const deadline = Date.now() + 10_000;
+    while (server.toolsHidden === undefined) {
+      if (Date.now() > deadline) throw new Error('the tool filter was never measured');
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    const response = await request(hub.app).get('/health').set('Authorization', `Bearer ${accessToken}`);
+    const filter = response.body.servers.lazyfiltered.toolFilter as Record<string, unknown>;
+    expect(filter.exposed).toBe(1);
+    // server-everything offers well over one tool, and `allowTools: ['echo']`
+    // matches exactly one of them — so something was hidden and nothing dangles.
+    expect(filter.hidden).toBeGreaterThan(0);
+    expect(filter.unmatched).toEqual([]);
   });
 
   it('reports a sleeping server as healthy', async () => {

@@ -26,8 +26,16 @@ export function healthHandler(supervisor: Supervisor) {
           hub: s.config.hub,
           // Only present when a filter is configured, so every other server's
           // entry keeps its shape. `tools` keeps its meaning: what a client sees.
+          // `hidden` and `unmatched` join it only once the server has really
+          // listed its tools — a snapshot from tool-cache.json is already
+          // filtered, so there is nothing honest to say about them yet.
           ...(hasToolFilter(s.config)
-            ? { toolFilter: { exposed: s.tools.length, hidden: s.toolsHidden, unmatched: s.filterUnmatched } }
+            ? {
+                toolFilter: {
+                  exposed: s.tools.length,
+                  ...(s.toolsHidden !== undefined ? { hidden: s.toolsHidden, unmatched: s.filterUnmatched } : {})
+                }
+              }
             : {}),
           // The image is the one detail that turns "scraper is down" into something
           // actionable for a sandbox; it is a local tag, not a credential.

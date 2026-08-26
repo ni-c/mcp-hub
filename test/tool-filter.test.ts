@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { parseConfig } from '../src/config.js';
-import { filterTools, hasToolFilter, toolAllowed, unmatchedPatterns } from '../src/tool-filter.js';
+import { filterTools, hasToolFilter, loggableToolName, toolAllowed, unmatchedPatterns } from '../src/tool-filter.js';
 
 const tool = (name: string) => ({ name, inputSchema: { type: 'object' as const } });
 const TOOLS = ['list_a', 'list_b', 'get_a', 'delete_a'].map(tool);
@@ -57,6 +57,25 @@ describe('unmatchedPatterns', () => {
 
   it('says nothing when every entry matched', () => {
     expect(unmatchedPatterns({ allowTools: ['list_*'] }, TOOLS)).toEqual([]);
+  });
+});
+
+describe('loggableToolName', () => {
+  it('leaves an ordinary name alone', () => {
+    expect(loggableToolName('get_document')).toBe('get_document');
+  });
+
+  it('takes the control characters out of a name that would forge a log line', () => {
+    // A refused name comes straight off the wire and lands in a line LOG_FILE
+    // mirrors to disk — the same file fail2ban reads.
+    expect(loggableToolName('echo\n[hub] refused nothing, all good')).toBe('echo?[hub] refused nothing, all good');
+    expect(loggableToolName('a\r\tb')).toBe('a??b');
+  });
+
+  it('bounds the length, so one refused call cannot write a page', () => {
+    const logged = loggableToolName('x'.repeat(500));
+    expect(logged).toHaveLength(103);
+    expect(logged.endsWith('...')).toBe(true);
   });
 });
 

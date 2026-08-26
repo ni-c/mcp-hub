@@ -24,7 +24,7 @@ import {
 import type { ListToolsResult, ServerCapabilities } from '@modelcontextprotocol/sdk/types.js';
 import type { ManagedServer } from './supervisor.js';
 import { ABSOLUTE_CALL_OPTIONS, assertForwardedResultSize } from './mcp-limits.js';
-import { filterTools, toolAllowed } from './tool-filter.js';
+import { filterTools, loggableToolName, toolAllowed } from './tool-filter.js';
 
 /**
  * The child's capabilities minus what this proxy does not actually serve.
@@ -95,7 +95,8 @@ function buildProxyServer(managed: ManagedServer): Server {
       // message is the neutral one a server gives for a tool it does not have —
       // announcing what was hidden would be a disclosure in itself.
       if (!toolAllowed(managed.config, req.params.name)) {
-        console.warn(`[${managed.name}] refused tools/call "${req.params.name}": not permitted by allowTools/denyTools`);
+        const logged = loggableToolName(req.params.name);
+        console.warn(`[${managed.name}] refused tools/call "${logged}": not permitted by allowTools/denyTools`);
         throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${req.params.name}`);
       }
       return use(req, CallToolResultSchema);

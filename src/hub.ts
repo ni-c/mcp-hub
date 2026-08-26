@@ -4,7 +4,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { ManagedServer, Supervisor } from './supervisor.js';
 import { VERSION } from './version.js';
 import { ABSOLUTE_CALL_OPTIONS, assertForwardedResultSize } from './mcp-limits.js';
-import { toolAllowed } from './tool-filter.js';
+import { loggableToolName, toolAllowed } from './tool-filter.js';
 
 function text(value: unknown): CallToolResult {
   return { content: [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value, null, 2) }] };
@@ -36,7 +36,7 @@ function firstLine(description: string | undefined): string {
  */
 const requireAllowedTool = (managed: ManagedServer, tool: string, server: string): CallToolResult | undefined => {
   if (toolAllowed(managed.config, tool)) return undefined;
-  console.warn(`[${managed.name}] refused "${tool}": not permitted by allowTools/denyTools`);
+  console.warn(`[${managed.name}] refused "${loggableToolName(tool)}": not permitted by allowTools/denyTools`);
   return toolError(`Unknown tool "${tool}" on server "${server}". Use list_tools to see available tools.`);
 };
 

@@ -133,9 +133,10 @@ header: the hub registers itself (statically, via RFC 7591 or via a client
 metadata document), obtains the token and refreshes it, with one browser visit
 started from the admin CLI where the grant needs a person.
 `"hub": false` hides a server from the `/hub` aggregate; its own path keeps
-working. `allowTools` / `denyTools` cut finer and apply to every kind
-of server: a filtered tool is absent from both `tools/list` and `/hub`, and is
-refused if called anyway — before the server is woken. Reserved names: `mcp`, `hub`, `authorize`, `token`, `register`,
+working. `allowTools` / `denyTools` cut finer and apply to every kind of
+server: a filtered tool is absent from both `tools/list` and `/hub`, and is
+refused if called anyway — before the server is woken.
+Reserved names: `mcp`, `hub`, `authorize`, `token`, `register`,
 `login`, `consent`, `health`, `livez`, `revoke`, `upstream`, `.well-known`.
 
 All stdio children share the hub's Unix user and can read its mounted files.

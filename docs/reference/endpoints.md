@@ -63,10 +63,13 @@ until somebody acts. A
 it runs as — a local tag and a name, not credentials, and the difference
 between "scraper is down" and something you can act on.
 
-
 A server with `allowTools` or `denyTools` also carries a `toolFilter` object —
 `exposed`, `hidden` and any `unmatched` entries. It is absent for every server
 without a filter, and `tools` keeps its meaning: the number a client can see.
+`hidden` and `unmatched` appear only once the server has really listed its
+tools: a `sleeping` server restored from the tool cache holds a snapshot that
+was already filtered, so there is nothing honest to say about them yet, and the
+two keys stay away rather than reporting a zero.
 
 ## OAuth 2.1
 

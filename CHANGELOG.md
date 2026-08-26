@@ -29,10 +29,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Unlike ni-c's own MCP servers, an entry that matches no tool is not a config
   error — the hub only learns an upstream's tools once it has connected. The
   supervisor logs it at the moment it filters, and `/health` carries `exposed`,
-  `hidden` and `unmatched` per filtered server.
+  `hidden` and `unmatched` per filtered server. The latter two only once the
+  server has really listed its tools: a snapshot restored from the tool cache is
+  already filtered, so `/health` omits them rather than reporting a zero it did
+  not earn.
 
   Filters tools only: resources, resource templates and prompts on a per-server
-  path are untouched.
+  path are untouched. It also does not shrink what the hub accepts — the size
+  limits on a `tools/list` answer are measured against the raw upstream, so a
+  server that blows them still fails as a whole.
 
 ## [0.10.0] - 2026-08-25
 

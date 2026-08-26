@@ -61,3 +61,21 @@ export function unmatchedPatterns(config: ToolFilterConfig, tools: Tool[]): stri
     pattern => !names.some(name => matches([pattern], name))
   );
 }
+
+/** Control characters would let a caller forge lines in a log LOG_FILE mirrors to disk. */
+const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/g;
+const MAX_LOGGED_NAME = 100;
+
+/**
+ * The name a refusal logs, made safe to print.
+ *
+ * A refused name comes straight off the wire — the whole point of the call
+ * guards is that a client may ask for anything — and it lands in a line
+ * `LOG_FILE` mirrors to disk, the same file fail2ban reads. Same treatment the
+ * docker proxy gives a caller-controlled URL: control characters out, length
+ * bounded.
+ */
+export function loggableToolName(name: string): string {
+  const safe = name.replace(CONTROL_CHARACTERS, '?');
+  return safe.length > MAX_LOGGED_NAME ? `${safe.slice(0, MAX_LOGGED_NAME)}...` : safe;
+}
