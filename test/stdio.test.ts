@@ -96,7 +96,10 @@ describe('stdio mode', () => {
       writeConfig({ everything: { command: process.execPath, args: [EVERYTHING], denyTools: ['get-*'] } })
     );
     const client = await connect(hub);
-    await waitFor(() => hub.supervisor.get('everything')?.state === 'up');
+    // Not just `state === 'up'`: refreshTools() fills managed.tools afterwards,
+    // asynchronously, so waiting on the state alone races the list this test
+    // reads. It passed locally and failed on CI, which is the usual shape.
+    await waitFor(() => (hub.supervisor.get('everything')?.tools.length ?? 0) > 0);
 
     const listed = (await client.callTool({ name: 'list_tools', arguments: { server: 'everything' } })) as CallToolResult;
     expect(listed.content[0].text).toContain('echo');
