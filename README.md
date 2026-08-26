@@ -29,6 +29,12 @@ recipes: [client compatibility](https://mcp-hub.ni-c.de/guide/client-compatibili
 
 ![Demo: config in, hub up, servers reachable through one endpoint](https://mcp-hub.ni-c.de/demo.gif)
 
+**Want to poke at it first?** [`demo/`](demo/) is a throwaway hub with three
+fake servers — `docker compose up -d`, then point the
+[MCP Inspector](https://mcp-hub.ni-c.de/guide/demo#mcp-inspector) or
+[MCPJam](https://mcp-hub.ni-c.de/guide/demo#mcpjam) at it. Nothing to
+configure, nothing to clean up but a volume.
+
 ## Why
 
 Wrapping each stdio MCP server in its own auth-proxy container costs a full

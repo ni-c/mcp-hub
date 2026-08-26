@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "weather": {
+      "command": "node",
+      "args": ["/app/demo-servers/weather.mjs"],
+      "keepAlive": true
+    },
+    "tickets": {
+      "command": "node",
+      "args": ["/app/demo-servers/tickets.mjs"]
+    },
+    "docs": {
+      "command": "node",
+      "args": ["/app/demo-servers/docs.mjs"]
+    }
+  }
+}
