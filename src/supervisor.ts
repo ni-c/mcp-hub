@@ -17,6 +17,7 @@ import { UpstreamAuth, UpstreamLoginRequiredError } from './upstream/auth.js';
 import { credentialFingerprint } from './upstream/provider.js';
 import { ToolCache } from './tool-cache.js';
 import type { ToolCacheEntry } from './tool-cache.js';
+import { filterTools, hasToolFilter, unmatchedPatterns } from './tool-filter.js';
 
 export type ServerState = 'starting' | 'up' | 'down' | 'stopped' | 'sleeping' | 'unauthorized';
 
@@ -138,6 +139,10 @@ export class ManagedServer {
   serverInfo?: Implementation;
   capabilities?: ServerCapabilities;
   tools: Tool[] = [];
+  /** How many tools the filter removed, for /health. Zero when unfiltered. */
+  toolsHidden = 0;
+  /** Filter entries that matched no tool the upstream offers. */
+  filterUnmatched: string[] = [];
   restarts = 0;
   lastError?: string;
   /** Last time a request was actually forwarded; the idle sweep measures from here. */
@@ -184,7 +189,10 @@ export class ManagedServer {
   hydrate(entry: ToolCacheEntry): void {
     this.serverInfo = entry.serverInfo;
     this.capabilities = entry.capabilities;
-    this.tools = entry.tools;
+    // Filtered again although the cache fingerprint covers the whole
+    // ServerConfig: "managed.tools only ever holds allowed tools" should hold
+    // however the array arrived, including a hand-seeded tool-cache.json.
+    this.tools = filterTools(this.config, entry.tools);
     this.state = 'sleeping';
   }
 
@@ -333,13 +341,35 @@ export class ManagedServer {
     this.pingTimer.unref();
   }
 
+  /**
+   * Says what the filter did, at the one moment the operator is looking: a
+   * filter edit bounces this server, so this prints seconds later. That is why
+   * an unmatched entry need not be fatal here, unlike in the ni-c servers where
+   * the tool names are known before anything starts.
+   */
+  private reportToolFilter(upstream: Tool[]): void {
+    if (!hasToolFilter(this.config)) return;
+    this.toolsHidden = upstream.length - this.tools.length;
+    this.filterUnmatched = unmatchedPatterns(this.config, upstream);
+    console.log(`[${this.name}] tool filter: ${this.tools.length} of ${upstream.length} tools exposed`);
+    for (const pattern of this.filterUnmatched) {
+      console.warn(`[${this.name}] tool filter: no tool matches "${pattern}"`);
+    }
+  }
+
   private async refreshTools(): Promise<void> {
     // Hold the client locally: onExit() clears this.client, and a paged list
     // spans awaits, so re-reading it per page could hit undefined mid-loop.
     const client = this.client;
     if (!client) return;
     try {
-      this.tools = await listAllTools(client);
+      // Filtered AFTER listAllTools, never inside it: that function enforces the
+      // MAX_TOOLS and metadata-byte budgets against the raw upstream, and
+      // filtering earlier would let an upstream bury payload in tools it knows
+      // are filtered.
+      const upstream = await listAllTools(client);
+      this.tools = filterTools(this.config, upstream);
+      this.reportToolFilter(upstream);
       this.options.persist?.(this);
     } catch (error) {
       console.error(`[${this.name}] failed to list tools: ${(error as Error).message}`);

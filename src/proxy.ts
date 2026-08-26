@@ -14,14 +14,17 @@ import {
   ListResourcesResultSchema,
   ListResourceTemplatesRequestSchema,
   ListResourceTemplatesResultSchema,
+  ErrorCode,
   ListToolsRequestSchema,
   ListToolsResultSchema,
+  McpError,
   ReadResourceRequestSchema,
   ReadResourceResultSchema
 } from '@modelcontextprotocol/sdk/types.js';
-import type { ServerCapabilities } from '@modelcontextprotocol/sdk/types.js';
+import type { ListToolsResult, ServerCapabilities } from '@modelcontextprotocol/sdk/types.js';
 import type { ManagedServer } from './supervisor.js';
 import { ABSOLUTE_CALL_OPTIONS, assertForwardedResultSize } from './mcp-limits.js';
+import { filterTools, toolAllowed } from './tool-filter.js';
 
 /**
  * The child's capabilities minus what this proxy does not actually serve.
@@ -76,10 +79,27 @@ function buildProxyServer(managed: ManagedServer): Server {
     // all hub paths configured enumerates them on connect, so answering from
     // the cached snapshot (instead of waking) is what keeps a fleet of
     // sleeping servers asleep. Neither branch counts as usage.
-    server.setRequestHandler(ListToolsRequestSchema, req =>
-      managed.state === 'up' && managed.client ? forwardLive(req, ListToolsResultSchema) : Promise.resolve({ tools: managed.tools })
-    );
-    server.setRequestHandler(CallToolRequestSchema, req => use(req, CallToolResultSchema));
+    server.setRequestHandler(ListToolsRequestSchema, async req => {
+      // managed.tools is filtered on the way in, but the live branch forwards
+      // the upstream's own answer and never consults it — so it has to filter
+      // too. Missing this is the obvious bug here: the filter would appear to
+      // work on a sleeping server and vanish the moment it woke.
+      if (managed.state !== 'up' || !managed.client) return { tools: managed.tools };
+      const live = (await forwardLive(req, ListToolsResultSchema)) as ListToolsResult;
+      return { ...live, tools: filterTools(managed.config, live.tools) };
+    });
+    server.setRequestHandler(CallToolRequestSchema, req => {
+      // Hiding is not a boundary on this path: the hub forwards by name, so a
+      // client holding a stale schema would still reach it. Refused before
+      // use(), so a forbidden name cannot wake a sleeping server either. The
+      // message is the neutral one a server gives for a tool it does not have —
+      // announcing what was hidden would be a disclosure in itself.
+      if (!toolAllowed(managed.config, req.params.name)) {
+        console.warn(`[${managed.name}] refused tools/call "${req.params.name}": not permitted by allowTools/denyTools`);
+        throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${req.params.name}`);
+      }
+      return use(req, CallToolResultSchema);
+    });
   }
   if (caps.resources) {
     server.setRequestHandler(ListResourcesRequestSchema, req => use(req, ListResourcesResultSchema));

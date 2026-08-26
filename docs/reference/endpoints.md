@@ -63,6 +63,11 @@ until somebody acts. A
 it runs as — a local tag and a name, not credentials, and the difference
 between "scraper is down" and something you can act on.
 
+
+A server with `allowTools` or `denyTools` also carries a `toolFilter` object —
+`exposed`, `hidden` and any `unmatched` entries. It is absent for every server
+without a filter, and `tools` keeps its meaning: the number a client can see.
+
 ## OAuth 2.1
 
 | Path | Auth | Purpose |

@@ -164,6 +164,15 @@ beforeAll(async () => {
       mcpServers: {
         everything: { command: process.execPath, args: [EVERYTHING] },
         hidden: { command: process.execPath, args: [EVERYTHING], hub: false },
+        // allow and deny in one entry, so the subtraction is exercised too. The
+        // upstream's names are hyphenated, which also shows the pattern syntax
+        // is not tied to the underscore names ni-c's own servers use.
+        filtered: {
+          command: process.execPath,
+          args: [EVERYTHING],
+          allowTools: ['echo', 'get-*'],
+          denyTools: ['get-env']
+        },
         broken: { command: '/bin/false' },
         remote: {
           type: 'http',
@@ -556,6 +565,38 @@ describe('per-server proxy', () => {
     }
   });
 
+  it('lists only the tools allowTools/denyTools leave', async () => {
+    // This suite runs with idleTimeoutMinutes 0, so every server is UP — which
+    // makes this the live branch of the tools/list handler, the one that
+    // forwards the upstream's own answer instead of the cached snapshot.
+    const client = await mcpClient('/filtered/mcp', accessToken);
+    const names = (await client.listTools()).tools.map(t => t.name);
+    expect(names).toContain('echo');
+    expect(names).toContain('get-sum');
+    // Allowed by `get-*`, then taken back out by the deny list.
+    expect(names).not.toContain('get-env');
+    // Never allowed in the first place.
+    expect(names).not.toContain('toggle-simulated-logging');
+    await client.close();
+  });
+
+  it('refuses a filtered tool without saying it was filtered', async () => {
+    // Hiding is not a boundary here: the hub forwards by name, so a client
+    // holding a stale schema would still reach it.
+    const client = await mcpClient('/filtered/mcp', accessToken);
+    await expect(client.callTool({ name: 'get-env', arguments: {} })).rejects.toThrow(/Unknown tool/);
+    await expect(client.callTool({ name: 'toggle-simulated-logging', arguments: {} })).rejects.toThrow(
+      /Unknown tool/
+    );
+    await client.close();
+  });
+
+  it('leaves an unfiltered server untouched', async () => {
+    const client = await mcpClient('/everything/mcp', accessToken);
+    expect((await client.listTools()).tools.map(t => t.name)).toContain('get-env');
+    await client.close();
+  });
+
   it('returns 503 for a server whose child is down', async () => {
     await request(hub.app)
       .post('/broken/mcp')
@@ -629,6 +670,51 @@ describe('/hub aggregate', () => {
     const tools = await client.listTools();
     expect(tools.tools.map(t => t.name).sort()).toEqual(['call_tool', 'get_tool_schema', 'list_servers', 'list_tools', 'sleep_server', 'wake_server']);
     await client.close();
+  });
+
+  it('shows a filtered server only its allowed tools, through every meta-tool', async () => {
+    const client = await mcpClient('/hub', accessToken);
+
+    const listed = (await client.callTool({ name: 'list_tools', arguments: { server: 'filtered' } })) as CallToolResult;
+    expect(JSON.stringify(listed.content)).toContain('echo');
+    expect(JSON.stringify(listed.content)).not.toContain('get-env');
+
+    // get_tool_schema is guarded before prepare(), which would otherwise
+    // pre-warm a sleeping server for a name it is about to refuse.
+    const schema = (await client.callTool({
+      name: 'get_tool_schema',
+      arguments: { server: 'filtered', tool: 'get-env' }
+    })) as CallToolResult;
+    expect(schema.isError).toBe(true);
+    expect(JSON.stringify(schema.content)).toContain('Unknown tool');
+
+    const called = (await client.callTool({
+      name: 'call_tool',
+      arguments: { server: 'filtered', tool: 'get-env', arguments: {} }
+    })) as CallToolResult;
+    expect(called.isError).toBe(true);
+    // Indistinguishable from a tool that never existed: /hub tokens go to
+    // third-party connectors, so the refusal must not enumerate what was hidden.
+    expect(JSON.stringify(called.content)).toContain('Unknown tool');
+    expect(JSON.stringify(called.content)).not.toContain('denyTools');
+
+    await client.close();
+  });
+
+  it('counts only the exposed tools in list_servers and /health', async () => {
+    const client = await mcpClient('/hub', accessToken);
+    const listed = (await client.callTool({ name: 'list_servers', arguments: {} })) as CallToolResult;
+    const servers = JSON.parse((listed.content[0] as { text: string }).text) as { name: string; toolCount: number }[];
+    expect(servers.find(s => s.name === 'filtered')!.toolCount).toBeLessThan(
+      servers.find(s => s.name === 'everything')!.toolCount
+    );
+    await client.close();
+
+    // No .expect(200): this fixture deliberately holds a `broken` server, so
+    // /health answers 503 by design. The body is what this test is about.
+    const health = await request(hub.app).get('/health').set('Authorization', `Bearer ${accessToken}`);
+    expect(health.body.servers.filtered.toolFilter).toMatchObject({ hidden: expect.any(Number) });
+    expect(health.body.servers.everything.toolFilter).toBeUndefined();
   });
 
   it('walks the list_servers -> list_tools -> get_tool_schema -> call_tool flow', async () => {

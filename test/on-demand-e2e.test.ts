@@ -92,7 +92,8 @@ beforeAll(async () => {
       mcpServers: {
         everything: { command: process.execPath, args: [EVERYTHING] },
         pinned: { command: process.execPath, args: [EVERYTHING], keepAlive: true },
-        secret: { command: process.execPath, args: [EVERYTHING], hub: false }
+        secret: { command: process.execPath, args: [EVERYTHING], hub: false },
+        lazyfiltered: { command: process.execPath, args: [EVERYTHING], allowTools: ['echo'] }
       }
     })
   );
@@ -106,6 +107,19 @@ beforeAll(async () => {
     serverInfo: { name: 'everything-cached', version: '0.0.1' },
     capabilities: { tools: {} },
     tools: [{ name: 'cached_echo', description: 'from the cache', inputSchema: { type: 'object' } }],
+    updatedAt: new Date().toISOString()
+  });
+
+  // Seeded with a tool the filter forbids, on purpose: hydrate() must filter it
+  // out too, so the invariant does not rest on the fingerprint check alone.
+  seeded.put('lazyfiltered', {
+    fingerprint: ToolCache.fingerprint(loadConfig(configPath).get('lazyfiltered')!),
+    serverInfo: { name: 'lazy-cached', version: '0.0.1' },
+    capabilities: { tools: {} },
+    tools: [
+      { name: 'echo', description: 'from the cache', inputSchema: { type: 'object' } },
+      { name: 'cached_forbidden', description: 'from the cache', inputSchema: { type: 'object' } }
+    ],
     updatedAt: new Date().toISOString()
   });
 
@@ -144,6 +158,35 @@ describe('on-demand boot', () => {
     await client.close();
     await new Promise(resolve => setTimeout(resolve, 100));
     expect(hub.supervisor.get('everything')!.state).toBe('sleeping');
+  });
+
+  it('filters the cached snapshot too, without waking the server', async () => {
+    // The cached branch of tools/list, and the defensive filter in hydrate():
+    // the seeded snapshot carries cached_forbidden, which allowTools excludes.
+    const client = await mcpClient('/lazyfiltered/mcp');
+    expect((await client.listTools()).tools.map(t => t.name)).toEqual(['echo']);
+    await client.close();
+    await new Promise(resolve => setTimeout(resolve, 100));
+    expect(hub.supervisor.get('lazyfiltered')!.state).toBe('sleeping');
+  });
+
+  it('does not wake a sleeping server for a forbidden tool', async () => {
+    // The load-bearing one: refusing after the wake would make the filter cost
+    // a process start for every probe of a name it forbids.
+    const client = await mcpClient('/lazyfiltered/mcp');
+    await expect(client.callTool({ name: 'get-env', arguments: {} })).rejects.toThrow(/Unknown tool/);
+    await client.close();
+    await new Promise(resolve => setTimeout(resolve, 100));
+    expect(hub.supervisor.get('lazyfiltered')!.state).toBe('sleeping');
+  });
+
+  it('still filters once the server is awake, on the live branch', async () => {
+    const client = await mcpClient('/lazyfiltered/mcp');
+    await client.callTool({ name: 'echo', arguments: { message: 'hi' } });
+    expect(hub.supervisor.get('lazyfiltered')!.state).toBe('up');
+    // Now answered live by the real child, not from the seeded snapshot.
+    expect((await client.listTools()).tools.map(t => t.name)).toEqual(['echo']);
+    await client.close();
   });
 
   it('reports a sleeping server as healthy', async () => {

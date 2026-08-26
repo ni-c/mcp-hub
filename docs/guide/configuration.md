@@ -240,6 +240,60 @@ If a single server is missing a secret it needs at runtime, only that child
 crash-loops (backoff up to 5 minutes, it never gives up); the others keep
 running.
 
+## Filtering tools
+
+`hub: false` hides a whole server. `allowTools` and `denyTools` cut finer, and
+they work on every kind of server — including a remote upstream you do not
+control, which is the strongest case for them:
+
+```json
+"paperless": {
+  "command": "paperless-mcp",
+  "allowTools": ["search_*", "get_document"],
+  "denyTools": ["delete_document"]
+}
+```
+
+Each entry is either an exact tool name or a prefix with a single trailing `*`.
+The allow list decides what is in; the deny list is then subtracted from it, so
+with only a deny list everything else stays. An empty `allowTools` array is
+legal and means *no tools* — the one-token way to cut a server off without
+removing its entry.
+
+**This is a boundary, not a tidy-up.** A filtered tool is absent from
+`tools/list` on the server's own path *and* from `list_tools` on `/hub`, and a
+client that calls it anyway is refused on both routes — before the server is
+woken, so a forbidden name cannot even cost a container start. The refusal is
+the same "unknown tool" a server gives for a name it never had: `/hub` tokens go
+to third-party connectors, and enumerating what was hidden would be a disclosure.
+
+**It filters tools.** Resources, resource templates, prompts and completions on
+a per-server path are untouched; a server whose tools you filter can still serve
+resources. If you need those gated too, `hub: false` and a separate path is the
+answer today.
+
+**A name that matches nothing is not a config error here**, unlike in ni-c's own
+MCP servers where the tool names are known before anything starts. The hub only
+learns an upstream's tools once it has connected, and taking the whole hub down
+because one upstream renamed a tool would be worse than the problem. Instead the
+supervisor logs it the moment it filters, which is also the moment you are
+looking — a filter edit bounces that one server and reprints the line:
+
+```
+[paperless] tool filter: 6 of 23 tools exposed
+[paperless] tool filter: no tool matches "search_document"
+```
+
+`/health` carries the same counts per server under `toolFilter`.
+
+::: tip Prefer the upstream's own knob where it has one
+ni-c's MCP servers take `<PREFIX>_ALLOW_TOOLS` in `env`, with the same syntax —
+a list moves between the two verbatim. Setting it there is tighter, because the
+server then never builds the tool at all. `allowTools` here is for servers you
+do not control. Note their `essential` preset is a *server* feature and belongs
+in `env`: `"allowTools": ["essential"]` is a name the hub cannot resolve.
+:::
+
 ## Hiding a server from `/hub`
 
 ```json
@@ -320,6 +374,9 @@ The config is validated strictly at load. Common messages:
 | `Server "…": "image" must not use ${VAR}` | only `env` values expand for docker servers ([why](/guide/sandboxing#docker-servers)) |
 | `Server "…": "privileged" is not supported` | the sandbox flags are fixed, not configurable |
 | `Undefined environment variable in config: ${VAR}` | the variable is not set in the container |
+| `"allowTools" must be an array of strings` | it was a bare string, or held a non-string |
+| `"allowTools" entry "…" — only a trailing "*" is supported` | the `*` was not the last character |
+| `"allowTools" must not contain an empty string` | a stray comma left an empty entry |
 
 At startup these are fatal — the hub refuses to run on a config it cannot
 parse. On reload they are logged and ignored.

@@ -292,7 +292,13 @@ cleaned up and restart delayed by the normal supervisor backoff.
 - **Denial of service at the network layer.** Rate limits protect the process,
   not your bandwidth.
 - **Data exfiltration by an authorized client.** Once approved, a client can
-  call every tool its token covers.
+  call every tool its token covers — narrowed by that server's `allowTools` /
+  `denyTools`, which are enforced on call and not merely in the listing. That
+  filter constrains what a _client_ reaches through the hub. It is not a
+  sandbox, it does not constrain the upstream itself, and it is no defence
+  against a compromised stdio child, which per the trust model above can mint
+  its own tokens. It also covers tools only: resources and prompts on a
+  per-server path are untouched.
 
 ## Supply chain
 

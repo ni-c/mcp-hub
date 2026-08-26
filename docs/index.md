@@ -41,7 +41,7 @@ features:
       width: 26
       height: 26
     title: The /hub aggregate
-    details: A single connector that exposes every server through six meta-tools — so your model's context holds 6 tool schemas instead of N×tools.
+    details: A single connector that exposes every server through six meta-tools — so your model's context holds 6 tool schemas instead of N×tools. Per-server allowTools and denyTools narrow that further — a filtered tool is hidden and refused, not merely hidden.
     link: /reference/hub-tools
     linkText: Meta-tool reference
   - icon:

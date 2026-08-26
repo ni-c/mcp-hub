@@ -15,6 +15,12 @@ on-demand server.
 The [stdio mode](/guide/clients#local-clients-over-stdio) serves the same six
 tools with the same behaviour — everything on this page applies there too.
 
+A server's `allowTools` / `denyTools` filter applies to every meta-tool below:
+`list_tools` and `list_servers`' `toolCount` show only what survives it, and
+`get_tool_schema` and `call_tool` refuse a filtered name with the same
+"unknown tool" they give for a name that never existed — before the server is
+woken. See [filtering tools](/guide/configuration#filtering-tools).
+
 ## The intended sequence
 
 ```
