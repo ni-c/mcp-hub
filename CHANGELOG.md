@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- #region changelog -->
 
-## [Unreleased]
+## [0.10.0] - 2026-08-27
 
 ### Added
 
@@ -38,10 +38,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   path are untouched. It also does not shrink what the hub accepts — the size
   limits on a `tools/list` answer are measured against the raw upstream, so a
   server that blows them still fails as a whole.
-
-## [0.10.0] - 2026-08-25
-
-### Added
 
 - **Client ID Metadata Documents (CIMD), the registration mechanism the MCP
   specification now prefers.** A client may use an HTTPS URL as its `client_id`
@@ -165,6 +161,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only way to find out was to deploy one.
 
 ### Changed
+
+- The README now carries the same eight badges, in the same order, as every other
+  MCP server in this family, all of them reading from npm rather than hard-coded;
+  the opening follows one shape; and the standalone "Full documentation" line is
+  gone, because the docs badge three lines above it points at the same page.
 
 - The authorization-server metadata advertises
   `client_id_metadata_document_supported`, and `private_key_jwt` alongside
