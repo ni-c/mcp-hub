@@ -104,15 +104,37 @@ Qwen Chat (via an `mcp-remote --header` stdio shim), older Cline and Windsurf
 builds, and Gemini CLI/Codex in header mode all take the same
 `Authorization: Bearer <token>` header.
 
-## Camp 3 — pre-registered OAuth clients (not yet supported)
+## Camp 3 — pre-registered OAuth clients (mint the client yourself)
 
 Grok's web connectors, Gemini Enterprise, Copilot Studio's manual mode and
 Microsoft Agent 365 do no dynamic registration: they expect a client_id and
-client_secret you enter on both sides. The hub cannot pre-register clients
-yet — that is the next compatibility stage, tracked in the
-[roadmap issues](https://github.com/ni-c/mcp-hub/issues). Until then these
-connect only where an API token can be smuggled in as a header, which none of
-them offer — so: not yet.
+client_secret you enter on both sides. Since 0.10.0 the hub can mint one:
+
+```bash
+mcp-hub-admin clients add --name "Gemini Enterprise" \
+  --redirect-uri https://example.com/oauth/callback
+```
+
+The command prints the `client_id` and — this once — the `client_secret`, then
+paste both into the connector along with the hub's authorization and token
+endpoints. Add `--public` for a connector that has no secret to store; it then
+authenticates with PKCE alone. Operator-minted clients count as approved the
+moment you create them (you named the redirect URI, so there is nothing left to
+confirm in a browser) and are exempt from the [pruning
+rules](/guide/client-registration#registrations-do-not-accumulate) — one you
+typed out by hand must not vanish after ninety idle days. See the [admin
+CLI reference](/reference/admin-cli).
+
+Two caveats for this camp:
+
+- The token endpoint reads the secret from the request body
+  (`client_secret_post`), which is what the AS metadata advertises. A connector
+  that can only send HTTP Basic credentials will not authenticate.
+- PKCE is mandatory, with no per-client opt-out. Gemini Enterprise leaves it as
+  a checkbox — tick it.
+
+Copilot Studio generates its redirect URI only *after* you create the tool, so
+create the tool first and mint the client second.
 
 ## Products with no custom-MCP client at all
 
