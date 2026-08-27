@@ -12,6 +12,14 @@ updates:
           - vitest
           - '@vitest/*'
       minor-and-patch:
+        # Dependabot is documented to put a dependency in the first group it
+        # matches, but a pattern-less catch-all wins in practice
+        # (dependabot-core#9765) — @vitest/coverage-v8 landed here while vitest
+        # went to the group above, and the half-updated lockfile broke npm ci.
+        # exclude-patterns is the reliable way to keep the lockstep set out.
+        exclude-patterns:
+          - vitest
+          - '@vitest/*'
         update-types:
           - minor
           - patch
