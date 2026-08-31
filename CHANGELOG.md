@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- #region changelog -->
 
+## [Unreleased]
+
+### Changed
+
+- **Both images now run on Node 24 ("Krypton"), the active LTS line, instead of
+  Node 26.** Node 26 is Current until October, and a non-LTS build leaves
+  `process.release.lts` unset — which is not cosmetic, because libraries branch
+  on it. It is also what the CI matrix already tests against, so the container
+  and the test runs no longer sat on different majors.
+
+  Nothing else changes: npm is still replaced wholesale and its three vulnerable
+  vendored packages still overwritten in place, verified against the built
+  image.
+
 ## [0.10.0] - 2026-08-27
 
 ### Added
