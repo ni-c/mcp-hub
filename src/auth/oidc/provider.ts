@@ -2,6 +2,7 @@ import type { Configuration, KoaContextWithOIDC } from 'oidc-provider';
 import Provider, { errors } from 'oidc-provider';
 
 import type { CimdResolver } from '../cimd.js';
+import { redirectUriMatches } from '@modelcontextprotocol/sdk/server/auth/handlers/authorize.js';
 import type { AuthStore } from '../store.js';
 import { createOidcAdapter } from './adapter.js';
 import { HUB_SCOPE, installThrowawaySecret } from './quirks.js';
@@ -35,7 +36,12 @@ export interface OidcProviderOptions {
   /** Where an unauthenticated authorization request is sent to log in. Must NOT
    *  be the authorization path: `${routes.authorization}/:uid` is the resume
    *  route, and pointing the interaction at it makes the flow chase its own
-   *  tail. Defaults to /interaction, which is in RESERVED_NAMES. */
+   *  tail. Defaults to /interaction, which is in RESERVED_NAMES.
+   *
+   *  The URL gets a TRAILING SLASH: interactions.js scopes the interaction
+   *  cookie to the destination path, so the form handlers have to live beneath
+   *  it, and a relative `action="login"` only resolves that way from a path
+   *  that ends in a slash. */
   interactionPath?: string;
 }
 
@@ -187,6 +193,15 @@ export function buildOidcProvider(store: AuthStore, options: OidcProviderOptions
       const existing = ctx.oidc.result?.consent?.grantId ?? ctx.oidc.session?.grantIdFor(clientId);
       if (existing) return ctx.oidc.provider.Grant.find(existing);
 
+      // Minting only for an APPROVED client is what keeps the consent page
+      // reachable. Approving unconditionally here would satisfy the prompt
+      // every time, and the page that exists to ask "did you start this?"
+      // would never be shown again.
+      const redirectUri = String(ctx.oidc.params?.redirect_uri ?? '');
+      const approval = store.getApproval(clientId);
+      const approved = approval?.redirectUris.some(uri => redirectUriMatches(redirectUri, uri)) ?? false;
+      if (!approved && !ctx.oidc.result?.consent) return undefined;
+
       const grant = new ctx.oidc.provider.Grant({ clientId, accountId: ctx.oidc.session?.accountId });
       const requested = ctx.oidc.params?.resource;
       for (const resource of [requested ?? []].flat()) {
@@ -199,7 +214,7 @@ export function buildOidcProvider(store: AuthStore, options: OidcProviderOptions
     findAccount: (_ctx, sub) => ({ accountId: sub, claims: async () => ({ sub }) }),
 
     interactions: {
-      url: (_ctx, interaction) => `${options.interactionPath ?? '/interaction'}/${interaction.uid}`
+      url: (_ctx, interaction) => `${options.interactionPath ?? '/interaction'}/${interaction.uid}/`
     },
 
     // The hub's own signing key. Supplying it keeps oidc-provider from falling

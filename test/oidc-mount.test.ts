@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import bcrypt from 'bcryptjs';
 import express from 'express';
 import { exportJWK, generateKeyPair, SignJWT } from 'jose';
 import type { Express } from 'express';
@@ -11,7 +12,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { CimdResolver } from '../src/auth/cimd.js';
 import { mountOidcProvider } from '../src/auth/oidc/mount.js';
-import { buildOidcProvider, HUB_ACCOUNT_ID } from '../src/auth/oidc/provider.js';
+import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
+
+import { createOidcInteractionRoutes } from '../src/auth/oidc/interactions.js';
+import { OidcTokenVerifier } from '../src/auth/oidc/verifier.js';
+import { mintApiToken } from '../src/auth/provider.js';
+import { buildOidcProvider } from '../src/auth/oidc/provider.js';
 import { AuthStore } from '../src/auth/store.js';
 
 const EXTERNAL_URL = 'http://127.0.0.1:9977/';
@@ -21,26 +27,63 @@ let tmpDir: string;
 let store: AuthStore;
 let app: Express;
 
+const PASSWORD = 'test-password';
+
+/** supertest speaks paths. Redirects out of the provider are absolute; the one
+ *  to the interaction page is relative, because that URL is ours. */
+function toPath(url: string): string {
+  if (!url.startsWith('http')) return url;
+  const parsed = new URL(url);
+  return `${parsed.pathname}${parsed.search}`;
+}
+
 /**
- * Stands in for the hub's own login and consent pages, which stay Express and
- * are swapped in when the authorization server takes over from HubOAuthProvider.
- * Approving unconditionally is what makes the MOUNT testable in isolation.
+ * Drives the real login page: follow to the interaction, submit the password,
+ * follow back to the resume route, and read the code off the callback. This is
+ * the whole journey a connector makes, with nothing stubbed out.
  */
-function autoApproveInteractions(application: Express, provider: ReturnType<typeof buildOidcProvider>): void {
-  application.get('/interaction/:uid', async (req, res, next) => {
-    try {
-      const details = await provider.interactionDetails(req, res);
-      if (details.prompt.name === 'login') {
-        await provider.interactionFinished(req, res, { login: { accountId: HUB_ACCOUNT_ID } }, { mergeWithLastSubmission: false });
-        return;
-      }
-      const grant = new provider.Grant({ accountId: details.session?.accountId, clientId: String(details.params.client_id) });
-      const grantId = await grant.save();
-      await provider.interactionFinished(req, res, { consent: { grantId } }, { mergeWithLastSubmission: true });
-    } catch (error) {
-      next(error);
-    }
+async function authorize(
+  application: Express,
+  clientId: string,
+  extraQuery: Record<string, string> = {}
+): Promise<{ code: string; agent: ReturnType<typeof request.agent>; verifier: string }> {
+  const agent = request.agent(application);
+  const verifier = crypto.randomBytes(32).toString('base64url');
+  const challenge = crypto.createHash('sha256').update(verifier).digest('base64url');
+  const query = new URLSearchParams({
+    client_id: clientId,
+    response_type: 'code',
+    redirect_uri: REDIRECT_URI,
+    code_challenge: challenge,
+    code_challenge_method: 'S256',
+    state: 'xyz',
+    ...extraQuery
   });
+
+  let location = `/authorize?${query.toString()}`;
+  for (let hop = 0; hop < 12; hop += 1) {
+    if (location.startsWith(REDIRECT_URI)) {
+      const code = new URL(location).searchParams.get('code');
+      if (!code) throw new Error(`authorization refused: ${location}`);
+      return { code, agent, verifier };
+    }
+    const res = await agent.get(location).redirects(0);
+    if (res.status === 200 && /name="password"/.test(res.text)) {
+      // The login page. Its hidden `request` field carries the interaction id.
+      const uid = /name="request" value="([^"]+)"/.exec(res.text)?.[1];
+      const submitted = await agent
+        .post(`/interaction/${uid}/login`)
+        .type('form')
+        .send({ password: PASSWORD, request: uid! })
+        .redirects(0);
+      location = toPath(submitted.headers.location as string);
+      continue;
+    }
+    const next = res.headers.location as string | undefined;
+    if (!next) throw new Error(`stalled at hop ${hop}: ${res.status} ${res.text.slice(0, 200)}`);
+    location = next.startsWith(REDIRECT_URI) ? next : toPath(next);
+  }
+  throw new Error('authorization did not settle');
 }
 
 beforeEach(() => {
@@ -56,7 +99,7 @@ beforeEach(() => {
     defaultResource: new URL('/hub', EXTERNAL_URL),
     interactionPath: '/interaction'
   });
-  autoApproveInteractions(app, provider);
+  app.use(createOidcInteractionRoutes({ provider, store, externalUrl: EXTERNAL_URL, password: PASSWORD }));
 
   mountOidcProvider(app, provider, store, {
     externalUrl: EXTERNAL_URL,
@@ -194,38 +237,18 @@ describe('the client quirks', () => {
 
 describe('a full authorization, the way MCP clients actually do it', () => {
   async function flow(): Promise<{ tokens: Record<string, string>; clientId: string; agent: ReturnType<typeof request.agent> }> {
-    const agent = request.agent(app);
-    const registration = await agent
+    const registration = await request(app)
       .post('/register')
       .send({ client_name: 'vitest', redirect_uris: [REDIRECT_URI], token_endpoint_auth_method: 'none', response_types: ['code'] })
       .expect(201);
     const clientId = registration.body.client_id as string;
 
-    const verifier = crypto.randomBytes(32).toString('base64url');
-    const challenge = crypto.createHash('sha256').update(verifier).digest('base64url');
-
-    let location =
-      `/authorize?client_id=${clientId}&response_type=code&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
-      `&code_challenge=${challenge}&code_challenge_method=S256&state=xyz`;
-    // NOTE: no `scope` parameter, which is what real MCP clients send.
-
-    let code: string | null = null;
-    for (let hop = 0; hop < 10 && !code; hop += 1) {
-      const res = await agent.get(location).redirects(0);
-      const next = res.headers.location as string | undefined;
-      if (!next) throw new Error(`authorization stalled at hop ${hop}: ${res.status} ${JSON.stringify(res.body)}`);
-      if (next.startsWith(REDIRECT_URI)) {
-        code = new URL(next).searchParams.get('code');
-        if (!code) throw new Error(`authorization refused: ${next}`);
-        break;
-      }
-      location = next.startsWith('http') ? new URL(next).pathname : next;
-    }
-
+    // No `scope` parameter anywhere, which is what real MCP clients send.
+    const { code, agent, verifier } = await authorize(app, clientId);
     const tokens = await agent
       .post('/token')
       .type('form')
-      .send({ grant_type: 'authorization_code', code: code!, redirect_uri: REDIRECT_URI, client_id: clientId, code_verifier: verifier })
+      .send({ grant_type: 'authorization_code', code, redirect_uri: REDIRECT_URI, client_id: clientId, code_verifier: verifier })
       .expect(200);
     return { tokens: tokens.body, clientId, agent };
   }
@@ -336,7 +359,7 @@ describe('client ID metadata documents and private_key_jwt', () => {
       interactionPath: '/interaction',
       cimd: resolver
     });
-    autoApproveInteractions(cimdApp, provider);
+    cimdApp.use(createOidcInteractionRoutes({ provider, store: cimdStore, externalUrl: EXTERNAL_URL, password: PASSWORD, cimd: resolver }));
     mountOidcProvider(cimdApp, provider, cimdStore, { externalUrl: EXTERNAL_URL });
     cimdApp.use((_req, res) => {
       res.status(404).json({ reached: 'express' });
@@ -421,25 +444,7 @@ describe('client ID metadata documents and private_key_jwt', () => {
       jwks: { keys: [{ ...jwk, alg: 'EdDSA', use: 'sig' }] }
     });
 
-    const agent = request.agent(cimdApp);
-    const verifier = crypto.randomBytes(32).toString('base64url');
-    const challenge = crypto.createHash('sha256').update(verifier).digest('base64url');
-
-    let location =
-      `/authorize?client_id=${encodeURIComponent(CLIENT_ID)}&response_type=code` +
-      `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&code_challenge=${challenge}` +
-      '&code_challenge_method=S256&state=xyz';
-    let code: string | null = null;
-    for (let hop = 0; hop < 10 && !code; hop += 1) {
-      const res = await agent.get(location).redirects(0);
-      const next = res.headers.location as string | undefined;
-      if (!next) throw new Error(`stalled at hop ${hop}: ${res.status} ${JSON.stringify(res.body)}`);
-      if (next.startsWith(REDIRECT_URI)) {
-        code = new URL(next).searchParams.get('code');
-        break;
-      }
-      location = next.startsWith('http') ? new URL(next).pathname : next;
-    }
+    const { code, agent, verifier } = await authorize(cimdApp, CLIENT_ID);
     expect(code).toBeTruthy();
 
     // RFC 7523: the client proves itself with a JWT it signed, because a
@@ -506,5 +511,301 @@ describe('client ID metadata documents and private_key_jwt', () => {
     // Second use of the same jti: the CLIENT is now refused.
     const second = await request(cimdApp).post('/token').type('form').send(body);
     expect(second.body.error).toBe('invalid_client');
+  });
+});
+
+describe('the login and consent pages', () => {
+  async function register(): Promise<string> {
+    const res = await request(app)
+      .post('/register')
+      .send({ client_name: 'vitest', redirect_uris: [REDIRECT_URI], token_endpoint_auth_method: 'none', response_types: ['code'] })
+      .expect(201);
+    return res.body.client_id as string;
+  }
+
+  /**
+   * Submits the password AND follows the resume redirect. The session is only
+   * established when the authorization request is resumed and consumes the
+   * login result, so stopping at the POST leaves the operator signed out.
+   */
+  async function signIn(agent: ReturnType<typeof request.agent>, uid: string): Promise<void> {
+    const submitted = await agent.post(`/interaction/${uid}/login`).type('form').send({ password: PASSWORD, request: uid }).redirects(0);
+    await agent.get(toPath(submitted.headers.location as string)).redirects(0);
+  }
+
+  /** Walks to the interaction page and returns it, without submitting. */
+  async function reachInteraction(agent: ReturnType<typeof request.agent>, clientId: string) {
+    const query = new URLSearchParams({
+      client_id: clientId,
+      response_type: 'code',
+      redirect_uri: REDIRECT_URI,
+      code_challenge: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
+      code_challenge_method: 'S256',
+      state: 'xyz'
+    });
+    const started = await agent.get(`/authorize?${query.toString()}`).redirects(0);
+    if (!started.headers.location) throw new Error(`authorize: ${started.status} ${started.text.slice(0, 300)}`);
+    const location = toPath(started.headers.location as string);
+    return { page: await agent.get(location).redirects(0), path: location };
+  }
+
+  it('refuses a wrong password and says so on the same form', async () => {
+    const clientId = await register();
+    const agent = request.agent(app);
+    const { page } = await reachInteraction(agent, clientId);
+    const uid = /name="request" value="([^"]+)"/.exec(page.text)![1];
+
+    const wrong = await agent.post(`/interaction/${uid}/login`).type('form').send({ password: 'nope', request: uid });
+    expect(wrong.status).toBe(401);
+    expect(wrong.text).toContain('Wrong password');
+    // The retry form has to reach the same interaction.
+    expect(wrong.text).toContain(`value="${uid}"`);
+  });
+
+  it('sets the session cookie the upstream callback reads', async () => {
+    // hasValidSession() is used outside the auth layer, by the upstream OAuth
+    // callback. If only oidc-provider's own cookie were set, the operator would
+    // have to log in a second time for something that looks unrelated.
+    const clientId = await register();
+    const agent = request.agent(app);
+    const { page } = await reachInteraction(agent, clientId);
+    const uid = /name="request" value="([^"]+)"/.exec(page.text)![1];
+    const ok = await agent.post(`/interaction/${uid}/login`).type('form').send({ password: PASSWORD, request: uid });
+    const cookies = (ok.headers['set-cookie'] as unknown as string[]).join('; ');
+    expect(cookies).toContain('mcp_hub_session=');
+  });
+
+  it('asks for consent when a signed-in operator meets a NEW client', async () => {
+    // Typing the password approves the client that triggered it, and only that
+    // one. A second client has to be shown, or a page that exists to ask "did
+    // you start this?" would never appear again.
+    const first = await register();
+    const agent = request.agent(app);
+    const { page } = await reachInteraction(agent, first);
+    await signIn(agent, /name="request" value="([^"]+)"/.exec(page.text)![1]);
+
+    const second = await register();
+    const { page: consent } = await reachInteraction(agent, second);
+    expect(consent.text).toContain('Authorize access?');
+    expect(consent.text).toContain('name="csrf"');
+  });
+
+  it('refuses a consent submission with a bad CSRF token', async () => {
+    const first = await register();
+    const agent = request.agent(app);
+    const { page } = await reachInteraction(agent, first);
+    await signIn(agent, /name="request" value="([^"]+)"/.exec(page.text)![1]);
+
+    const second = await register();
+    const { page: consent } = await reachInteraction(agent, second);
+    const consentUid = /name="request" value="([^"]+)"/.exec(consent.text)![1];
+    const refused = await agent
+      .post(`/interaction/${consentUid}/consent`)
+      .type('form')
+      .send({ request: consentUid, csrf: 'forged', action: 'approve' });
+    expect(refused.status).toBe(403);
+  });
+
+  it('completes the flow when consent is approved', async () => {
+    const first = await register();
+    const agent = request.agent(app);
+    const { page } = await reachInteraction(agent, first);
+    await signIn(agent, /name="request" value="([^"]+)"/.exec(page.text)![1]);
+
+    const second = await register();
+    const { page: consent } = await reachInteraction(agent, second);
+    const consentUid = /name="request" value="([^"]+)"/.exec(consent.text)![1];
+    const csrf = /name="csrf" value="([^"]+)"/.exec(consent.text)![1];
+    const approved = await agent
+      .post(`/interaction/${consentUid}/consent`)
+      .type('form')
+      .send({ request: consentUid, csrf, action: 'approve' })
+      .redirects(0);
+    const back = await agent.get(toPath(approved.headers.location as string)).redirects(0);
+    expect(back.headers.location).toContain('code=');
+    // Approving is remembered, so the same client is not asked again.
+    expect(store.getApproval(second)).toBeDefined();
+  });
+
+  it('tells the operator plainly when the window was left open too long', async () => {
+    const res = await request(app).get('/interaction/not-a-real-interaction');
+    expect(res.status).toBe(400);
+    expect(res.text).toContain('expired');
+  });
+
+  it('blocks after repeated wrong passwords', async () => {
+    const clientId = await register();
+    const agent = request.agent(app);
+    const { page } = await reachInteraction(agent, clientId);
+    const uid = /name="request" value="([^"]+)"/.exec(page.text)![1];
+    let last = 0;
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      const res = await agent.post(`/interaction/${uid}/login`).type('form').send({ password: 'nope', request: uid });
+      last = res.status;
+    }
+    expect(last).toBe(429);
+  });
+
+  it('sends the client away when consent is denied', async () => {
+    const first = await register();
+    const agent = request.agent(app);
+    const { page } = await reachInteraction(agent, first);
+    await signIn(agent, /name="request" value="([^"]+)"/.exec(page.text)![1]);
+
+    const second = await register();
+    const { page: consent } = await reachInteraction(agent, second);
+    const consentUid = /name="request" value="([^"]+)"/.exec(consent.text)![1];
+    const csrf = /name="csrf" value="([^"]+)"/.exec(consent.text)![1];
+    const denied = await agent
+      .post(`/interaction/${consentUid}/consent`)
+      .type('form')
+      .send({ request: consentUid, csrf, action: 'deny' })
+      .redirects(0);
+    // Resumes, and the resume redirects back to the client with the refusal.
+    const location = toPath(denied.headers.location as string);
+    const back = await agent.get(location).redirects(0);
+    expect(back.headers.location).toContain('error=access_denied');
+  });
+});
+
+describe('bearer authentication with both token shapes', () => {
+  /** A protected route standing in for /hub, using the SDK middleware the hub
+   *  uses, so the verifier is exercised exactly as it will be in production. */
+  function protectedApp(store: AuthStore, resource: URL) {
+    const guarded = express();
+    const verifier = new OidcTokenVerifier(store, {
+      externalUrl: EXTERNAL_URL,
+      requireResource: true,
+      resolveResource: url => (url.href === resource.href ? resource : undefined)
+    });
+    guarded.get('/hub', requireBearerAuth({ verifier }), (_req, res) => {
+      res.json({ ok: true });
+    });
+    return guarded;
+  }
+
+  it('accepts an opaque OAuth token and refuses it again once revoked', async () => {
+    const registration = await request(app)
+      .post('/register')
+      .send({ client_name: 'vitest', redirect_uris: [REDIRECT_URI], token_endpoint_auth_method: 'none', response_types: ['code'] })
+      .expect(201);
+    const clientId = registration.body.client_id as string;
+    const { code, agent, verifier } = await authorize(app, clientId, { resource: `${new URL(EXTERNAL_URL).origin}/hub` });
+    const tokens = await agent
+      .post('/token')
+      .type('form')
+      .send({ grant_type: 'authorization_code', code, redirect_uri: REDIRECT_URI, client_id: clientId, code_verifier: verifier })
+      .expect(200);
+
+    const guarded = protectedApp(store, new URL('/hub', EXTERNAL_URL));
+    await request(guarded).get('/hub').set('Authorization', `Bearer ${tokens.body.access_token}`).expect(200);
+
+    // This is the whole reason access tokens are opaque: a JWT could not be
+    // withdrawn before it expired.
+    store.revokeClientAccess(clientId);
+    await request(guarded).get('/hub').set('Authorization', `Bearer ${tokens.body.access_token}`).expect(401);
+  });
+
+  it('still accepts an admin-minted API token, which stays a JWT', async () => {
+    const resource = new URL('/hub', EXTERNAL_URL);
+    const minted = await mintApiToken(store, EXTERNAL_URL, resource, 30, 'vitest');
+    const guarded = protectedApp(store, resource);
+    await request(guarded).get('/hub').set('Authorization', `Bearer ${minted.token}`).expect(200);
+
+    store.revokeApiToken(minted.id);
+    await request(guarded).get('/hub').set('Authorization', `Bearer ${minted.token}`).expect(401);
+  });
+
+  it('refuses a token minted for another resource', async () => {
+    const minted = await mintApiToken(store, EXTERNAL_URL, new URL('/other/mcp', EXTERNAL_URL), 30, 'vitest');
+    const guarded = protectedApp(store, new URL('/hub', EXTERNAL_URL));
+    await request(guarded).get('/hub').set('Authorization', `Bearer ${minted.token}`).expect(401);
+  });
+
+  it('refuses a syntactically valid but unknown token', async () => {
+    const guarded = protectedApp(store, new URL('/hub', EXTERNAL_URL));
+    await request(guarded).get('/hub').set('Authorization', 'Bearer not-a-token-at-all').expect(401);
+  });
+});
+
+describe('RFC 7592 registration management', () => {
+  async function register() {
+    const res = await request(app)
+      .post('/register')
+      .send({ client_name: 'vitest', redirect_uris: [REDIRECT_URI], token_endpoint_auth_method: 'none', response_types: ['code'] })
+      .expect(201);
+    return res.body as { client_id: string; registration_access_token: string; registration_client_uri: string };
+  }
+
+  it('hands out a management URI and a token that reads the registration back', async () => {
+    const client = await register();
+    expect(client.registration_client_uri).toBe(`${new URL(EXTERNAL_URL).origin}/register/${client.client_id}`);
+    const read = await request(app)
+      .get(`/register/${client.client_id}`)
+      .set('Authorization', `Bearer ${client.registration_access_token}`)
+      .expect(200);
+    expect(read.body.client_id).toBe(client.client_id);
+  });
+
+  it('refuses management without the registration token', async () => {
+    const client = await register();
+    await request(app).get(`/register/${client.client_id}`).expect(401);
+    await request(app).get(`/register/${client.client_id}`).set('Authorization', 'Bearer wrong').expect(401);
+  });
+
+  it('updates and then deletes the registration, and the client is gone from the store', async () => {
+    const client = await register();
+    const updated = await request(app)
+      .put(`/register/${client.client_id}`)
+      .set('Authorization', `Bearer ${client.registration_access_token}`)
+      .send({
+        client_id: client.client_id,
+        client_name: 'renamed',
+        redirect_uris: [REDIRECT_URI],
+        token_endpoint_auth_method: 'none',
+        response_types: ['code'],
+        grant_types: ['authorization_code', 'refresh_token']
+      })
+      .expect(200);
+    expect(updated.body.client_name).toBe('renamed');
+    expect(store.getClient(client.client_id)?.client_name).toBe('renamed');
+
+    await request(app)
+      .delete(`/register/${client.client_id}`)
+      .set('Authorization', `Bearer ${client.registration_access_token}`)
+      .expect(204);
+    // The admin CLI's view has to agree: one store, not two.
+    expect(store.getClient(client.client_id)).toBeUndefined();
+  });
+});
+
+describe('the password check', () => {
+  it('accepts a bcrypt hash instead of a plaintext password', async () => {
+    // How the hub is meant to be configured in production: PASSWORD_HASH
+    // rather than PASSWORD, so the secret is not readable in the environment.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-hub-oidc-hash-'));
+    try {
+      const hashed = new AuthStore(dir);
+      const hashedApp = express();
+      const provider = buildOidcProvider(hashed, { externalUrl: EXTERNAL_URL, defaultResource: new URL('/hub', EXTERNAL_URL) });
+      hashedApp.use(
+        createOidcInteractionRoutes({
+          provider,
+          store: hashed,
+          externalUrl: EXTERNAL_URL,
+          passwordHash: bcrypt.hashSync(PASSWORD, 4)
+        })
+      );
+      mountOidcProvider(hashedApp, provider, hashed, { externalUrl: EXTERNAL_URL });
+
+      const registration = await request(hashedApp)
+        .post('/register')
+        .send({ client_name: 'vitest', redirect_uris: [REDIRECT_URI], token_endpoint_auth_method: 'none', response_types: ['code'] })
+        .expect(201);
+      const { code } = await authorize(hashedApp, registration.body.client_id);
+      expect(code).toBeTruthy();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

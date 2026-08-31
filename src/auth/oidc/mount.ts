@@ -2,6 +2,7 @@ import type { Express, Request, RequestHandler, Response } from 'express';
 import type Provider from 'oidc-provider';
 
 import type { AuthStore } from '../store.js';
+import { earlyRateLimit } from '../rate-limit.js';
 import { defaultScope, stripPhantomSecret } from './quirks.js';
 
 /**
@@ -64,6 +65,26 @@ export function forceExternalOrigin(externalUrl: string): RequestHandler {
   };
 }
 
+/**
+ * The same budgets the hub applied before, per path.
+ *
+ * They belong here rather than at the call site because the mounted Koa app is
+ * never entered by the Express router: a limit that is not put in front of the
+ * mount simply does not exist, and nothing about the resulting configuration
+ * looks wrong. `/register` is the tightest — registration is open — and it also
+ * has to cover `/register/:id`, whose own budget is more generous because
+ * routine management would otherwise use up a client's ability to register.
+ */
+export function defaultRateLimits(): NonNullable<MountOptions['before']> {
+  return {
+    '/register': [earlyRateLimit(60 * 60_000, 20, 200)],
+    '/register/:id': [earlyRateLimit(60 * 60_000, 60, 600)],
+    '/authorize': [earlyRateLimit(15 * 60_000, 100, 1_000)],
+    '/authorize/:uid': [earlyRateLimit(15 * 60_000, 100, 1_000)],
+    '/token': [earlyRateLimit(15 * 60_000, 50, 500)]
+  };
+}
+
 export interface MountOptions {
   /** The origin every published URL must carry, regardless of the request. */
   externalUrl: string;
@@ -119,10 +140,14 @@ export function mountOidcProvider(app: Express, provider: Provider, store: AuthS
     });
   }
 
+  // Built once: each entry holds a counter, and rebuilding per path would give
+  // every route a fresh, empty limiter on every iteration.
+  const before = options.before ?? defaultRateLimits();
+
   for (const path of OIDC_PATHS) {
     const handlers: RequestHandler[] = [
       ...(options.common ?? []),
-      ...(options.before?.[path] ?? []),
+      ...(before[path] ?? []),
       forceExternalOrigin(options.externalUrl)
     ];
     if (path === '/authorize') handlers.push(defaultScope);

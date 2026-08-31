@@ -18,6 +18,14 @@ import { CimdResolver, isClientIdMetadataUrl } from './cimd.js';
 import { isLoopbackOnly, isSafeRedirectUri } from './redirect-uri.js';
 import { registrationClientUri } from './registration.js';
 import { readSignedPayload, sign, signPayload, signatureMatches } from './signed-token.js';
+import {
+  createSessionCookie,
+  csrfToken,
+  readSessionCookie,
+  SESSION_COOKIE,
+  SESSION_TTL_MS,
+  verifyCsrfToken
+} from './session.js';
 import { clampDisplayName, logSafe } from './text.js';
 import { renderLoginPage } from './login-page.js';
 import { renderConsentPage } from './consent-page.js';
@@ -26,8 +34,7 @@ import { allowFormActionTo } from './headers.js';
 const ACCESS_TOKEN_TTL_S = 15 * 60;
 const REFRESH_TOKEN_TTL_S = 30 * 24 * 3600;
 const CODE_TTL_MS = 10 * 60_000;
-export const SESSION_TTL_MS = 30 * 60_000;
-export const SESSION_COOKIE = 'mcp_hub_session';
+export { SESSION_COOKIE, SESSION_TTL_MS };
 
 /**
  * The `__Host-` prefix pins the cookie to this exact origin, so no neighbouring
@@ -314,21 +321,17 @@ export class HubOAuthProvider implements OAuthServerProvider {
 
   // --- Session cookie ------------------------------------------------------
 
+  // Delegated to src/auth/session.ts so the authorization server and this one
+  // cannot drift apart on a format the upstream callback also reads.
+
   createSessionCookie(): string {
-    const expires = String(Date.now() + SESSION_TTL_MS);
-    return `${expires}.${sign(expires, this.store.cookieSecret)}`;
+    return createSessionCookie(this.store.cookieSecret);
   }
 
   /** The verified cookie value, which doubles as the handle the consent
    *  form's CSRF token is bound to. */
   readSessionCookie(cookieHeader: string | undefined): string | undefined {
-    const match = cookieHeader?.match(new RegExp(`(?:^|;\\s*)${this.sessionCookieName}=([^;]+)`));
-    if (!match) return undefined;
-    const value = decodeURIComponent(match[1]);
-    const [expires, signature] = value.split('.');
-    if (!expires || !signature) return undefined;
-    if (!signatureMatches(expires, signature, this.store.cookieSecret)) return undefined;
-    return Number(expires) > Date.now() ? value : undefined;
+    return readSessionCookie(cookieHeader, this.store.cookieSecret);
   }
 
   hasValidSession(cookieHeader: string | undefined): boolean {
@@ -336,12 +339,11 @@ export class HubOAuthProvider implements OAuthServerProvider {
   }
 
   csrfToken(sessionValue: string): string {
-    return sign(`csrf:${sessionValue}`, this.store.cookieSecret);
+    return csrfToken(sessionValue, this.store.cookieSecret);
   }
 
   verifyCsrfToken(sessionValue: string, token: unknown): boolean {
-    if (typeof token !== 'string') return false;
-    return signatureMatches(`csrf:${sessionValue}`, token, this.store.cookieSecret);
+    return verifyCsrfToken(sessionValue, token, this.store.cookieSecret);
   }
 
   // --- Token endpoint ------------------------------------------------------
