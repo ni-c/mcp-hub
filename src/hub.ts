@@ -1,6 +1,6 @@
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer } from '@modelcontextprotocol/server';
+import type { CallToolResult } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { ManagedServer, Supervisor } from './supervisor.js';
 import { VERSION } from './version.js';
 import { ABSOLUTE_CALL_OPTIONS, assertForwardedResultSize } from './mcp-limits.js';
@@ -85,7 +85,7 @@ export function buildHubServer(supervisor: Supervisor): McpServer {
       description:
         'List all MCP servers available through this hub, with their status. Call this first to see what is available. ' +
         'Servers marked "hidden" serve their tools only via their own endpoint, but wake_server/sleep_server still manage them.',
-      inputSchema: {}
+      inputSchema: z.object({})
     },
     async () =>
       text(
@@ -104,7 +104,7 @@ export function buildHubServer(supervisor: Supervisor): McpServer {
     {
       title: 'List tools of a server',
       description: 'List the tools of one MCP server with one-line descriptions. Use get_tool_schema before calling a tool for the first time.',
-      inputSchema: { server: z.string().describe('Server name from list_servers') }
+      inputSchema: z.object({ server: z.string().describe('Server name from list_servers') })
     },
     async ({ server }) => {
       const managed = findServer(server);
@@ -123,10 +123,10 @@ export function buildHubServer(supervisor: Supervisor): McpServer {
     {
       title: 'Get the full schema of a tool',
       description: 'Get the full description and JSON input schema of one tool, needed to construct arguments for call_tool.',
-      inputSchema: {
+      inputSchema: z.object({
         server: z.string().describe('Server name from list_servers'),
         tool: z.string().describe('Tool name from list_tools')
-      }
+      })
     },
     async ({ server, tool }) => {
       const managed = findServer(server);
@@ -151,11 +151,11 @@ export function buildHubServer(supervisor: Supervisor): McpServer {
     {
       title: 'Call a tool on a server',
       description: 'Call a tool on one of the MCP servers. Arguments must match the schema from get_tool_schema.',
-      inputSchema: {
+      inputSchema: z.object({
         server: z.string().describe('Server name from list_servers'),
         tool: z.string().describe('Tool name from list_tools'),
         arguments: z.record(z.string(), z.unknown()).optional().describe('Tool arguments matching its input schema')
-      }
+      })
     },
     async ({ server, tool, arguments: args }) => {
       const managed = findServer(server);
@@ -179,7 +179,6 @@ export function buildHubServer(supervisor: Supervisor): McpServer {
       try {
         const result = await managed.client.callTool(
           { name: tool, arguments: (args ?? {}) as Record<string, unknown> },
-          undefined,
           ABSOLUTE_CALL_OPTIONS
         );
         return assertForwardedResultSize(result) as CallToolResult;
@@ -194,7 +193,7 @@ export function buildHubServer(supervisor: Supervisor): McpServer {
     {
       title: 'Wake a sleeping server',
       description: 'Start an on-demand server now so its first tool call is fast. No-op if it is already running.',
-      inputSchema: { server: z.string().describe('Server name from list_servers') }
+      inputSchema: z.object({ server: z.string().describe('Server name from list_servers') })
     },
     async ({ server }) => {
       const managed = findServer(server);
@@ -215,7 +214,7 @@ export function buildHubServer(supervisor: Supervisor): McpServer {
     {
       title: 'Put a server to sleep',
       description: 'Stop an on-demand server immediately instead of waiting for its idle timeout. It restarts automatically on the next tool call.',
-      inputSchema: { server: z.string().describe('Server name from list_servers') }
+      inputSchema: z.object({ server: z.string().describe('Server name from list_servers') })
     },
     async ({ server }) => {
       const managed = findServer(server);

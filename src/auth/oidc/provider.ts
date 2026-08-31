@@ -2,9 +2,7 @@ import type { Configuration, KoaContextWithOIDC } from 'oidc-provider';
 import Provider, { errors } from 'oidc-provider';
 
 import type { CimdResolver } from '../cimd.js';
-import { redirectUriMatches } from '@modelcontextprotocol/sdk/server/auth/handlers/authorize.js';
-
-import { isSafeRedirectUri } from '../redirect-uri.js';
+import { isSafeRedirectUri, redirectUriMatches } from '../redirect-uri.js';
 import { clampDisplayName } from '../text.js';
 import type { AuthStore } from '../store.js';
 import { createOidcAdapter } from './adapter.js';

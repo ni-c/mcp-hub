@@ -1,4 +1,4 @@
-import type { Tool } from '@modelcontextprotocol/sdk/types.js';
+import type { Tool } from '@modelcontextprotocol/server';
 
 /**
  * The per-server tool filter: `allowTools` and `denyTools` in mcp.json.

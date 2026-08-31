@@ -1,17 +1,13 @@
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport, getDefaultEnvironment } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
-import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+import { StdioClientTransport, getDefaultEnvironment } from '@modelcontextprotocol/client/stdio';
+import { Client, StreamableHTTPClientTransport, SSEClientTransport, UnauthorizedError } from '@modelcontextprotocol/client';
+import type { Transport, ServerCapabilities, Implementation, Tool } from '@modelcontextprotocol/client';
+import { ListToolsResultSchema } from '@modelcontextprotocol/core';
 import { VERSION } from './version.js';
 import { MAX_TOOL_LIST_PAGES, MAX_TOOLS, MAX_TOOL_METADATA_BYTES, jsonSize } from './mcp-limits.js';
-import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
-import type { ServerCapabilities, Implementation, Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { HubConfig, ServerConfig, RemoteServerConfig, ConfigDiff } from './config.js';
 import { SocketTransport } from './transports/socket.js';
 import { DockerTransport } from './transports/docker.js';
 import { DockerClient, parseSandboxDockerHost } from './sandbox/docker-client.js';
-import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
 import type { AuthStore } from './auth/store.js';
 import { UpstreamAuth, UpstreamLoginRequiredError } from './upstream/auth.js';
 import { credentialFingerprint } from './upstream/provider.js';
@@ -113,7 +109,7 @@ interface WakeWaiter {
   timer: NodeJS.Timeout;
 }
 
-export async function listAllTools(client: Pick<Client, 'listTools'>): Promise<Tool[]> {
+export async function listAllTools(client: Pick<Client, 'request'>): Promise<Tool[]> {
   const tools: Tool[] = [];
   let cursor: string | undefined;
   let pages = 0;
@@ -121,7 +117,15 @@ export async function listAllTools(client: Pick<Client, 'listTools'>): Promise<T
   const seenCursors = new Set<string>();
   do {
     if (++pages > MAX_TOOL_LIST_PAGES) throw new Error(`tools/list exceeded ${MAX_TOOL_LIST_PAGES} pages`);
-    const page = await client.listTools({ cursor });
+    // `request` rather than `listTools`, deliberately. SDK v2's `listTools()`
+    // walks the whole pagination itself whenever no cursor is given -- which is
+    // every first call -- and hands back one merged result. That would collapse
+    // this loop into a single iteration and take all three budgets below with
+    // it, leaving only the SDK's own page cap and no limit on tool count or
+    // metadata size at all. The budgets exist because a hostile child's tool
+    // list is a way to exhaust the hub's memory, and with it every other
+    // server's availability. One page per request is what makes them apply.
+    const page = await client.request({ method: 'tools/list', params: { cursor } }, ListToolsResultSchema);
     metadataBytes += jsonSize(page.tools);
     if (metadataBytes > MAX_TOOL_METADATA_BYTES) throw new Error(`tools/list metadata exceeded ${MAX_TOOL_METADATA_BYTES} bytes`);
     tools.push(...page.tools);
@@ -338,7 +342,7 @@ export class ManagedServer {
     console.log(`[${this.name}] up (${this.serverInfo?.name ?? 'unknown'} ${this.serverInfo?.version ?? ''})`.trim());
     this.resolveWakeWaiters();
     if (this.capabilities?.tools) {
-      client.setNotificationHandler(ToolListChangedNotificationSchema, () => void this.refreshTools());
+      client.setNotificationHandler('notifications/tools/list_changed', () => void this.refreshTools());
       await this.refreshTools();
     } else {
       this.options.persist?.(this);

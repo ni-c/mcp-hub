@@ -7,7 +7,7 @@ import express from 'express';
 import request from 'supertest';
 import { z } from 'zod';
 import { importJWK, jwtVerify } from 'jose';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer } from '@modelcontextprotocol/server';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createSessionCookie } from '../src/auth/session.js';
 import { createHub } from '../src/index.js';
@@ -165,7 +165,7 @@ async function startFakeUpstream(): Promise<FakeUpstream> {
     }
     void handleMcpRequest(() => {
       const mcp = new McpServer({ name: 'upstream-fixture', version: '1.0.0' });
-      mcp.registerTool('upstream_echo', { description: 'echo', inputSchema: { msg: z.string() } }, async ({ msg }) => ({
+      mcp.registerTool('upstream_echo', { description: 'echo', inputSchema: z.object({ msg: z.string() }) }, async ({ msg }) => ({
         content: [{ type: 'text', text: `upstream:${msg}` }]
       }));
       return mcp.server;

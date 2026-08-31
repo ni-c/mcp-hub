@@ -2,7 +2,7 @@
 import path from 'node:path';
 import express from 'express';
 import type { Request, Response, NextFunction } from 'express';
-import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
+import { requireBearerAuth } from '@modelcontextprotocol/express';
 import { loadConfig, ConfigWatcher, warnMutableDockerImages } from './config.js';
 import { Supervisor, UpstreamAuthRegistry } from './supervisor.js';
 import { ToolCache } from './tool-cache.js';
@@ -224,6 +224,12 @@ export async function createHub(options: HubOptions) {
     resolveResource: resource => canonicalResourceUrl(resource, origin, watcher.current)
   });
 
+  // From @modelcontextprotocol/express, not the frozen server-legacy copy the
+  // codemod reaches for by default. That copy exists for projects still running
+  // the SDK's own authorization server; the hub replaced its own with
+  // oidc-provider first, precisely so this dependency never had to be taken on.
+  // The one thing the maintained middleware needs in return is that the
+  // verifier throws v2's OAuthError -- see OidcTokenVerifier.
   const bearer = (req: Request, res: Response, next: NextFunction) =>
     requireBearerAuth({
       verifier,

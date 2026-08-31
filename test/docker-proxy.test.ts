@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { Duplex } from 'node:stream';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { Client } from '@modelcontextprotocol/client';
 import { parseConfig, type DockerServerConfig, type HubConfig } from '../src/config.js';
 import { createDockerProxy } from '../src/docker-proxy/server.js';
 import { DockerClient } from '../src/sandbox/docker-client.js';

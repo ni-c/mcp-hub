@@ -8,6 +8,6 @@
 ARG BASE_IMAGE=ghcr.io/ni-c/mcp-hub:latest
 FROM ${BASE_IMAGE}
 
-# Under /app so Node resolves @modelcontextprotocol/sdk and zod from the hub's
+# Under /app so Node resolves @modelcontextprotocol/server and zod from the hub's
 # own /app/node_modules — the demo servers add no dependencies of their own.
 COPY servers/ /app/demo-servers/

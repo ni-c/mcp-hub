@@ -712,19 +712,40 @@ describe('AuthStore across processes', () => {
 });
 
 describe('MCP response and discovery budgets', () => {
+  /** A child that answers `tools/list` however the test wants it to. */
+  const upstream = (reply: (params: { cursor?: string }) => unknown) =>
+    ({
+      request: async (req: { method: string; params?: { cursor?: string } }) => reply(req.params ?? {})
+    }) as never;
+
   it('caps pagination even when an upstream always returns another cursor', async () => {
     let page = 0;
-    const client = {
-      listTools: async () => ({ tools: [], nextCursor: `page-${++page}` })
-    } as never;
-    await expect(listAllTools(client)).rejects.toThrow(/100 pages/);
+    await expect(listAllTools(upstream(() => ({ tools: [], nextCursor: `page-${++page}` })))).rejects.toThrow(/100 pages/);
   });
 
   it('caps tool count and metadata independently', async () => {
     const many = Array.from({ length: 10_001 }, (_, i) => ({ name: `t${i}`, inputSchema: { type: 'object' as const } }));
-    await expect(listAllTools({ listTools: async () => ({ tools: many }) } as never)).rejects.toThrow(/10000 tools/);
+    await expect(listAllTools(upstream(() => ({ tools: many })))).rejects.toThrow(/10000 tools/);
     const huge = [{ name: 'huge', description: 'x'.repeat(17 * 1024 * 1024), inputSchema: { type: 'object' as const } }];
-    await expect(listAllTools({ listTools: async () => ({ tools: huge }) } as never)).rejects.toThrow(/metadata/);
+    await expect(listAllTools(upstream(() => ({ tools: huge })))).rejects.toThrow(/metadata/);
+  });
+
+  it('walks the pagination itself, one request per page', async () => {
+    // The budgets above are per page, so they only bind if the hub asks for
+    // one page at a time. SDK v2's `listTools()` walks the whole pagination
+    // internally whenever it is called without a cursor — which is every first
+    // call — and returns one merged result; every budget above would then be
+    // measured once, against everything, having already been buffered. So the
+    // shape of the calls is the thing under test, not just the outcome.
+    const cursors: (string | undefined)[] = [];
+    const tools = await listAllTools(
+      upstream(({ cursor }) => {
+        cursors.push(cursor);
+        return cursor === 'second' ? { tools: [{ name: 'b', inputSchema: { type: 'object' } }] } : { tools: [{ name: 'a', inputSchema: { type: 'object' } }], nextCursor: 'second' };
+      })
+    );
+    expect(cursors).toEqual([undefined, 'second']);
+    expect(tools.map(t => t.name)).toEqual(['a', 'b']);
   });
 
   it('rejects forwarded results above 8 MiB and keeps the timeout absolute', () => {

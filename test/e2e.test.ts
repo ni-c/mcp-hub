@@ -7,10 +7,9 @@ import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { z } from 'zod';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { McpServer } from '@modelcontextprotocol/server';
+import type { CallToolResult } from '@modelcontextprotocol/server';
+import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { authorizeInBrowser, registerPublicClient } from './auth-flow.js';
 import { createHub } from '../src/index.js';
 import { handleMcpRequest } from '../src/proxy.js';
@@ -94,7 +93,7 @@ function startRemoteUpstream(): Promise<number> {
       const server = new McpServer({ name: 'remote-fixture', version: '1.0.0' });
       server.registerTool(
         'remote_echo',
-        { description: 'echo back', inputSchema: { msg: z.string() } },
+        { description: 'echo back', inputSchema: z.object({ msg: z.string() }) },
         async ({ msg }) => ({ content: [{ type: 'text', text: `remote:${msg}` }] })
       );
       return server.server;

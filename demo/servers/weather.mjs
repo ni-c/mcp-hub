@@ -10,8 +10,8 @@
  * Note for anyone using this as a template: stdout belongs to the protocol.
  * Anything you want to print goes to stderr, or the transport breaks.
  */
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
+import { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 
 const STATIONS = {
@@ -76,7 +76,7 @@ server.registerTool(
   {
     title: 'List weather stations',
     description: 'List the weather stations this service can report on. Call this first to get a valid station id.',
-    inputSchema: {}
+    inputSchema: z.object({})
   },
   async () => text(Object.entries(STATIONS).map(([id, station]) => ({ id, ...station })))
 );
@@ -86,10 +86,10 @@ server.registerTool(
   {
     title: 'Get a forecast',
     description: 'Get the daily forecast for one station: condition, high and low in °C, precipitation in mm and wind in km/h.',
-    inputSchema: {
+    inputSchema: z.object({
       station: z.string().describe('Station id from list_stations, e.g. "lux-city"'),
       days: z.number().int().min(1).max(7).optional().describe('How many days to return, 1-7 (default 3)')
-    }
+    })
   },
   async ({ station, days = 3 }) => {
     const found = FORECASTS[station];

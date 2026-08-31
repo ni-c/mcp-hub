@@ -1,5 +1,5 @@
-import { InvalidTokenError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
-import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
+import { OAuthError, OAuthErrorCode } from '@modelcontextprotocol/server';
+import type { AuthInfo } from '@modelcontextprotocol/server';
 import { jwtVerify } from 'jose';
 
 import { API_TOKEN_SUBJECT } from '../api-tokens.js';
@@ -12,6 +12,21 @@ export interface OidcVerifierOptions {
   resolveResource: (resource: URL) => URL | undefined;
   /** Mirrors RESOURCE_BOUND_TOKENS: false lets an unbound token through. */
   requireResource: boolean;
+}
+
+/**
+ * The one error shape `requireBearerAuth` recognises.
+ *
+ * It classifies whatever the verifier throws: an `OAuthError` carrying
+ * `invalid_token` becomes a 401 with a `WWW-Authenticate` challenge pointing at
+ * the protected-resource metadata, and anything else becomes a 500. SDK v1 had
+ * a class per code; v2 has one class and an enum, so the distinction now lives
+ * in the argument rather than in the constructor — which is exactly the kind of
+ * thing that fails silently, by answering 500 to a merely expired token and
+ * leaving the client with nothing to discover the authorization server from.
+ */
+function invalidToken(message: string): OAuthError {
+  return new OAuthError(OAuthErrorCode.InvalidToken, message);
 }
 
 /**
@@ -48,7 +63,7 @@ export class OidcTokenVerifier {
 
   private fromOpaque(token: string, payload: Record<string, unknown>): AuthInfo {
     const clientId = payload.clientId;
-    if (typeof clientId !== 'string') throw new InvalidTokenError('Invalid access token claims');
+    if (typeof clientId !== 'string') throw invalidToken('Invalid access token claims');
 
     // An audience equal to the issuer means "not bound to one resource" — the
     // pre-0.5 shape, kept so a deployment that never turned binding on is not
@@ -58,9 +73,9 @@ export class OidcTokenVerifier {
     let resource: URL | undefined;
     if (audience !== undefined && audience !== this.options.externalUrl) {
       resource = this.resolve(audience);
-      if (!resource) throw new InvalidTokenError('Invalid token audience');
+      if (!resource) throw invalidToken('Invalid token audience');
     } else if (this.options.requireResource) {
-      throw new InvalidTokenError('Invalid token audience');
+      throw invalidToken('Invalid token audience');
     }
 
     const scope = typeof payload.scope === 'string' ? payload.scope : '';
@@ -81,21 +96,21 @@ export class OidcTokenVerifier {
         algorithms: ['EdDSA']
       }));
     } catch {
-      throw new InvalidTokenError('Invalid or expired access token');
+      throw invalidToken('Invalid or expired access token');
     }
 
     // Only API tokens are JWTs now. An OAuth token in this shape is one the
     // previous authorization server minted; refusing it is what makes clients
     // authorize once against the new one instead of silently keeping a
     // credential nothing can revoke.
-    if (payload.sub !== API_TOKEN_SUBJECT) throw new InvalidTokenError('Invalid access token claims');
+    if (payload.sub !== API_TOKEN_SUBJECT) throw invalidToken('Invalid access token claims');
     if (typeof payload.jti !== 'string' || !this.store.getApiToken(payload.jti)) {
-      throw new InvalidTokenError('Access token has been revoked');
+      throw invalidToken('Access token has been revoked');
     }
 
     const audience = typeof payload.aud === 'string' ? payload.aud : undefined;
     const resource = audience ? this.resolve(audience) : undefined;
-    if (!resource) throw new InvalidTokenError('Invalid token audience');
+    if (!resource) throw invalidToken('Invalid token audience');
     return {
       token,
       clientId: `token:${payload.jti}`,

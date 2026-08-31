@@ -12,8 +12,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { CimdResolver } from '../src/auth/cimd.js';
 import { mountOidcProvider } from '../src/auth/oidc/mount.js';
-import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
-
+import { requireBearerAuth } from '@modelcontextprotocol/express';
 import { createOidcInteractionRoutes } from '../src/auth/oidc/interactions.js';
 import { OidcTokenVerifier } from '../src/auth/oidc/verifier.js';
 import { mintApiToken } from '../src/auth/api-tokens.js';

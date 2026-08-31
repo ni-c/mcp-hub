@@ -50,6 +50,38 @@ export function isSafeRedirectUri(uri: string, policy: RedirectUriPolicy): boole
 }
 
 /**
+ * Whether a requested redirect URI is covered by a registered one.
+ *
+ * RFC 8252 §7.3: an authorization server MUST allow any port on a loopback
+ * redirect URI, because a native client is handed an ephemeral one by the
+ * operating system and cannot register it in advance. Everything else is an
+ * exact match — a prefix or origin comparison here is the classic open-redirect
+ * hole.
+ *
+ * Lives here rather than being imported because SDK v2 dropped it: the helper
+ * belonged to the authorization-server half, which the SDK no longer ships. It
+ * is a dozen lines, and keeping the loopback set shared with the checks above
+ * is worth more than the import was.
+ *
+ * @see https://datatracker.ietf.org/doc/html/rfc8252#section-7.3
+ */
+export function redirectUriMatches(requested: string, registered: string): boolean {
+  if (requested === registered) return true;
+  let req: URL;
+  let reg: URL;
+  try {
+    req = new URL(requested);
+    reg = new URL(registered);
+  } catch {
+    return false;
+  }
+  if (!isLoopbackHostname(req.hostname) || !isLoopbackHostname(reg.hostname)) return false;
+  return (
+    req.protocol === reg.protocol && req.hostname === reg.hostname && req.pathname === reg.pathname && req.search === reg.search
+  );
+}
+
+/**
  * True when every redirect URI points at this machine — the case the MCP
  * security considerations single out, because any local program could be the
  * one asking. Used to warn on the login and consent pages.

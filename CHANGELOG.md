@@ -11,6 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **On MCP SDK 2.0.** The single `@modelcontextprotocol/sdk` package has been
+  replaced by the split `@modelcontextprotocol/{core,client,server,node,express}`.
+  Behaviour is unchanged: the hub still speaks the `2025-11-25` protocol
+  revision, and no wire format, endpoint or response differs. Deployments need
+  do nothing.
+
+  Notably **not** installed is `@modelcontextprotocol/server-legacy`, the frozen
+  copy of v1's authorization-server helpers that npm marks deprecated on
+  install. Replacing the hand-written OAuth server with `oidc-provider` first is
+  what made that possible — this migration only had to touch the MCP wire layer.
+
+  Two things the mechanical migration would have changed quietly, and did not:
+  `tools/list` is still walked one page at a time, because v2's `listTools()`
+  aggregates the whole pagination internally and would have bypassed the tool
+  count and metadata budgets that bound what a hostile child can make the hub
+  hold in memory; and a malformed line on a child's stdio is still reported,
+  because v2's read buffer skips unparseable lines in silence.
+
 - **The authorization server is now `oidc-provider` instead of ~900 lines of
   hand-written OAuth.** Every endpoint keeps its path, the login and consent
   pages are the same pages, and the discovery document advertises everything it

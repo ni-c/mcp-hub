@@ -1,30 +1,16 @@
 import type { Request, Response } from 'express';
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import {
-  CallToolRequestSchema,
-  CallToolResultSchema,
-  CompleteRequestSchema,
-  CompleteResultSchema,
-  GetPromptRequestSchema,
-  GetPromptResultSchema,
-  ListPromptsRequestSchema,
-  ListPromptsResultSchema,
-  ListResourcesRequestSchema,
-  ListResourcesResultSchema,
-  ListResourceTemplatesRequestSchema,
-  ListResourceTemplatesResultSchema,
-  ErrorCode,
-  ListToolsRequestSchema,
-  ListToolsResultSchema,
-  McpError,
-  ReadResourceRequestSchema,
-  ReadResourceResultSchema
-} from '@modelcontextprotocol/sdk/types.js';
-import type { ListToolsResult, ServerCapabilities } from '@modelcontextprotocol/sdk/types.js';
+import { CallToolResultSchema, CompleteResultSchema, GetPromptResultSchema, ListPromptsResultSchema, ListResourcesResultSchema, ListResourceTemplatesResultSchema, ListToolsResultSchema, ReadResourceResultSchema } from '@modelcontextprotocol/core';
+import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node';
+import { Server, ProtocolError, ProtocolErrorCode } from '@modelcontextprotocol/server';
+import type { ListToolsResult, ServerCapabilities, StandardSchemaV1 } from '@modelcontextprotocol/server';
 import type { ManagedServer } from './supervisor.js';
 import { ABSOLUTE_CALL_OPTIONS, assertForwardedResultSize } from './mcp-limits.js';
 import { filterTools, loggableToolName, toolAllowed } from './tool-filter.js';
+
+/** What `Client.request` accepts as its second argument. Named so the two
+ *  forwarding helpers below can be generic over it without repeating the
+ *  `Parameters<...>` incantation twice. */
+type ClientResultSchema = Parameters<NonNullable<ManagedServer['client']>['request']>[1] & StandardSchemaV1;
 
 /**
  * The child's capabilities minus what this proxy does not actually serve.
@@ -59,7 +45,16 @@ function buildProxyServer(managed: ManagedServer): Server {
     { name: managed.serverInfo?.name ?? managed.name, version: managed.serverInfo?.version ?? '0.0.0' },
     { capabilities: advertisedCapabilities(managed.capabilities) }
   );
-  const forwardLive = <T extends { method: string; params?: unknown }>(request: T, resultSchema: Parameters<NonNullable<ManagedServer['client']>['request']>[1]) => {
+  /**
+   * Forwards one request and hands back exactly what the schema describes.
+   *
+   * Generic over the schema rather than typed against a union of all of them:
+   * v2's request handlers are typed per method, so a `Promise<unknown>` here
+   * fails to assign at all eight call sites below. Inferring the result type
+   * from the schema is also the honest description — this returns the child's
+   * answer, parsed by the schema the caller chose.
+   */
+  const forwardLive = <S extends ClientResultSchema>(request: { method: string; params?: unknown }, resultSchema: S): Promise<StandardSchemaV1.InferOutput<S>> => {
     const client = managed.client;
     if (!client) throw new Error(`Server "${managed.name}" is not running`);
     return client
@@ -68,7 +63,10 @@ function buildProxyServer(managed: ManagedServer): Server {
   };
   // Real usage: wakes a sleeping on-demand server (blocking until it is up)
   // and resets its idle window. Everything else is answered without a child.
-  const use = async <T extends { method: string; params?: unknown }>(request: T, resultSchema: Parameters<NonNullable<ManagedServer['client']>['request']>[1]) => {
+  const use = async <S extends ClientResultSchema>(
+    request: { method: string; params?: unknown },
+    resultSchema: S
+  ): Promise<StandardSchemaV1.InferOutput<S>> => {
     if (managed.state !== 'up' || !managed.client) await managed.wake();
     managed.markUsed();
     return forwardLive(request, resultSchema);
@@ -79,7 +77,7 @@ function buildProxyServer(managed: ManagedServer): Server {
     // all hub paths configured enumerates them on connect, so answering from
     // the cached snapshot (instead of waking) is what keeps a fleet of
     // sleeping servers asleep. Neither branch counts as usage.
-    server.setRequestHandler(ListToolsRequestSchema, async req => {
+    server.setRequestHandler('tools/list', async req => {
       // managed.tools is filtered on the way in, but the live branch forwards
       // the upstream's own answer and never consults it — so it has to filter
       // too. Missing this is the obvious bug here: the filter would appear to
@@ -88,7 +86,7 @@ function buildProxyServer(managed: ManagedServer): Server {
       const live = (await forwardLive(req, ListToolsResultSchema)) as ListToolsResult;
       return { ...live, tools: filterTools(managed.config, live.tools) };
     });
-    server.setRequestHandler(CallToolRequestSchema, req => {
+    server.setRequestHandler('tools/call', req => {
       // Hiding is not a boundary on this path: the hub forwards by name, so a
       // client holding a stale schema would still reach it. Refused before
       // use(), so a forbidden name cannot wake a sleeping server either. The
@@ -97,22 +95,22 @@ function buildProxyServer(managed: ManagedServer): Server {
       if (!toolAllowed(managed.config, req.params.name)) {
         const logged = loggableToolName(req.params.name);
         console.warn(`[${managed.name}] refused tools/call "${logged}": not permitted by allowTools/denyTools`);
-        throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${req.params.name}`);
+        throw new ProtocolError(ProtocolErrorCode.MethodNotFound, `Unknown tool: ${req.params.name}`);
       }
       return use(req, CallToolResultSchema);
     });
   }
   if (caps.resources) {
-    server.setRequestHandler(ListResourcesRequestSchema, req => use(req, ListResourcesResultSchema));
-    server.setRequestHandler(ListResourceTemplatesRequestSchema, req => use(req, ListResourceTemplatesResultSchema));
-    server.setRequestHandler(ReadResourceRequestSchema, req => use(req, ReadResourceResultSchema));
+    server.setRequestHandler('resources/list', req => use(req, ListResourcesResultSchema));
+    server.setRequestHandler('resources/templates/list', req => use(req, ListResourceTemplatesResultSchema));
+    server.setRequestHandler('resources/read', req => use(req, ReadResourceResultSchema));
   }
   if (caps.prompts) {
-    server.setRequestHandler(ListPromptsRequestSchema, req => use(req, ListPromptsResultSchema));
-    server.setRequestHandler(GetPromptRequestSchema, req => use(req, GetPromptResultSchema));
+    server.setRequestHandler('prompts/list', req => use(req, ListPromptsResultSchema));
+    server.setRequestHandler('prompts/get', req => use(req, GetPromptResultSchema));
   }
   if (caps.completions) {
-    server.setRequestHandler(CompleteRequestSchema, req => use(req, CompleteResultSchema));
+    server.setRequestHandler('completion/complete', req => use(req, CompleteResultSchema));
   }
   return server;
 }
@@ -120,7 +118,7 @@ function buildProxyServer(managed: ManagedServer): Server {
 /** Handle one Streamable-HTTP request against an MCP Server built on the fly. */
 export async function handleMcpRequest(buildServer: () => Server, req: Request, res: Response): Promise<void> {
   const server = buildServer();
-  const transport = new StreamableHTTPServerTransport({
+  const transport = new NodeStreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
     enableJsonResponse: true
   });

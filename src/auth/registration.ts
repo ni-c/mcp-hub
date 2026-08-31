@@ -1,7 +1,7 @@
 import express, { Router } from 'express';
 import type { NextFunction, Request, Response } from 'express';
-import { OAuthClientMetadataSchema } from '@modelcontextprotocol/sdk/shared/auth.js';
-import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
+import type { OAuthClientInformationFull } from '@modelcontextprotocol/server';
+import { OAuthClientMetadataSchema } from '@modelcontextprotocol/core';
 import type { AuthStore } from './store.js';
 import { isSafeRedirectUri } from './redirect-uri.js';
 import { earlyRateLimit } from './rate-limit.js';

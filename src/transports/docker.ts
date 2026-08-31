@@ -1,6 +1,5 @@
 import type { Duplex } from 'node:stream';
-import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
-import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
+import type { Transport, JSONRPCMessage } from '@modelcontextprotocol/server';
 import type { DockerServerConfig } from '../config.js';
 import { buildCreateRequest, containerName } from '../sandbox/container-spec.js';
 import { DockerClient } from '../sandbox/docker-client.js';

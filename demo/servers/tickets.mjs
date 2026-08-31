@@ -11,8 +11,8 @@
  * Note for anyone using this as a template: stdout belongs to the protocol.
  * Anything you want to print goes to stderr, or the transport breaks.
  */
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
+import { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 
 const TICKETS = [
@@ -80,9 +80,9 @@ server.registerTool(
   {
     title: 'List tickets',
     description: 'List the tickets in the demo backlog, optionally filtered by status. Returns a summary; use get_ticket for the full text.',
-    inputSchema: {
+    inputSchema: z.object({
       status: z.enum(['open', 'in progress', 'closed']).optional().describe('Only return tickets in this status')
-    }
+    })
   },
   async ({ status }) => {
     const matching = status ? TICKETS.filter(ticket => ticket.status === status) : TICKETS;
@@ -95,7 +95,7 @@ server.registerTool(
   {
     title: 'Get one ticket',
     description: 'Get a single ticket including its description and the date it was opened.',
-    inputSchema: { id: z.string().describe('Ticket id from list_tickets, e.g. "DEMO-101"') }
+    inputSchema: z.object({ id: z.string().describe('Ticket id from list_tickets, e.g. "DEMO-101"') })
   },
   async ({ id }) => {
     const found = TICKETS.find(ticket => ticket.id.toLowerCase() === id.toLowerCase());
@@ -110,11 +110,11 @@ server.registerTool(
     title: 'Create a ticket',
     description:
       'File a new ticket. This demo accepts and acknowledges the ticket but does not store it — the backlog is the same for everyone and resets on every call.',
-    inputSchema: {
+    inputSchema: z.object({
       title: z.string().min(3).max(200).describe('One-line summary of the problem'),
       priority: z.enum(['low', 'medium', 'high']).optional().describe('Priority, default "medium"'),
       description: z.string().max(2000).optional().describe('Longer description')
-    }
+    })
   },
   async ({ title, priority = 'medium', description = '' }) => {
     // Derived from the fixed backlog length, so the answer is stable across
@@ -137,7 +137,7 @@ server.registerTool(
   {
     title: 'List ticket statuses',
     description: 'List the statuses a ticket can have. Useful as the filter value for list_tickets.',
-    inputSchema: {}
+    inputSchema: z.object({})
   },
   async () => text(STATUSES)
 );

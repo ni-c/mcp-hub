@@ -14,8 +14,8 @@
  * Note for anyone using this as a template: stdout belongs to the protocol.
  * Anything you want to print goes to stderr, or the transport breaks.
  */
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
+import { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 
 const DOCS = [
@@ -121,10 +121,10 @@ server.registerTool(
   {
     title: 'Search the documentation',
     description: 'Search the mcp-hub documentation by keyword. Returns matching pages with a short excerpt; use read_doc for the full text.',
-    inputSchema: {
+    inputSchema: z.object({
       query: z.string().min(2).max(200).describe('Words to search for, e.g. "oauth token" or "idle sleep"'),
       limit: z.number().int().min(1).max(7).optional().describe('How many results to return, 1-7 (default 3)')
-    }
+    })
   },
   async ({ query, limit = 3 }) => {
     const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
@@ -150,7 +150,7 @@ server.registerTool(
   {
     title: 'Read a documentation page',
     description: 'Read the full excerpt of one documentation page, with the URL of the canonical version.',
-    inputSchema: { id: z.string().describe('Page id from search_docs, e.g. "on-demand"') }
+    inputSchema: z.object({ id: z.string().describe('Page id from search_docs, e.g. "on-demand"') })
   },
   async ({ id }) => {
     const found = DOCS.find(doc => doc.id === id);
@@ -164,7 +164,7 @@ server.registerTool(
   {
     title: 'List documentation pages',
     description: 'List every page in this index with its id and title.',
-    inputSchema: {}
+    inputSchema: z.object({})
   },
   async () => text(DOCS.map(({ id, title, url }) => ({ id, title, url })))
 );

@@ -1,7 +1,6 @@
 import type { Duplex } from 'node:stream';
-import { ReadBuffer, serializeMessage } from '@modelcontextprotocol/sdk/shared/stdio.js';
-import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
-import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
+import { STDIO_DEFAULT_MAX_BUFFER_SIZE, deserializeMessage, serializeMessage } from '@modelcontextprotocol/server';
+import type { Transport, JSONRPCMessage } from '@modelcontextprotocol/server';
 
 /**
  * MCP over any reliable bidirectional byte stream, using the stdio framing.
@@ -21,7 +20,7 @@ export class StreamTransport implements Transport {
   onerror?: (error: Error) => void;
   onmessage?: (message: JSONRPCMessage) => void;
 
-  private readonly readBuffer = new ReadBuffer();
+  private buffer: Buffer = Buffer.alloc(0);
   private started = false;
   private closed = false;
   private reportedClose = false;
@@ -46,32 +45,46 @@ export class StreamTransport implements Transport {
     this.stream.on('close', () => this.reportClosed());
   }
 
-  /** Feed protocol bytes that were read out of band (demultiplexed stdout). */
+  /**
+   * Feed protocol bytes that were read out of band (demultiplexed stdout).
+   *
+   * The line framing is written out here rather than delegated to the SDK's
+   * ReadBuffer, which is what this used to do. ReadBuffer's handling of a line
+   * that does not parse is not part of its API and it changed: it used to
+   * throw, and now it skips the line and reads on. Silently is the wrong answer
+   * for a gateway — a stray line on a child's stdout means the stream is
+   * desynchronised or the child is printing where it should not, and that is
+   * something an operator wants in the log, not something to absorb. The SDK's
+   * own codec still does the parsing; only the policy is local.
+   */
   receive(chunk: Buffer): void {
-    try {
-      this.readBuffer.append(chunk);
-    } catch (error) {
-      // The SDK caps the buffer at 10 MB and throws when a peer keeps sending
-      // without ever writing a newline. This runs inside a 'data' handler, so
-      // an escaping throw would reach process.on('uncaughtException') and take
-      // the entire hub down — every other server with it — because one
-      // sandboxed server misbehaved. The stream is desynchronised anyway:
-      // report it, end this connection, let the supervisor restart it.
-      this.onerror?.(error as Error);
+    if (this.buffer.length + chunk.length > STDIO_DEFAULT_MAX_BUFFER_SIZE) {
+      // A peer that keeps sending without ever writing a newline. This runs
+      // inside a 'data' handler, so a throw here would reach
+      // process.on('uncaughtException') and take the entire hub down — every
+      // other server with it — because one sandboxed server misbehaved. The
+      // stream is desynchronised anyway: report it, end this connection, let
+      // the supervisor restart it.
+      this.buffer = Buffer.alloc(0);
+      this.onerror?.(new Error(`ReadBuffer exceeded maximum size of ${STDIO_DEFAULT_MAX_BUFFER_SIZE} bytes`));
       void this.close();
       return;
     }
+    this.buffer = this.buffer.length === 0 ? chunk : Buffer.concat([this.buffer, chunk]);
     for (;;) {
-      let message: JSONRPCMessage | null;
+      const newline = this.buffer.indexOf('\n');
+      if (newline === -1) return;
+      const line = this.buffer.toString('utf8', 0, newline).replace(/\r$/, '');
+      this.buffer = this.buffer.subarray(newline + 1);
+      let message: JSONRPCMessage;
       try {
-        message = this.readBuffer.readMessage();
+        message = deserializeMessage(line);
       } catch (error) {
-        // One malformed line must not kill the connection: report it and let
-        // the buffer continue with the bytes after the newline.
+        // One malformed line must not kill the connection: report it and carry
+        // on with the bytes after the newline.
         this.onerror?.(error as Error);
         continue;
       }
-      if (message === null) return;
       this.onmessage?.(message);
     }
   }
@@ -97,7 +110,7 @@ export class StreamTransport implements Transport {
     if (this.reportedClose) return;
     this.reportedClose = true;
     this.closed = true;
-    this.readBuffer.clear();
+    this.buffer = Buffer.alloc(0);
     this.onclose?.();
   }
 }

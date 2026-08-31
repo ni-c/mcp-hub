@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import type { Implementation, ServerCapabilities, Tool } from '@modelcontextprotocol/sdk/types.js';
+import type { Implementation, ServerCapabilities, Tool } from '@modelcontextprotocol/server';
 import type { ServerConfig } from './config.js';
 
 const CACHE_VERSION = 1;
