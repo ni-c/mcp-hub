@@ -1,5 +1,6 @@
 import type { Adapter, AdapterFactory, AdapterPayload } from 'oidc-provider';
 
+import { type CimdResolver, isClientIdMetadataUrl } from '../cimd.js';
 import type { AuthStore } from '../store.js';
 
 /**
@@ -19,8 +20,8 @@ import type { AuthStore } from '../store.js';
  *   - `consumed`, because a consumed authorization code has to be
  *     distinguishable from an unknown one or replay detection cannot work.
  */
-export function createOidcAdapter(store: AuthStore): AdapterFactory {
-  return (model: string): Adapter => (model === 'Client' ? clientAdapter(store) : artifactAdapter(store, model));
+export function createOidcAdapter(store: AuthStore, cimd?: CimdResolver): AdapterFactory {
+  return (model: string): Adapter => (model === 'Client' ? clientAdapter(store, cimd) : artifactAdapter(store, model));
 }
 
 /**
@@ -34,15 +35,36 @@ export function createOidcAdapter(store: AuthStore): AdapterFactory {
  *
  * The shapes already agree: both are RFC 7591 metadata keyed by `client_id`.
  */
-function clientAdapter(store: AuthStore): Adapter {
+function clientAdapter(store: AuthStore, cimd?: CimdResolver): Adapter {
   return {
     async upsert(id: string, payload: AdapterPayload): Promise<void> {
       // `saveClient` also prunes unapproved clients, which is the behaviour the
       // hub had for registrations before.
       store.saveClient({ ...(payload as Record<string, unknown>), client_id: id } as never);
     },
+
+    /**
+     * Client ID Metadata Documents are resolved HERE, deliberately.
+     *
+     * models/client.js consults the adapter BEFORE its own metadata-document
+     * fetcher, so returning the document from here means oidc-provider's
+     * fetcher is never reached — and the hub keeps a materially stricter
+     * policy than the library's: DNS pinning against rebinding, an origin
+     * allowlist, per-origin failure counting so distinct client_ids on one host
+     * cannot be used to hammer it, and negative caching. oidc-provider has none
+     * of those. `allowFetch` is wired to refuse, so the built-in path stays
+     * closed even if this returns nothing.
+     *
+     * Nothing is written: a CIMD client is not registered, which is the point
+     * of it — the client reinstalls and is still the same client.
+     */
     async find(id: string): Promise<AdapterPayload | undefined> {
-      return store.getClient(id) as AdapterPayload | undefined;
+      const registered = store.getClient(id);
+      if (registered) return registered as AdapterPayload;
+      if (cimd && isClientIdMetadataUrl(id)) {
+        return (await cimd.resolve(id)) as AdapterPayload | undefined;
+      }
+      return undefined;
     },
     async findByUid(): Promise<undefined> {
       return undefined;

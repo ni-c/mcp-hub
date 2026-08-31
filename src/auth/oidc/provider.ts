@@ -1,6 +1,7 @@
 import type { Configuration, KoaContextWithOIDC } from 'oidc-provider';
 import Provider, { errors } from 'oidc-provider';
 
+import type { CimdResolver } from '../cimd.js';
 import type { AuthStore } from '../store.js';
 import { createOidcAdapter } from './adapter.js';
 import { HUB_SCOPE, installThrowawaySecret } from './quirks.js';
@@ -29,6 +30,8 @@ export interface OidcProviderOptions {
   defaultResource?: URL;
   /** False drops /register and the registration_endpoint from discovery. */
   allowDynamicRegistration?: boolean;
+  /** Resolves https client_ids into clients. Absent turns CIMD off entirely. */
+  cimd?: CimdResolver;
   /** Where an unauthenticated authorization request is sent to log in. Must NOT
    *  be the authorization path: `${routes.authorization}/:uid` is the resume
    *  route, and pointing the interaction at it makes the flow chase its own
@@ -60,7 +63,7 @@ export function buildOidcProvider(store: AuthStore, options: OidcProviderOptions
   };
 
   const configuration: Configuration = {
-    adapter: createOidcAdapter(store),
+    adapter: createOidcAdapter(store, options.cimd),
 
     // mcp-hub's paths, not oidc-provider's defaults. Every one of these is
     // already in RESERVED_NAMES, so no MCP server can collide with them.
@@ -90,6 +93,23 @@ export function buildOidcProvider(store: AuthStore, options: OidcProviderOptions
       userinfo: { enabled: false },
       // Ships hardcoded /interaction/:uid routes that accept ANY password.
       devInteractions: { enabled: false },
+
+      /**
+       * Enabled for what it advertises and for the client_id URL check — NOT
+       * for its fetcher. The adapter resolves metadata documents through the
+       * hub's own CimdResolver, which models/client.js consults first, and
+       * `allowFetch` refuses so the built-in path can never run.
+       *
+       * That is a deliberate choice, not an accident of ordering. The library
+       * caps the body at 5 KiB, times out at 2.5 s and refuses redirects; it
+       * does NOT pin the resolved address against DNS rebinding, enforce an
+       * origin allowlist, or rate-limit per origin. The hub does all three.
+       */
+      clientIdMetadataDocument: {
+        enabled: options.cimd !== undefined,
+        ack: 'draft-02',
+        allowFetch: () => false
+      },
       resourceIndicators: {
         enabled: true,
         useGrantedResource: () => true,
@@ -114,6 +134,14 @@ export function buildOidcProvider(store: AuthStore, options: OidcProviderOptions
         }
       }
     },
+
+    /**
+     * Exactly the three the hub advertised before, and no more. Dropping
+     * `client_secret_basic` and `client_secret_jwt` from oidc-provider's
+     * defaults is a deliberate narrowing: nothing the hub issues can use them,
+     * and an authentication mechanism nobody uses is only an attack surface.
+     */
+    clientAuthMethods: ['client_secret_post', 'none', 'private_key_jwt'],
 
     // --- Quirk 3: refresh tokens without offline_access ---------------------
     issueRefreshToken: async (_ctx, client) => client.grantTypeAllowed('refresh_token'),
@@ -190,11 +218,19 @@ export function buildOidcProvider(store: AuthStore, options: OidcProviderOptions
       Grant: REFRESH_TOKEN_TTL_S
     },
 
-    // Not yet reached: CIMD and private_key_jwt are the only features that make
-    // oidc-provider fetch anything, and both stay off until the hub's pinned,
-    // DNS-rebinding-safe client is wired into `configuration.fetch`. The caps
-    // are set now because the defaults for two of the three are Infinity, and
-    // an unbounded fetch is not something to discover later.
+    /**
+     * Every outbound request oidc-provider makes goes through the hub's pinned
+     * client. With the metadata-document path closed above, that leaves
+     * `jwks_uri` for private_key_jwt clients — and that one needs it most:
+     * unlike its own CIMD fetch, oidc-provider requests jwks_uri with neither
+     * `redirect: 'manual'` nor a body cap (the default limit is Infinity).
+     * `safeFetch` refuses non-https, pins the resolved public address so a
+     * second DNS answer cannot redirect it inward, and caps the body.
+     */
+    ...(options.cimd ? { fetch: options.cimd.safeFetch as Configuration['fetch'] } : {}),
+
+    // Defence in depth behind `safeFetch`: two of the three defaults are
+    // Infinity, and an unbounded fetch is not something to discover later.
     fetchResponseBodyLimits: {
       'client_id metadata document': 5 * 1024,
       jwks_uri: 64 * 1024,

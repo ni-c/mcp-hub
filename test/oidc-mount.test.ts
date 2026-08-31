@@ -4,10 +4,12 @@ import os from 'node:os';
 import path from 'node:path';
 
 import express from 'express';
+import { exportJWK, generateKeyPair, SignJWT } from 'jose';
 import type { Express } from 'express';
 import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { CimdResolver } from '../src/auth/cimd.js';
 import { mountOidcProvider } from '../src/auth/oidc/mount.js';
 import { buildOidcProvider, HUB_ACCOUNT_ID } from '../src/auth/oidc/provider.js';
 import { AuthStore } from '../src/auth/store.js';
@@ -297,5 +299,212 @@ describe('a full authorization, the way MCP clients actually do it', () => {
       .send({ grant_type: 'refresh_token', refresh_token: before.body.refresh_token, client_id: clientId });
     expect(after.status).toBe(400);
     expect(after.body.error).toBe('invalid_grant');
+  });
+});
+
+describe('client ID metadata documents and private_key_jwt', () => {
+  const CLIENT_ID = 'https://client.example/oauth/client.json';
+  let documents: Map<string, string>;
+  let fetched: string[];
+  let cimdApp: Express;
+  let cimdStore: AuthStore;
+  let cimdDir: string;
+
+  /** Stands in for the client's own web server; never reaches the network. */
+  const stubFetch: typeof fetch = async input => {
+    const url = input instanceof Request ? input.url : String(input);
+    fetched.push(url);
+    const body = documents.get(url);
+    if (!body) return new Response('not found', { status: 404 });
+    return new Response(body, { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+
+  function serve(url: string, document: unknown): void {
+    documents.set(url, JSON.stringify(document));
+  }
+
+  beforeEach(() => {
+    documents = new Map();
+    fetched = [];
+    cimdDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-hub-cimd-oidc-'));
+    cimdStore = new AuthStore(cimdDir);
+    cimdApp = express();
+    const resolver = new CimdResolver({ fetchImpl: stubFetch, allowPrivateAddresses: true });
+    const provider = buildOidcProvider(cimdStore, {
+      externalUrl: EXTERNAL_URL,
+      defaultResource: new URL('/hub', EXTERNAL_URL),
+      interactionPath: '/interaction',
+      cimd: resolver
+    });
+    autoApproveInteractions(cimdApp, provider);
+    mountOidcProvider(cimdApp, provider, cimdStore, { externalUrl: EXTERNAL_URL });
+    cimdApp.use((_req, res) => {
+      res.status(404).json({ reached: 'express' });
+    });
+  });
+
+  afterEach(() => {
+    fs.rmSync(cimdDir, { recursive: true, force: true });
+  });
+
+  it('advertises CIMD and exactly the three client auth methods', async () => {
+    const meta = await request(cimdApp).get('/.well-known/oauth-authorization-server').expect(200);
+    expect(meta.body.client_id_metadata_document_supported).toBe(true);
+    // Narrower than oidc-provider's default, which also offers
+    // client_secret_basic and client_secret_jwt: nothing the hub issues can use
+    // them, so they would be surface without a purpose.
+    expect(meta.body.token_endpoint_auth_methods_supported.sort()).toEqual(['client_secret_post', 'none', 'private_key_jwt']);
+    expect(meta.body.token_endpoint_auth_signing_alg_values_supported).toContain('EdDSA');
+  });
+
+  it('resolves an https client_id through the hub resolver, not the library one', async () => {
+    serve(CLIENT_ID, {
+      client_id: CLIENT_ID,
+      client_name: 'Vitest CIMD client',
+      redirect_uris: [REDIRECT_URI],
+      grant_types: ['authorization_code', 'refresh_token'],
+      response_types: ['code'],
+      token_endpoint_auth_method: 'none'
+    });
+
+    const res = await request(cimdApp)
+      .get('/authorize')
+      .query({
+        client_id: CLIENT_ID,
+        redirect_uri: REDIRECT_URI,
+        response_type: 'code',
+        code_challenge: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
+        code_challenge_method: 'S256',
+        state: 'xyz'
+      })
+      .redirects(0);
+
+    // Recognised: it is sent to log in rather than refused as an unknown client.
+    expect(res.status).toBe(303);
+    expect(res.headers.location).toMatch(/^\/interaction\//);
+    // The hub's own fetch did the work. oidc-provider's fetcher would not go
+    // through this stub at all.
+    expect(fetched).toEqual([CLIENT_ID]);
+    // And nothing was persisted: a CIMD client is not a registration.
+    expect(cimdStore.getClient(CLIENT_ID)).toBeUndefined();
+  });
+
+  it('refuses an https client_id the hub resolver rejected, without fetching again', async () => {
+    // Nothing served, so the document 404s and the resolver says no. The
+    // library must not then try its own fetch: allowFetch refuses.
+    const res = await request(cimdApp)
+      .get('/authorize')
+      .query({
+        client_id: 'https://client.example/unknown.json',
+        redirect_uri: REDIRECT_URI,
+        response_type: 'code',
+        code_challenge: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
+        code_challenge_method: 'S256',
+        state: 'xyz'
+      })
+      .redirects(0);
+    expect(res.status).toBe(400);
+    expect(fetched).toEqual(['https://client.example/unknown.json']);
+  });
+
+  it('authenticates a private_key_jwt client at the token endpoint', async () => {
+    const { publicKey, privateKey } = await generateKeyPair('EdDSA', { crv: 'Ed25519', extractable: true });
+    const jwk = await exportJWK(publicKey);
+    serve(CLIENT_ID, {
+      client_id: CLIENT_ID,
+      client_name: 'Vitest confidential client',
+      redirect_uris: [REDIRECT_URI],
+      grant_types: ['authorization_code', 'refresh_token'],
+      response_types: ['code'],
+      token_endpoint_auth_method: 'private_key_jwt',
+      token_endpoint_auth_signing_alg: 'EdDSA',
+      jwks: { keys: [{ ...jwk, alg: 'EdDSA', use: 'sig' }] }
+    });
+
+    const agent = request.agent(cimdApp);
+    const verifier = crypto.randomBytes(32).toString('base64url');
+    const challenge = crypto.createHash('sha256').update(verifier).digest('base64url');
+
+    let location =
+      `/authorize?client_id=${encodeURIComponent(CLIENT_ID)}&response_type=code` +
+      `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&code_challenge=${challenge}` +
+      '&code_challenge_method=S256&state=xyz';
+    let code: string | null = null;
+    for (let hop = 0; hop < 10 && !code; hop += 1) {
+      const res = await agent.get(location).redirects(0);
+      const next = res.headers.location as string | undefined;
+      if (!next) throw new Error(`stalled at hop ${hop}: ${res.status} ${JSON.stringify(res.body)}`);
+      if (next.startsWith(REDIRECT_URI)) {
+        code = new URL(next).searchParams.get('code');
+        break;
+      }
+      location = next.startsWith('http') ? new URL(next).pathname : next;
+    }
+    expect(code).toBeTruthy();
+
+    // RFC 7523: the client proves itself with a JWT it signed, because a
+    // metadata-document client can hold no shared secret.
+    const assertion = await new SignJWT({})
+      .setProtectedHeader({ alg: 'EdDSA' })
+      .setIssuer(CLIENT_ID)
+      .setSubject(CLIENT_ID)
+      .setAudience(`${new URL(EXTERNAL_URL).origin}/token`)
+      .setJti(crypto.randomBytes(16).toString('hex'))
+      .setIssuedAt()
+      .setExpirationTime('2m')
+      .sign(privateKey);
+
+    const tokens = await agent.post('/token').type('form').send({
+      grant_type: 'authorization_code',
+      code: code!,
+      redirect_uri: REDIRECT_URI,
+      client_id: CLIENT_ID,
+      code_verifier: verifier,
+      client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+      client_assertion: assertion
+    });
+    expect(tokens.status).toBe(200);
+    expect(tokens.body.access_token).toBeTruthy();
+  });
+
+  it('refuses a replayed private_key_jwt assertion', async () => {
+    // The jti is accepted exactly once; without ReplayDetection a captured
+    // assertion would be reusable until it expires.
+    const { publicKey, privateKey } = await generateKeyPair('EdDSA', { crv: 'Ed25519', extractable: true });
+    const jwk = await exportJWK(publicKey);
+    serve(CLIENT_ID, {
+      client_id: CLIENT_ID,
+      client_name: 'Vitest confidential client',
+      redirect_uris: [REDIRECT_URI],
+      grant_types: ['authorization_code', 'refresh_token'],
+      response_types: ['code'],
+      token_endpoint_auth_method: 'private_key_jwt',
+      token_endpoint_auth_signing_alg: 'EdDSA',
+      jwks: { keys: [{ ...jwk, alg: 'EdDSA', use: 'sig' }] }
+    });
+
+    const assertion = await new SignJWT({})
+      .setProtectedHeader({ alg: 'EdDSA' })
+      .setIssuer(CLIENT_ID)
+      .setSubject(CLIENT_ID)
+      .setAudience(`${new URL(EXTERNAL_URL).origin}/token`)
+      .setJti(crypto.randomBytes(16).toString('hex'))
+      .setIssuedAt()
+      .setExpirationTime('2m')
+      .sign(privateKey);
+
+    const body = {
+      grant_type: 'refresh_token',
+      refresh_token: 'not-a-real-token',
+      client_id: CLIENT_ID,
+      client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+      client_assertion: assertion
+    };
+    // First use: the client authenticates, only the grant is bad.
+    const first = await request(cimdApp).post('/token').type('form').send(body);
+    expect(first.body.error).toBe('invalid_grant');
+    // Second use of the same jti: the CLIENT is now refused.
+    const second = await request(cimdApp).post('/token').type('form').send(body);
+    expect(second.body.error).toBe('invalid_client');
   });
 });
