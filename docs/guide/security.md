@@ -180,16 +180,26 @@ before gets a CSRF-protected *Approve / Deny* page rather than a silent code.
 This is what stops a page in another tab from riding your session to obtain a
 token.
 
-**Tokens are short-lived and bound.** Access tokens are EdDSA-signed JWTs valid
-for 15 minutes; the verifier pins the algorithm rather than trusting the token
-header. Refresh tokens rotate, reuse of a retired token revokes its family, and
-a refresh cannot request more scope than the original grant. Each token is
-additionally bound (RFC 8707) to the one resource it was issued for, so a token
-for one server reaches neither another server nor `/hub` and `/health`.
+**Tokens are short-lived and bound.** Access tokens are opaque and valid for
+15 minutes. Opaque rather than self-contained on purpose: the value is a
+reference to a stored record, so the hub can withdraw one, which is not possible
+for a signed token that verifies on its own. Refresh tokens rotate, and reusing
+a retired one is treated as a leak — it revokes the whole grant, the access
+tokens issued under it included. Each token is bound (RFC 8707) to the one
+resource it was issued for, so a token for one server reaches neither another
+server nor `/hub` and `/health`.
+
+Admin-minted API tokens are the exception and stay signed JWTs: they are for
+clients that cannot do OAuth at all, and only their record is stored, which is
+what `tokens revoke` deletes.
+
+Nothing an attacker could present is written to `state.json`. Tokens are keyed
+and stored by hash, so read access to the file does not yield a usable
+credential.
 
 **Revocation takes effect at once.** `mcp-hub-admin clients revoke <id>` removes
-the approval and every refresh token, and sets a marker that rejects
-already-issued access tokens immediately — no waiting for the 15-minute expiry.
+the approval and every refresh token, and the next request carrying an
+already-issued access token is refused — no waiting for the 15-minute expiry.
 It works whether or not the hub is running: the CLI is a second process on the
 same state file, and both sides re-read it before touching it, so neither can
 serve a stale copy or write one back over the other.

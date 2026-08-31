@@ -125,7 +125,7 @@ roughly every five minutes — cannot leak processes or memory.
 
 **Light enough for a Raspberry Pi.** A stated project goal: one Node process,
 no database — state is one JSON file plus an Ed25519 key under `/data` — a
-handful of runtime dependencies, and multi-arch images (`amd64`/`arm64`). The
+six runtime dependencies, and multi-arch images (`amd64`/`arm64`). The
 stateless transport and the missing database are not accidents; they are what
 keeps the hub comfortable on a single-board computer.
 

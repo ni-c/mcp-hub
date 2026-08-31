@@ -74,9 +74,13 @@ back out.
 unauthenticated, mounts the auth router, and then registers two routes per
 configured server plus `/hub`.
 
-**The OAuth authorization server** is the MCP SDK's `mcpAuthRouter` with a
-custom provider: password login, per-client approval, EdDSA JWTs, rotating
-refresh tokens, all persisted to one JSON file.
+**The OAuth authorization server** is [`oidc-provider`](https://github.com/panva/node-oidc-provider),
+mounted on the hub's own paths and backed by the same JSON file everything else
+uses. What is not the library's: password login and per-client approval are the
+hub's pages, metadata documents are resolved by the hub's address-pinned client
+rather than the library's fetcher, and RFC 7592 registration management stays on
+the hub's stricter handlers. Access tokens are opaque, which is what makes a
+revocation take effect immediately.
 
 **The supervisor** owns one long-lived MCP client per configured server and
 keeps it alive. What sits under that client is the only thing that differs
@@ -96,7 +100,9 @@ The order of the middleware is deliberate:
 
 1. **Rate limit** — before anything is parsed, and before an unknown IP is
    inserted into any table.
-2. **Bearer verification** — an EdDSA JWT with a pinned algorithm.
+2. **Bearer verification** — two shapes: an opaque OAuth access token, looked
+   up in the store so a withdrawn one stops working at once, or an
+   admin-minted API token, which is an EdDSA JWT with a pinned algorithm.
 3. **Resource check** — the token's audience must match this endpoint;
    `/health` shares the `/hub` resource.
 4. **Per-client gate** — requests per minute and in-flight concurrency, keyed
@@ -105,8 +111,8 @@ The order of the middleware is deliberate:
    unauthenticated request never allocates a megabyte.
 6. **Routing** — to `/hub`, to one server's proxy, or 404.
 
-An unauthenticated request costs a JWT verification and nothing more: no disk
-access, no bcrypt, no allocation proportional to the body.
+An unauthenticated request costs one token lookup and nothing more: no bcrypt,
+no allocation proportional to the body.
 
 ## Stateless transport
 

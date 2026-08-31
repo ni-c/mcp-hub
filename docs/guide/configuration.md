@@ -39,7 +39,8 @@ These names are reserved and rejected at load time, because the hub itself
 serves them:
 
 `mcp` · `hub` · `authorize` · `token` · `register` · `login` · `consent` ·
-`health` · `livez` · `revoke` · `upstream` · `.well-known`
+`health` · `livez` · `revoke` · `upstream` · `.well-known` · `jwks` ·
+`interaction` · `session` · `userinfo`
 
 The check is case-insensitive — `Hub` is rejected just like `hub`.
 

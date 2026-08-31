@@ -295,7 +295,7 @@ Denying sends the client away with `error=access_denied`.
 | | |
 |---|---|
 | Authorization code | 10 minutes, single use |
-| Access token | **15 minutes**, self-contained EdDSA-signed JWT |
+| Access token | **15 minutes**, opaque — a reference the hub can withdraw at any time |
 | Refresh token | 30 days, rotated on every use |
 | Login session cookie | 30 minutes, `HttpOnly`, `SameSite=Lax`, `__Host-` prefixed over HTTPS |
 

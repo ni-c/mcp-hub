@@ -84,7 +84,7 @@ replaces N containers with one process:
 - **Stateless Streamable HTTP**: no session state, so claude.ai's
   reconnect-without-DELETE behaviour cannot leak processes or memory.
 - **Lightweight by design**: one Node process, no database (state is one JSON
-  file plus a JWT key under `/data`), a handful of runtime dependencies, and
+  file plus a signing key under `/data`), six runtime dependencies, and
   multi-arch images — a stated project goal is to run comfortably on a
   single-board computer like a Raspberry Pi.
 
@@ -370,11 +370,11 @@ immediately. Per-client recipes:
   subscriptions, sampling) are not delivered to clients. Tool/resource/prompt
   request-response works fully; the hub's tool cache does follow
   `tools/list_changed` internally.
-- Access tokens are self-contained 15-minute JWTs. Revoking a client rejects
-  its existing JWTs and removes all of its refresh tokens. Refresh tokens
-  rotate; replaying a token
-  that was already rotated away revokes its whole chain, and a refresh cannot
-  ask for more scope than the original grant.
+- Access tokens are opaque and last 15 minutes. Revoking a client takes effect
+  on its next request rather than when the token expires — the token is a
+  reference to a stored record, so withdrawing it is a deletion. Refresh tokens
+  rotate; replaying one that was already rotated away is treated as a leak and
+  revokes the whole grant, access tokens included.
 - Upstream auth is fully decoupled from the hub's own OAuth: an expired
   upstream token just marks that one server `down` (503 on its path, visible
   in `/health`) — clients never see the upstream's 401.
