@@ -14,7 +14,7 @@ const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
  *  or local file access. Never a legitimate redirect target. */
 const DANGEROUS_SCHEMES = new Set(['javascript:', 'data:', 'vbscript:', 'file:', 'blob:']);
 
-export function isLoopbackHostname(hostname: string): boolean {
+function isLoopbackHostname(hostname: string): boolean {
   return LOOPBACK_HOSTNAMES.has(hostname);
 }
 

@@ -9,7 +9,7 @@ import type { RequestHandler, Response } from 'express';
  * sits there with no visible error, so the pages have to name the one origin
  * their flow legitimately ends on.
  */
-export function contentSecurityPolicy(formActionOrigins: readonly string[] = []): string {
+function contentSecurityPolicy(formActionOrigins: readonly string[] = []): string {
   const formAction = ["'self'", ...formActionOrigins].join(' ');
   return `default-src 'none'; style-src 'unsafe-inline'; form-action ${formAction}; frame-ancestors 'none'; base-uri 'none'`;
 }

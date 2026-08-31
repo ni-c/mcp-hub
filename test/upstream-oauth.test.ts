@@ -483,7 +483,7 @@ describe('refreshing', () => {
    * server. A test that built its own would be measuring two independent
    * managers and would see two refreshes — correctly.
    */
-  async function loggedIn(hub: Awaited<ReturnType<typeof createHub>>, configPath: string): Promise<UpstreamAuth> {
+  async function loggedIn(hub: Awaited<ReturnType<typeof createHub>>): Promise<UpstreamAuth> {
     const auth = hub.upstreamAuth.get('saas')!;
     const { authorizationUrl } = await startUpstreamLogin(hub.store, auth);
     const state = new URL(authorizationUrl).searchParams.get('state')!;
@@ -494,10 +494,10 @@ describe('refreshing', () => {
   }
 
   it('spends the refresh token exactly once when requests collide', async () => {
-    const { hub, configPath } = await makeHub({ mode: 'dcr', grant: 'authorization_code' });
+    const { hub } = await makeHub({ mode: 'dcr', grant: 'authorization_code' });
     try {
       await hub.supervisor.waitUntilSettled();
-      const auth = await loggedIn(hub, configPath);
+      const auth = await loggedIn(hub);
       // The live connection would react to the expiry on its own and blur the
       // count; this test is about what happens when callers collide.
       await hub.supervisor.stop();
@@ -529,14 +529,14 @@ describe('refreshing', () => {
   }, 30_000);
 
   it('stores the rotated refresh token, so the next refresh also works', async () => {
-    const { hub, configPath } = await makeHub({ mode: 'dcr', grant: 'authorization_code' });
+    const { hub } = await makeHub({ mode: 'dcr', grant: 'authorization_code' });
     try {
       await hub.supervisor.waitUntilSettled();
-      const auth = await loggedIn(hub, configPath);
-      const first = (hub.store.getUpstreamCredentials('saas', auth.fingerprint)?.tokens as { refresh_token: string }).refresh_token;
+      const auth = await loggedIn(hub);
+      const first = (hub.store.getUpstreamCredentials('saas', auth.fingerprint)!.tokens as { refresh_token: string }).refresh_token;
 
       await auth.prepare({ force: true });
-      const second = (hub.store.getUpstreamCredentials('saas', auth.fingerprint)?.tokens as { refresh_token: string }).refresh_token;
+      const second = (hub.store.getUpstreamCredentials('saas', auth.fingerprint)!.tokens as { refresh_token: string }).refresh_token;
       expect(second).not.toBe(first);
 
       // Proves the stored one is the live one rather than the retired one.
@@ -549,10 +549,10 @@ describe('refreshing', () => {
   }, 30_000);
 
   it('asks for a login again once the refresh token is refused', async () => {
-    const { hub, configPath } = await makeHub({ mode: 'dcr', grant: 'authorization_code' });
+    const { hub } = await makeHub({ mode: 'dcr', grant: 'authorization_code' });
     try {
       await hub.supervisor.waitUntilSettled();
-      const auth = await loggedIn(hub, configPath);
+      const auth = await loggedIn(hub);
       // What a replayed or revoked token looks like from the upstream's side.
       const stored = hub.store.getUpstreamCredentials('saas', auth.fingerprint)!;
       upstream.options.retired.add((stored.tokens as { refresh_token: string }).refresh_token);

@@ -11,8 +11,6 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
-import type { Response } from 'express';
 import { authorizeInBrowser, registerPublicClient } from './auth-flow.js';
 import { createHub } from '../src/index.js';
 import { handleMcpRequest } from '../src/proxy.js';
@@ -27,7 +25,6 @@ let hub: Awaited<ReturnType<typeof createHub>>;
 let httpServer: ReturnType<Awaited<ReturnType<typeof createHub>>['app']['listen']>;
 let baseUrl: string;
 let accessToken: string;
-let refreshToken: string;
 
 function pkcePair() {
   const verifier = crypto.randomBytes(32).toString('base64url');
@@ -70,32 +67,6 @@ async function registerClient(clientName: string, redirectUris: string[] = [REDI
     .send({ redirect_uris: redirectUris, token_endpoint_auth_method: 'none', client_name: clientName })
     .expect(201);
   return registration.body.client_id as string;
-}
-
-function sessionCookie(): string {
-  return `mcp_hub_session=${encodeURIComponent(hub.provider.createSessionCookie())}`;
-}
-
-function authorizeWithSession(clientId: string, cookie: string, redirectUri: string = REDIRECT_URI) {
-  const { challenge } = pkcePair();
-  return request(hub.app)
-    .get('/authorize')
-    .set('Cookie', cookie)
-    .query({
-      client_id: clientId,
-      redirect_uri: redirectUri,
-      response_type: 'code',
-      code_challenge: challenge,
-      code_challenge_method: 'S256',
-      state: 'xyz'
-    });
-}
-
-function consentFields(html: string): { request?: string; csrf?: string } {
-  return {
-    request: html.match(/name="request" value="([^"]+)"/)?.[1],
-    csrf: html.match(/name="csrf" value="([^"]+)"/)?.[1]
-  };
 }
 
 async function mcpClient(pathname: string, token: string): Promise<Client> {
@@ -182,7 +153,6 @@ beforeAll(async () => {
   baseUrl = `http://127.0.0.1:${(httpServer.address() as AddressInfo).port}`;
   const tokens = await obtainToken(hub.app);
   accessToken = tokens.access;
-  refreshToken = tokens.refresh;
 }, 30_000);
 
 afterAll(async () => {

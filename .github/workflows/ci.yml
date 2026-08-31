@@ -26,6 +26,10 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: npm
       - run: npm ci --ignore-scripts
+      # Once, not per matrix entry: the linter parses the source itself and
+      # cannot see a difference between Node versions.
+      - run: npm run lint
+        if: matrix.node-version == 24
       - run: npm run build
       - run: npm test
         if: matrix.node-version != 24

@@ -176,7 +176,7 @@ describe('a sandboxed server through the proxy', () => {
     // The daemon sees the proxy's serialization: the hub's env key, plus the
     // secret only the proxy can read.
     expect(create?.body?.Env).toEqual(['EXAMPLE=from-hub', 'INJECTED_SECRET=hunter2']);
-    expect((create?.body?.HostConfig as Record<string, unknown>).CapDrop).toEqual(['ALL']);
+    expect((create!.body!.HostConfig as Record<string, unknown>).CapDrop).toEqual(['ALL']);
     expect(requests.some(entry => entry.method === 'UPGRADE' && entry.url.includes('stdin=1'))).toBe(true);
     expect(requests.some(entry => entry.url.includes('/start'))).toBe(true);
 

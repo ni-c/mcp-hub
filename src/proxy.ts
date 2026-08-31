@@ -40,7 +40,7 @@ import { filterTools, loggableToolName, toolAllowed } from './tool-filter.js';
  * the known gaps in the documentation instead.
  */
 function advertisedCapabilities(capabilities: ServerCapabilities | undefined): ServerCapabilities {
-  const caps: ServerCapabilities = { ...(capabilities ?? {}) };
+  const caps: ServerCapabilities = { ...capabilities };
   if (caps.resources) {
     const { subscribe: _subscribe, ...resources } = caps.resources;
     caps.resources = resources;

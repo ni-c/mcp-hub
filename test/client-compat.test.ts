@@ -1,4 +1,3 @@
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -10,12 +9,6 @@ import { createHub } from '../src/index.js';
 const ORIGIN = 'http://localhost:3000';
 const PASSWORD = 'test-password';
 const REDIRECT_URI = 'http://localhost:33418/callback';
-
-function pkcePair() {
-  const verifier = crypto.randomBytes(32).toString('base64url');
-  const challenge = crypto.createHash('sha256').update(verifier).digest('base64url');
-  return { verifier, challenge };
-}
 
 /**
  * Cross-client compatibility behaviours: the DEFAULT_RESOURCE fallback for

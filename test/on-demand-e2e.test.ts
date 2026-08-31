@@ -1,4 +1,3 @@
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -22,12 +21,6 @@ let hub: Awaited<ReturnType<typeof createHub>>;
 let httpServer: ReturnType<Awaited<ReturnType<typeof createHub>>['app']['listen']>;
 let baseUrl: string;
 let accessToken: string;
-
-function pkcePair() {
-  const verifier = crypto.randomBytes(32).toString('base64url');
-  const challenge = crypto.createHash('sha256').update(verifier).digest('base64url');
-  return { verifier, challenge };
-}
 
 async function obtainToken(app: Express.Application): Promise<string> {
   const clientId = await registerPublicClient(app, REDIRECT_URI);
