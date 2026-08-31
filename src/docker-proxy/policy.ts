@@ -41,6 +41,7 @@ export interface PolicyContext {
 
 const API_PREFIX = /^\/v\d+\.\d+(?=\/)/;
 /** Control characters would let a caller forge lines in a log fail2ban reads. */
+// eslint-disable-next-line no-control-regex -- matching them is the point
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/g;
 const SANDBOX_ID = /^mcp-sandbox-[a-zA-Z0-9_-]+$/;
 const MAX_ENV_ENTRIES = 200;

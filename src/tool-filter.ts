@@ -63,6 +63,7 @@ export function unmatchedPatterns(config: ToolFilterConfig, tools: Tool[]): stri
 }
 
 /** Control characters would let a caller forge lines in a log LOG_FILE mirrors to disk. */
+// eslint-disable-next-line no-control-regex -- matching them is the point
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/g;
 const MAX_LOGGED_NAME = 100;
 

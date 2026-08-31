@@ -3,8 +3,10 @@
   "ignorePatterns": [
     "dist",
     "coverage",
-    "docs",
-    "demo"
+    "demo",
+    "docs/node_modules",
+    "**/.vitepress/dist",
+    "**/.vitepress/cache"
   ],
   "categories": {
     "correctness": "error"
@@ -16,7 +18,6 @@
         "argsIgnorePattern": "^_",
         "varsIgnorePattern": "^_"
       }
-    ],
-    "no-control-regex": "off"
+    ]
   }
 }
