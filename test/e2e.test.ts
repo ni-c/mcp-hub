@@ -300,6 +300,55 @@ describe('OAuth', () => {
     expect(new URL(again.headers.location as string).searchParams.get('code')).toBeTruthy();
   });
 
+  it('refuses an authorization code presented without its PKCE verifier', async () => {
+    // Every other flow test walks the happy path, so PKCE has only ever been
+    // exercised by supplying the right verifier — which passes just as well
+    // when nothing checks it. This is the other half: the code is what a
+    // network attacker or a malicious local app would come away with, and the
+    // verifier is the only thing that makes it useless to them.
+    const agent = await signedIn();
+    const clientId = await registerClient('pkce');
+    const authorize = () =>
+      authorizeInBrowser(hub.app, clientId, { password: PASSWORD, redirectUri: REDIRECT_URI, agent });
+    const exchange = (body: Record<string, string>) =>
+      request(hub.app)
+        .post('/token')
+        .type('form')
+        .send({ grant_type: 'authorization_code', client_id: clientId, redirect_uri: REDIRECT_URI, ...body });
+
+    // A verifier for a different challenge — the interception case.
+    const stolen = await authorize();
+    const substituted = await exchange({ code: stolen.code, code_verifier: pkcePair().verifier });
+    expect(substituted.status).toBe(400);
+    expect(substituted.body.error).toBe('invalid_grant');
+
+    // No verifier at all, for a code that was bound to a challenge.
+    const omitted = await authorize();
+    expect((await exchange({ code: omitted.code })).status).toBe(400);
+
+    // And the case the two above cannot reach: an authorization that never
+    // offered a challenge in the first place. It has to be refused at
+    // /authorize, because a code issued without one cannot be protected by a
+    // verifier check later — there would be nothing to compare against. This
+    // is the assertion that fails if `pkce.required` is ever turned off; the
+    // two above keep passing, because they supply a challenge themselves.
+    const noChallenge = await agent
+      .get('/authorize')
+      .query({ client_id: clientId, redirect_uri: REDIRECT_URI, response_type: 'code', state: 'xyz' })
+      .redirects(0);
+    const refused = new URL(noChallenge.headers.location as string);
+    expect(refused.origin + refused.pathname).toBe(REDIRECT_URI);
+    expect(refused.searchParams.get('error')).toBe('invalid_request');
+    expect(refused.searchParams.get('error_description')).toMatch(/PKCE/);
+
+    // The control that makes all of it mean something: the same three
+    // parameters, only correct, still yield a token.
+    const honest = await authorize();
+    const accepted = await exchange({ code: honest.code, code_verifier: honest.verifier });
+    expect(accepted.status).toBe(200);
+    expect(accepted.body.access_token).toBeTruthy();
+  });
+
   it('redirects with access_denied when consent is refused', async () => {
     const agent = await signedIn();
     const clientId = await registerClient('denied');
