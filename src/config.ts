@@ -149,6 +149,15 @@ const RESERVED_NAMES = new Set([
   'livez',
   'revoke',
   '.well-known',
+  // Served by the authorization server. `interaction` is where an
+  // unauthenticated authorization request is sent to log in, and `jwks` and
+  // `session` are endpoints oidc-provider registers whether or not the hub
+  // advertises them. A server of one of these names would shadow the auth flow
+  // rather than merely be unreachable.
+  'jwks',
+  'interaction',
+  'session',
+  'userinfo',
   // The upstream OAuth callback lives under /upstream/…; a server of that name
   // would be reachable at /upstream and is too close for comfort.
   'upstream'

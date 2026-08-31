@@ -146,6 +146,26 @@ const ACTIVITY_GRANULARITY_S = 3600;
  */
 const REVOCATION_MARKER_TTL_MS = 31 * 24 * 3600_000;
 
+/**
+ * One artifact of one oidc-provider model. `expiresAt` is epoch seconds and 0
+ * means "never" — Grant and Session records outlive any single token.
+ */
+export interface OidcArtifact {
+  payload: Record<string, unknown>;
+  expiresAt: number;
+  /** Set by consume(); the library treats a consumed code or refresh token as
+   *  a replay signal rather than as an unknown one. */
+  consumedAt?: number;
+}
+
+/**
+ * Every artifact expires and every write prunes, so this cap is not the primary
+ * bound — it is the backstop for the one case pruning cannot help with: tokens
+ * minted faster than they age out. Eviction is oldest-first, which for tokens
+ * costs a client one refresh rather than its session.
+ */
+const MAX_OIDC_ARTIFACTS_PER_MODEL = 5_000;
+
 interface PersistedState {
   cookieSecret: string;
   clients: Record<string, OAuthClientInformationFull>;
@@ -157,6 +177,10 @@ interface PersistedState {
   clientLifecycle: Record<string, ClientLifecycle>; // keyed by client_id
   upstreamCredentials: Record<string, UpstreamCredentials>; // keyed by server name
   upstreamLogins: Record<string, UpstreamLogin>; // keyed by the signed OAuth state
+  /** oidc-provider artifacts: model name -> id -> record. One flat slot rather
+   *  than ten typed ones, because the library owns these payload shapes and
+   *  mirroring them here would be a second schema to keep in step. */
+  oidcArtifacts: Record<string, Record<string, OidcArtifact>>;
   /** The issuer the hub last ran under, so `mcp-hub-admin upstream login` can
    *  build a redirect URI without EXTERNAL_URL being set in its environment —
    *  the Dockerfile sets only CONFIG_PATH and DATA_PATH. */
@@ -254,7 +278,8 @@ export class AuthStore {
         apiTokens: {},
         clientLifecycle: {},
         upstreamCredentials: {},
-        upstreamLogins: {}
+        upstreamLogins: {},
+        oidcArtifacts: {}
       };
       if (restored) this.signature = this.fileSignature();
       else this.persistUnlocked();
@@ -439,6 +464,7 @@ export class AuthStore {
       clientLifecycle: state.clientLifecycle ?? {},
       upstreamCredentials: state.upstreamCredentials ?? {},
       upstreamLogins: state.upstreamLogins ?? {},
+      oidcArtifacts: state.oidcArtifacts ?? {},
       ...(typeof state.externalUrl === 'string' ? { externalUrl: state.externalUrl } : {})
     };
   }
@@ -510,6 +536,18 @@ export class AuthStore {
     // access token still has a usable refresh token behind it.
     for (const [state, login] of Object.entries(this.state.upstreamLogins)) {
       if (login.expiresAt < now) delete this.state.upstreamLogins[state];
+    }
+    for (const [model, records] of Object.entries(this.state.oidcArtifacts)) {
+      for (const [id, record] of Object.entries(records)) {
+        if (record.expiresAt !== 0 && record.expiresAt < now) delete records[id];
+      }
+      const ids = Object.keys(records);
+      if (ids.length > MAX_OIDC_ARTIFACTS_PER_MODEL) {
+        const byAge = ids.sort((a, b) => (records[a]!.expiresAt || Infinity) - (records[b]!.expiresAt || Infinity));
+        for (const id of byAge.slice(0, ids.length - MAX_OIDC_ARTIFACTS_PER_MODEL)) delete records[id];
+      }
+      // An empty model map is a row that never goes away.
+      if (Object.keys(records).length === 0) delete this.state.oidcArtifacts[model];
     }
   }
 
@@ -968,6 +1006,87 @@ export class AuthStore {
       if (!this.state.apiTokens[id]) return false;
       delete this.state.apiTokens[id];
       return true;
+    });
+  }
+
+  // --- oidc-provider artifacts ---------------------------------------------
+  //
+  // The backing store for the ten adapter models. Deliberately dumb: the
+  // library owns the payload shapes, so this layer only adds the two things it
+  // cannot do itself — the cross-process lock every other writer here obeys,
+  // and the revokedBefore cutoff below.
+
+  oidcUpsert(model: string, id: string, payload: Record<string, unknown>, expiresInSeconds?: number): void {
+    this.mutate(() => {
+      const records = (this.state.oidcArtifacts[model] ??= {});
+      records[id] = {
+        payload,
+        expiresAt: expiresInSeconds ? Math.floor(Date.now() / 1000) + expiresInSeconds : 0,
+        ...(records[id]?.consumedAt !== undefined ? { consumedAt: records[id].consumedAt } : {})
+      };
+    });
+  }
+
+  /**
+   * Undefined for unknown, expired *and revoked* artifacts — the library treats
+   * every falsy return as "not found", so this one comparison is the whole of
+   * `mcp-hub-admin clients revoke`. It is why access tokens are opaque: a JWT
+   * is never stored, so it could not be reached here at all.
+   */
+  oidcFind(model: string, id: string): Record<string, unknown> | undefined {
+    this.reloadIfChanged();
+    const record = this.state.oidcArtifacts[model]?.[id];
+    if (!record) return undefined;
+    if (record.expiresAt !== 0 && record.expiresAt < Math.floor(Date.now() / 1000)) return undefined;
+
+    const clientId = record.payload.clientId;
+    const issuedAt = record.payload.iat;
+    if (typeof clientId === 'string' && typeof issuedAt === 'number') {
+      const cutoff = this.state.revokedBefore[clientId];
+      if (cutoff !== undefined && issuedAt * 1000 < cutoff) return undefined;
+    }
+    return record.consumedAt === undefined ? record.payload : { ...record.payload, consumed: record.consumedAt };
+  }
+
+  /** Sessions are looked up by `uid` as well as by id. */
+  oidcFindBy(model: string, field: string, value: string): Record<string, unknown> | undefined {
+    this.reloadIfChanged();
+    for (const id of Object.keys(this.state.oidcArtifacts[model] ?? {})) {
+      if (this.state.oidcArtifacts[model]?.[id]?.payload[field] === value) return this.oidcFind(model, id);
+    }
+    return undefined;
+  }
+
+  oidcConsume(model: string, id: string): void {
+    this.mutate(() => {
+      const record = this.state.oidcArtifacts[model]?.[id];
+      if (record) record.consumedAt = Math.floor(Date.now() / 1000);
+    });
+  }
+
+  oidcDestroy(model: string, id: string): void {
+    this.mutate(() => {
+      delete this.state.oidcArtifacts[model]?.[id];
+    });
+  }
+
+  /**
+   * Scanned rather than indexed. A second index would be a third thing to keep
+   * consistent across a crash between two writes, and these maps hold hundreds
+   * of rows, not millions.
+   */
+  oidcRevokeByGrantId(grantId: string): number {
+    return this.mutate(() => {
+      let revoked = 0;
+      for (const records of Object.values(this.state.oidcArtifacts)) {
+        for (const [id, record] of Object.entries(records)) {
+          if (record.payload.grantId === grantId) {
+            delete records[id];
+            revoked++;
+          }
+        }
+      }
+      return revoked;
     });
   }
 }

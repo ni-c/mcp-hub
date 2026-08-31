@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Four more reserved server names: `jwks`, `interaction`, `session` and
+  `userinfo`.** They are paths the authorization server answers on, and a server
+  configured under one of them would shadow the login flow rather than merely be
+  unreachable. A configuration using one of these names is now refused at
+  startup with the same message as for `token` or `authorize`.
+
 - **Both images now run on Node 24 ("Krypton"), the active LTS line, instead of
   Node 26.** Node 26 is Current until October, and a non-LTS build leaves
   `process.release.lts` unset — which is not cosmetic, because libraries branch
