@@ -6,10 +6,9 @@ import type Provider from 'oidc-provider';
 
 import type { CimdResolver } from '../cimd.js';
 import { renderConsentPage } from '../consent-page.js';
-import { allowFormActionTo } from '../headers.js';
+import { allowFormActionTo, authSecurityHeaders } from '../headers.js';
 import { renderLoginPage } from '../login-page.js';
-import { LoginRateLimiter } from '../routes.js';
-import { earlyRateLimit } from '../rate-limit.js';
+import { earlyRateLimit, LoginRateLimiter } from '../rate-limit.js';
 import { isLoopbackOnly } from '../redirect-uri.js';
 import { createSessionCookie, csrfToken, readSessionCookie, SESSION_COOKIE, SESSION_TTL_MS, verifyCsrfToken } from '../session.js';
 import type { AuthStore } from '../store.js';
@@ -50,6 +49,12 @@ export function createOidcInteractionRoutes(options: OidcInteractionOptions): Ro
   const { provider, store } = options;
   const router = Router();
   const rateLimiter = new LoginRateLimiter();
+
+  // The pages this router serves are the ones with a password field on them, so
+  // they need the anti-clickjacking and no-store headers at least as much as
+  // the token endpoint does. `allowFormActionTo` narrows the CSP afterwards for
+  // the single page that has a redirect target to allow.
+  router.use(authSecurityHeaders);
   const secure = new URL(options.externalUrl).protocol === 'https:';
 
   const checkPassword = (password: string): boolean => {

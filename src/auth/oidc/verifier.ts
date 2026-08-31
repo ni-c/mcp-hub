@@ -2,7 +2,7 @@ import { InvalidTokenError } from '@modelcontextprotocol/sdk/server/auth/errors.
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import { jwtVerify } from 'jose';
 
-import { API_TOKEN_SUBJECT } from '../provider.js';
+import { API_TOKEN_SUBJECT } from '../api-tokens.js';
 import type { AuthStore } from '../store.js';
 
 export interface OidcVerifierOptions {
@@ -50,13 +50,13 @@ export class OidcTokenVerifier {
     const clientId = payload.clientId;
     if (typeof clientId !== 'string') throw new InvalidTokenError('Invalid access token claims');
 
-    // oidc-provider writes a single audience for a resource-bound token. An
-    // unbound one only passes while binding is not enforced, which is what
-    // keeps a pre-existing deployment working after RESOURCE_BOUND_TOKENS was
-    // introduced.
+    // An audience equal to the issuer means "not bound to one resource" — the
+    // pre-0.5 shape, kept so a deployment that never turned binding on is not
+    // logged out by an upgrade. It passes only while binding is not enforced;
+    // the per-route check is what narrows it.
     const audience = typeof payload.aud === 'string' ? payload.aud : undefined;
     let resource: URL | undefined;
-    if (audience !== undefined) {
+    if (audience !== undefined && audience !== this.options.externalUrl) {
       resource = this.resolve(audience);
       if (!resource) throw new InvalidTokenError('Invalid token audience');
     } else if (this.options.requireResource) {

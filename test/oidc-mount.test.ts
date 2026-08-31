@@ -16,7 +16,7 @@ import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middlew
 
 import { createOidcInteractionRoutes } from '../src/auth/oidc/interactions.js';
 import { OidcTokenVerifier } from '../src/auth/oidc/verifier.js';
-import { mintApiToken } from '../src/auth/provider.js';
+import { mintApiToken } from '../src/auth/api-tokens.js';
 import { buildOidcProvider } from '../src/auth/oidc/provider.js';
 import { AuthStore } from '../src/auth/store.js';
 
@@ -124,7 +124,9 @@ afterEach(() => {
 describe('the mount boundary', () => {
   it('keeps the hub paths with a root issuer', async () => {
     const meta = await request(app).get('/.well-known/oauth-authorization-server').expect(200);
-    expect(meta.body.issuer).toBe('http://127.0.0.1:9977');
+    // With the trailing slash: the hub publishes EXTERNAL_URL in URL.href form
+    // and claude.ai compares it byte for byte against `iss` and `aud`.
+    expect(meta.body.issuer).toBe(EXTERNAL_URL);
     expect(meta.body.authorization_endpoint).toBe('http://127.0.0.1:9977/authorize');
     expect(meta.body.token_endpoint).toBe('http://127.0.0.1:9977/token');
     expect(meta.body.registration_endpoint).toBe('http://127.0.0.1:9977/register');
@@ -807,5 +809,89 @@ describe('the password check', () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('resource binding', () => {
+  async function register(): Promise<string> {
+    const res = await request(app)
+      .post('/register')
+      .send({ client_name: 'vitest', redirect_uris: [REDIRECT_URI], token_endpoint_auth_method: 'none', response_types: ['code'] })
+      .expect(201);
+    return res.body.client_id as string;
+  }
+
+  it('canonicalises the requested resource the way the resource server does', async () => {
+    // A client may ask for /hub/mcp; the hub serves that resource under /hub.
+    // A token minted for the uncanonicalised form would be refused by the very
+    // route it was requested for.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-hub-oidc-res-'));
+    try {
+      const resStore = new AuthStore(dir);
+      const resApp = express();
+      const canonical = new URL('/hub', EXTERNAL_URL);
+      const provider = buildOidcProvider(resStore, {
+        externalUrl: EXTERNAL_URL,
+        defaultResource: canonical,
+        resolveResource: url => (url.pathname === '/hub' || url.pathname === '/hub/mcp' ? canonical : undefined)
+      });
+      resApp.use(createOidcInteractionRoutes({ provider, store: resStore, externalUrl: EXTERNAL_URL, password: PASSWORD }));
+      mountOidcProvider(resApp, provider, resStore, { externalUrl: EXTERNAL_URL });
+
+      const registration = await request(resApp)
+        .post('/register')
+        .send({ client_name: 'vitest', redirect_uris: [REDIRECT_URI], token_endpoint_auth_method: 'none', response_types: ['code'] })
+        .expect(201);
+      const clientId = registration.body.client_id as string;
+      const { code, agent, verifier } = await authorize(resApp, clientId, {
+        resource: `${new URL(EXTERNAL_URL).origin}/hub/mcp`
+      });
+      const tokens = await agent
+        .post('/token')
+        .type('form')
+        .send({ grant_type: 'authorization_code', code, redirect_uri: REDIRECT_URI, client_id: clientId, code_verifier: verifier })
+        .expect(200);
+
+      const stored = resStore.oidcFind('AccessToken', tokens.body.access_token);
+      expect(stored!.aud).toBe(canonical.href);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses an authorization for a resource the hub does not serve', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-hub-oidc-res2-'));
+    try {
+      const resStore = new AuthStore(dir);
+      const resApp = express();
+      const provider = buildOidcProvider(resStore, {
+        externalUrl: EXTERNAL_URL,
+        resolveResource: () => undefined // nothing is served
+      });
+      resApp.use(createOidcInteractionRoutes({ provider, store: resStore, externalUrl: EXTERNAL_URL, password: PASSWORD }));
+      mountOidcProvider(resApp, provider, resStore, { externalUrl: EXTERNAL_URL });
+
+      const registration = await request(resApp)
+        .post('/register')
+        .send({ client_name: 'vitest', redirect_uris: [REDIRECT_URI], token_endpoint_auth_method: 'none', response_types: ['code'] })
+        .expect(201);
+      await expect(
+        authorize(resApp, registration.body.client_id, { resource: `${new URL(EXTERNAL_URL).origin}/nope/mcp` })
+      ).rejects.toThrow(/invalid_target|refused/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('binds to the default resource when the client names none', async () => {
+    const clientId = await register();
+    const { code, agent, verifier } = await authorize(app, clientId);
+    const tokens = await agent
+      .post('/token')
+      .type('form')
+      .send({ grant_type: 'authorization_code', code, redirect_uri: REDIRECT_URI, client_id: clientId, code_verifier: verifier })
+      .expect(200);
+    const stored = store.oidcFind('AccessToken', tokens.body.access_token);
+    expect(stored!.aud).toBe(new URL('/hub', EXTERNAL_URL).href);
   });
 });

@@ -11,6 +11,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The authorization server is now `oidc-provider` instead of ~900 lines of
+  hand-written OAuth.** Every endpoint keeps its path, the login and consent
+  pages are the same pages, and the discovery document advertises everything it
+  advertised before — there is a test that compares it field by field against
+  the old one and fails on anything that is not a written-down decision.
+
+  **This is a clean cut, not a migration: every client re-registers and
+  authorizes once more.** Tokens issued by the previous server are refused
+  rather than honoured, because a credential nothing can revoke is worse than a
+  reconnect. Registrations, approvals and API tokens in `state.json` are
+  untouched; only the OAuth artifacts are new.
+
+  Access tokens are **opaque** rather than JWTs. That is what makes
+  `mcp-hub-admin clients revoke` take effect on the next call instead of when
+  the token expires: oidc-provider never persists a JWT, so a JWT could not be
+  withdrawn at all. Nothing that presents a token has to change.
+
+  Several things got stricter on the way. Replaying a rotated refresh token now
+  revokes the grant's access tokens as well. Client assertions may not be valid
+  for longer than five minutes. Nothing an authorization server holds is written
+  to `state.json` in a form anyone could present — the file used to keep hashes
+  of refresh tokens, and now keeps hashes of everything. A `Host` header can no
+  longer influence the URLs in the discovery document.
+
+  Visible differences, none of which change what is allowed: redirects use
+  `303` where they used `302`, `invalid_client` may be answered `401` rather
+  than `400` (RFC 6749 §5.2 allows either), a rejected redirect URI is reported
+  as `invalid_redirect_uri`, and the login page lives at `/interaction/<id>/`
+  instead of being rendered by `/authorize` directly. The discovery document
+  gained the OpenID fields oidc-provider always publishes; no ID token is ever
+  issued.
+
 - **Four more reserved server names: `jwks`, `interaction`, `session` and
   `userinfo`.** They are paths the authorization server answers on, and a server
   configured under one of them would shadow the login flow rather than merely be

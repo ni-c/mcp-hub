@@ -45,18 +45,41 @@ export const HUB_SCOPE = 'mcp';
  * on the properties *before* they are persisted, so both would store the secret
  * and defeat the whole point.
  */
-export function installThrowawaySecret(provider: Provider): void {
+export function installThrowawaySecret(provider: Provider, store?: AuthStore): void {
   provider.use(async (ctx, next) => {
     await next();
     const body = ctx.body as Record<string, unknown> | undefined;
-    if (
-      ctx.oidc?.route === 'registration' &&
-      ctx.status === 201 &&
-      body?.token_endpoint_auth_method === 'none' &&
-      body.client_secret === undefined
-    ) {
+    if (ctx.oidc?.route !== 'registration' || ctx.status !== 201 || !body) return;
+
+    if (body.token_endpoint_auth_method === 'none' && body.client_secret === undefined) {
       body.client_secret = crypto.randomBytes(32).toString('base64url');
       body.client_secret_expires_at = 0;
+    }
+
+    // The only moment the registration access token is visible. The hub stores
+    // just its hash, which is what lets RFC 7592 management stay on mcp-hub's
+    // own, stricter implementation.
+    if (store && typeof body.client_id === 'string' && typeof body.registration_access_token === 'string') {
+      store.rememberRegistrationToken(body.client_id, body.registration_access_token);
+    }
+  });
+}
+
+/**
+ * RFC 8414 lists `revocation_endpoint_auth_methods_supported`, the hub
+ * advertised it, and oidc-provider does not emit it at all. A client that reads
+ * the document to decide how to authenticate at /revoke would find nothing
+ * where there used to be an answer.
+ *
+ * Same mechanism as the throwaway secret: middleware installed ahead of the
+ * router, so `ctx.body` is still a plain object when it returns.
+ */
+export function installDiscoveryFixups(provider: Provider): void {
+  provider.use(async (ctx, next) => {
+    await next();
+    const body = ctx.body as Record<string, unknown> | undefined;
+    if (ctx.oidc?.route === 'discovery' && ctx.status === 200 && body?.revocation_endpoint) {
+      body.revocation_endpoint_auth_methods_supported = ['client_secret_post', 'none', 'private_key_jwt'];
     }
   });
 }
@@ -100,8 +123,11 @@ export const defaultScope: RequestHandler = (req, _res, next) => {
  */
 export function stripPhantomSecret(store: AuthStore, callback: (req: Request, res: Response) => void): RequestHandler {
   return (req: Request, res: Response, next: NextFunction) => {
+    // Anything that is not a POST still belongs to the provider, which answers
+    // 405. Handing it to next() instead would drop it into the hub's catch-all
+    // and turn a documented endpoint into a 404.
     if (req.method !== 'POST') {
-      next();
+      callback(req, res);
       return;
     }
     void (async () => {

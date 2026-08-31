@@ -786,6 +786,20 @@ export class AuthStore {
   }
 
   /** Timing-safe check of an RFC 7592 registration access token. */
+  /**
+   * Attaches the hash of a registration access token to an existing client.
+   *
+   * The authorization server mints the token and only ever reveals it in the
+   * registration response, so the hash has to be recorded from there rather
+   * than at the moment the client record is written.
+   */
+  rememberRegistrationToken(clientId: string, token: string): void {
+    this.mutate(() => {
+      const entry = this.state.clientLifecycle[clientId];
+      if (entry) entry.registrationTokenHash = AuthStore.hash(token);
+    });
+  }
+
   verifyRegistrationToken(clientId: string, token: string): boolean {
     this.reloadIfChanged();
     const expected = this.state.clientLifecycle[clientId]?.registrationTokenHash;
@@ -1016,13 +1030,53 @@ export class AuthStore {
   // cannot do itself — the cross-process lock every other writer here obeys,
   // and the revokedBefore cutoff below.
 
+  /**
+   * Artifacts are keyed by the HASH of their id, never by the id itself.
+   *
+   * With opaque access tokens the id IS the bearer token, and a refresh token
+   * or a registration access token is no different — storing them verbatim
+   * would turn read access to state.json into working credentials. The file was
+   * already sensitive (it holds the cookie secret), but it never used to hold
+   * anything an attacker could present as-is, and it should not start now.
+   *
+   * Lookups all go through here, and the two scans (`findByUid`,
+   * `revokeByGrantId`) match on payload fields rather than on the key, so
+   * nothing needs the plaintext back.
+   */
+  private static artifactKey(id: string): string {
+    return AuthStore.hash(id);
+  }
+
+  /**
+   * Models whose id is a bearer credential someone presents back.
+   *
+   * Hashing the key alone would not be enough: the payload carries `jti`, and
+   * for an opaque token the jti IS the token. These are stored without it and
+   * get it back from the lookup id on the way out, which `find` always has.
+   * The others (Session, Interaction, Grant) are referenced by ids that are not
+   * credentials, and their jti has to survive a `findByUid` that never sees one.
+   */
+  private static readonly CREDENTIAL_MODELS = new Set([
+    'AccessToken',
+    'RefreshToken',
+    'AuthorizationCode',
+    'RegistrationAccessToken',
+    'ClientCredentials',
+    'InitialAccessToken',
+    'DeviceCode',
+    'BackchannelAuthenticationRequest'
+  ]);
+
   oidcUpsert(model: string, id: string, payload: Record<string, unknown>, expiresInSeconds?: number): void {
     this.mutate(() => {
       const records = (this.state.oidcArtifacts[model] ??= {});
-      records[id] = {
-        payload,
+      const key = AuthStore.artifactKey(id);
+      const stored = AuthStore.CREDENTIAL_MODELS.has(model) ? { ...payload, jti: undefined } : payload;
+      if (AuthStore.CREDENTIAL_MODELS.has(model)) delete (stored as Record<string, unknown>).jti;
+      records[key] = {
+        payload: stored,
         expiresAt: expiresInSeconds ? Math.floor(Date.now() / 1000) + expiresInSeconds : 0,
-        ...(records[id]?.consumedAt !== undefined ? { consumedAt: records[id].consumedAt } : {})
+        ...(records[key]?.consumedAt !== undefined ? { consumedAt: records[key].consumedAt } : {})
       };
     });
   }
@@ -1035,7 +1089,7 @@ export class AuthStore {
    */
   oidcFind(model: string, id: string): Record<string, unknown> | undefined {
     this.reloadIfChanged();
-    const record = this.state.oidcArtifacts[model]?.[id];
+    const record = this.state.oidcArtifacts[model]?.[AuthStore.artifactKey(id)];
     if (!record) return undefined;
     if (record.expiresAt !== 0 && record.expiresAt < Math.floor(Date.now() / 1000)) return undefined;
 
@@ -1045,28 +1099,31 @@ export class AuthStore {
       const cutoff = this.state.revokedBefore[clientId];
       if (cutoff !== undefined && issuedAt * 1000 < cutoff) return undefined;
     }
-    return record.consumedAt === undefined ? record.payload : { ...record.payload, consumed: record.consumedAt };
+    const payload = AuthStore.CREDENTIAL_MODELS.has(model) ? { ...record.payload, jti: id } : record.payload;
+    return record.consumedAt === undefined ? payload : { ...payload, consumed: record.consumedAt };
   }
 
   /** Sessions are looked up by `uid` as well as by id. */
   oidcFindBy(model: string, field: string, value: string): Record<string, unknown> | undefined {
     this.reloadIfChanged();
-    for (const id of Object.keys(this.state.oidcArtifacts[model] ?? {})) {
-      if (this.state.oidcArtifacts[model]?.[id]?.payload[field] === value) return this.oidcFind(model, id);
+    for (const record of Object.values(this.state.oidcArtifacts[model] ?? {})) {
+      if (record.payload[field] !== value) continue;
+      if (record.expiresAt !== 0 && record.expiresAt < Math.floor(Date.now() / 1000)) return undefined;
+      return record.payload;
     }
     return undefined;
   }
 
   oidcConsume(model: string, id: string): void {
     this.mutate(() => {
-      const record = this.state.oidcArtifacts[model]?.[id];
+      const record = this.state.oidcArtifacts[model]?.[AuthStore.artifactKey(id)];
       if (record) record.consumedAt = Math.floor(Date.now() / 1000);
     });
   }
 
   oidcDestroy(model: string, id: string): void {
     this.mutate(() => {
-      delete this.state.oidcArtifacts[model]?.[id];
+      delete this.state.oidcArtifacts[model]?.[AuthStore.artifactKey(id)];
     });
   }
 

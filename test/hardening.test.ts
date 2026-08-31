@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ManagedServer, listAllTools } from '../src/supervisor.js';
 import { AuthStore, MAX_UNAPPROVED_CLIENTS } from '../src/auth/store.js';
-import { LoginRateLimiter } from '../src/auth/routes.js';
+import { LoginRateLimiter } from '../src/auth/rate-limit.js';
 import { earlyRateLimit } from '../src/auth/rate-limit.js';
 import { ClientRequestGate } from '../src/limits.js';
 import type { NextFunction, Request, Response } from 'express';

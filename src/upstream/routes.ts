@@ -1,12 +1,12 @@
 import { Router } from 'express';
 import type { Response } from 'express';
 import type { AuthStore } from '../auth/store.js';
-import type { HubOAuthProvider } from '../auth/provider.js';
 import { readSignedPayload } from '../auth/signed-token.js';
 import { renderPage, escapeHtml } from '../auth/page.js';
 import { logSafe } from '../auth/text.js';
 import type { ConfigWatcher } from '../config.js';
 import type { Supervisor, UpstreamAuthRegistry } from '../supervisor.js';
+import { readSessionCookie } from '../auth/session.js';
 import {
   UPSTREAM_CALLBACK_PATH,
   UPSTREAM_CLIENT_METADATA_PREFIX,
@@ -39,7 +39,6 @@ export interface UpstreamState {
 
 export interface UpstreamRoutesOptions {
   store: AuthStore;
-  provider: HubOAuthProvider;
   registry: UpstreamAuthRegistry;
   supervisor: Supervisor;
   watcher: ConfigWatcher;
@@ -51,7 +50,7 @@ const page = (res: Response, status: number, title: string, body: string): void 
 };
 
 export function createUpstreamRoutes(options: UpstreamRoutesOptions): Router {
-  const { store, provider, registry, supervisor, watcher, externalUrl } = options;
+  const { store, registry, supervisor, watcher, externalUrl } = options;
   const router = Router();
 
   /**
@@ -95,7 +94,7 @@ export function createUpstreamRoutes(options: UpstreamRoutesOptions): Router {
     // Proving the browser belongs to the operator, not just to whoever ended up
     // holding the redirect. The session cookie rides along because the upstream
     // sends a top-level navigation and the cookie is SameSite=Lax.
-    if (!provider.hasValidSession(cookie)) {
+    if (readSessionCookie(cookie, store.cookieSecret) === undefined) {
       page(res, 401, 'Not signed in', 'Sign in to this hub in the same browser, then run the login again.');
       return;
     }

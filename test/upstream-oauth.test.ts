@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { importJWK, jwtVerify } from 'jose';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { createSessionCookie } from '../src/auth/session.js';
 import { createHub } from '../src/index.js';
 import { handleMcpRequest } from '../src/proxy.js';
 import { AuthStore } from '../src/auth/store.js';
@@ -332,7 +333,7 @@ describe('the interactive login', () => {
       const authorized = await fetch(authorizationUrl);
       const { code } = (await authorized.json()) as { code: string };
 
-      const cookie = `mcp_hub_session=${encodeURIComponent(hub.provider.createSessionCookie())}`;
+      const cookie = `mcp_hub_session=${encodeURIComponent(createSessionCookie(hub.store.cookieSecret))}`;
       const callback = await request(hub.app)
         .get('/upstream/callback')
         .set('Cookie', cookie)
@@ -364,7 +365,7 @@ describe('the interactive login', () => {
       const auth = new UpstreamAuth('saas', config.get('saas') as never, hub.store, 'http://localhost:3000/');
       const { authorizationUrl } = await startUpstreamLogin(hub.store, auth);
       const state = new URL(authorizationUrl).searchParams.get('state')!;
-      const cookie = `mcp_hub_session=${encodeURIComponent(hub.provider.createSessionCookie())}`;
+      const cookie = `mcp_hub_session=${encodeURIComponent(createSessionCookie(hub.store.cookieSecret))}`;
 
       // Signed by somebody else.
       const forged = signPayload({ n: 'saas', exp: Date.now() + 60_000 }, 'not-the-hub-secret');
@@ -396,7 +397,7 @@ describe('the interactive login', () => {
       const { authorizationUrl } = await startUpstreamLogin(hub.store, auth);
       const state = new URL(authorizationUrl).searchParams.get('state')!;
       const { code } = (await (await fetch(authorizationUrl)).json()) as { code: string };
-      const cookie = `mcp_hub_session=${encodeURIComponent(hub.provider.createSessionCookie())}`;
+      const cookie = `mcp_hub_session=${encodeURIComponent(createSessionCookie(hub.store.cookieSecret))}`;
 
       await request(hub.app).get('/upstream/callback').set('Cookie', cookie).query({ code, state }).expect(200);
       // A refreshed browser tab must not redeem the same code again.
@@ -487,7 +488,7 @@ describe('refreshing', () => {
     const { authorizationUrl } = await startUpstreamLogin(hub.store, auth);
     const state = new URL(authorizationUrl).searchParams.get('state')!;
     const { code } = (await (await fetch(authorizationUrl)).json()) as { code: string };
-    const cookie = `mcp_hub_session=${encodeURIComponent(hub.provider.createSessionCookie())}`;
+    const cookie = `mcp_hub_session=${encodeURIComponent(createSessionCookie(hub.store.cookieSecret))}`;
     await request(hub.app).get('/upstream/callback').set('Cookie', cookie).query({ code, state }).expect(200);
     return auth;
   }
@@ -851,7 +852,7 @@ describe('a callback the upstream turned down', () => {
       const auth = hub.upstreamAuth.get('saas')!;
       const { authorizationUrl } = await startUpstreamLogin(hub.store, auth);
       const state = new URL(authorizationUrl).searchParams.get('state')!;
-      const cookie = `mcp_hub_session=${encodeURIComponent(hub.provider.createSessionCookie())}`;
+      const cookie = `mcp_hub_session=${encodeURIComponent(createSessionCookie(hub.store.cookieSecret))}`;
 
       const denied = await request(hub.app)
         .get('/upstream/callback')
@@ -875,7 +876,7 @@ describe('a callback the upstream turned down', () => {
       await hub.supervisor.waitUntilSettled();
       const { authorizationUrl } = await startUpstreamLogin(hub.store, hub.upstreamAuth.get('saas')!);
       const state = new URL(authorizationUrl).searchParams.get('state')!;
-      const cookie = `mcp_hub_session=${encodeURIComponent(hub.provider.createSessionCookie())}`;
+      const cookie = `mcp_hub_session=${encodeURIComponent(createSessionCookie(hub.store.cookieSecret))}`;
       await request(hub.app).get('/upstream/callback').set('Cookie', cookie).query({ state }).expect(400);
     } finally {
       hub.stopMaintenance();
@@ -894,7 +895,7 @@ describe('logging out', () => {
       const { authorizationUrl } = await startUpstreamLogin(hub.store, auth);
       const state = new URL(authorizationUrl).searchParams.get('state')!;
       const { code } = (await (await fetch(authorizationUrl)).json()) as { code: string };
-      const cookie = `mcp_hub_session=${encodeURIComponent(hub.provider.createSessionCookie())}`;
+      const cookie = `mcp_hub_session=${encodeURIComponent(createSessionCookie(hub.store.cookieSecret))}`;
       await request(hub.app).get('/upstream/callback').set('Cookie', cookie).query({ code, state }).expect(200);
       upstream.calls.length = 0;
 

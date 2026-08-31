@@ -39,3 +39,56 @@ export function earlyRateLimit(windowMs: number, maxPerIp: number, maxTotal: num
     next();
   };
 }
+
+const LOGIN_MAX_ATTEMPTS = 10;
+const LOGIN_WINDOW_MS = 15 * 60_000;
+/** A global ceiling as well, so a distributed guess cannot spend the per-address
+ *  budget many times over. */
+const LOGIN_MAX_ATTEMPTS_TOTAL = 100;
+
+/**
+ * Per-address lockout for the password form.
+ *
+ * Separate from `earlyRateLimit` because it counts FAILURES, not requests: a
+ * correct login resets the counter, so someone who knows the password is never
+ * locked out by someone else guessing from the same address.
+ */
+export class LoginRateLimiter {
+  private readonly attempts = new Map<string, { count: number; resetAt: number }>();
+  private total = { count: 0, resetAt: 0 };
+
+  isBlocked(ip: string): boolean {
+    if (this.total.resetAt > Date.now() && this.total.count >= LOGIN_MAX_ATTEMPTS_TOTAL) return true;
+    const entry = this.attempts.get(ip);
+    if (!entry || entry.resetAt < Date.now()) return false;
+    return entry.count >= LOGIN_MAX_ATTEMPTS;
+  }
+
+  recordFailure(ip: string): void {
+    this.sweepExpired(); // entries are otherwise only dropped on a successful login from that exact IP
+    const now = Date.now();
+    // Behind a reverse proxy req.ip is the proxy for every request, and a
+    // spoofable X-Forwarded-For makes the per-IP counter meaningless — this
+    // caps the total either way.
+    if (this.total.resetAt < now) this.total = { count: 1, resetAt: now + LOGIN_WINDOW_MS };
+    else this.total.count++;
+    const entry = this.attempts.get(ip);
+    if (!entry || entry.resetAt < now) {
+      this.attempts.set(ip, { count: 1, resetAt: now + LOGIN_WINDOW_MS });
+    } else {
+      entry.count++;
+    }
+  }
+
+  private sweepExpired(): void {
+    const now = Date.now();
+    for (const [ip, entry] of this.attempts) {
+      if (entry.resetAt < now) this.attempts.delete(ip);
+    }
+  }
+
+  reset(ip: string): void {
+    this.attempts.delete(ip);
+    this.total = { count: 0, resetAt: 0 };
+  }
+}

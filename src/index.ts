@@ -11,8 +11,13 @@ import { serverRequestHandler, handleMcpRequest } from './proxy.js';
 import { buildHubServer } from './hub.js';
 import { AuthStore, DEFAULT_CLIENT_LIMITS } from './auth/store.js';
 import { CimdResolver } from './auth/cimd.js';
-import { HubOAuthProvider } from './auth/provider.js';
-import { createAuthRoutes } from './auth/routes.js';
+import { createOidcInteractionRoutes } from './auth/oidc/interactions.js';
+import { mountOidcProvider } from './auth/oidc/mount.js';
+import { buildOidcProvider } from './auth/oidc/provider.js';
+import { OidcTokenVerifier } from './auth/oidc/verifier.js';
+import { authSecurityHeaders } from './auth/headers.js';
+import { createProtectedResourceRoutes } from './auth/protected-resource.js';
+import { createRegistrationManagementRoutes } from './auth/registration.js';
 import { createUpstreamRoutes } from './upstream/routes.js';
 import { healthHandler } from './health.js';
 import { installFileLogging } from './logfile.js';
@@ -147,14 +152,6 @@ export async function createHub(options: HubOptions) {
     ? new CimdResolver({ allowedOrigins: options.cimdAllowedOrigins, allowPrivateAddresses: options.cimdAllowPrivateAddresses })
     : undefined;
 
-  const provider = new HubOAuthProvider(store, externalUrl, {
-    requireResource,
-    resolveResource: resource => canonicalResourceUrl(resource, origin, watcher.current),
-    defaultResource: options.defaultResource !== undefined ? resourceUrlForRoute(origin, options.defaultResource) : undefined,
-    cimd,
-    allowDynamicRegistration: mechanisms.includes('dcr')
-  });
-
   const app = express();
   if (!options.trustedProxies?.length) {
     // Without this every request behind a proxy reports the proxy's address,
@@ -167,11 +164,38 @@ export async function createHub(options: HubOptions) {
   // A liveness check intentionally carries no topology. Detailed child state
   // lives behind OAuth at /health.
   app.get('/livez', (_req, res) => res.status(200).json({ status: 'ok' }));
-  app.use(createAuthRoutes({ provider, store, externalUrl, passwordHash: options.passwordHash, password: options.password, cimd }));
+
+  // The resource server's own discovery document, independent of whichever
+  // authorization server is mounted below.
+  app.use(createProtectedResourceRoutes({ externalUrl }));
+
+  const oidc = buildOidcProvider(store, {
+    externalUrl,
+    requireResource,
+    resolveResource: resource => canonicalResourceUrl(resource, origin, watcher.current),
+    defaultResource: options.defaultResource !== undefined ? resourceUrlForRoute(origin, options.defaultResource) : undefined,
+    allowDynamicRegistration: mechanisms.includes('dcr'),
+    cimd
+  });
+
+  app.use(
+    createOidcInteractionRoutes({
+      provider: oidc,
+      store,
+      externalUrl,
+      password: options.password,
+      passwordHash: options.passwordHash,
+      cimd
+    })
+  );
+  // Ahead of the mount, so the hub's stricter RFC 7592 handlers win the
+  // /register/:id route over oidc-provider's.
+  if (mechanisms.includes('dcr')) app.use(createRegistrationManagementRoutes({ store, externalUrl }));
+  mountOidcProvider(app, oidc, store, { externalUrl, common: [authSecurityHeaders] });
   // The upstream callback and the hub's own client metadata document. Mounted
   // after the auth routes so it inherits nothing from them but sits ahead of
   // the /:name catch-all.
-  app.use(createUpstreamRoutes({ store, provider, registry: upstreamAuth, supervisor, watcher, externalUrl }));
+  app.use(createUpstreamRoutes({ store, registry: upstreamAuth, supervisor, watcher, externalUrl }));
 
   // Registrations age out on a clock, not on traffic, so this cannot wait for
   // the next write to state.json — an idle hub would never clean up at all.
@@ -194,9 +218,15 @@ export async function createHub(options: HubOptions) {
 
   // Bearer auth for the MCP endpoints, advertising the path-scoped RFC 9728
   // metadata document in WWW-Authenticate so clients discover the AS.
+  const verifier = new OidcTokenVerifier(store, {
+    externalUrl,
+    requireResource,
+    resolveResource: resource => canonicalResourceUrl(resource, origin, watcher.current)
+  });
+
   const bearer = (req: Request, res: Response, next: NextFunction) =>
     requireBearerAuth({
-      verifier: provider,
+      verifier,
       resourceMetadataUrl: `${origin}/.well-known/oauth-protected-resource${req.path === '/' ? '' : req.path}`
     })(req, res, next);
 
@@ -264,7 +294,7 @@ export async function createHub(options: HubOptions) {
     res.status(500).json({ jsonrpc: '2.0', error: { code: -32603, message: 'Internal error' }, id: null });
   });
 
-  return { app, supervisor, watcher, provider, store, upstreamAuth, stopMaintenance };
+  return { app, supervisor, watcher, verifier, store, upstreamAuth, stopMaintenance };
 }
 
 function requireEnv(name: string): string {

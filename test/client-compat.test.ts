@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { authorizeInBrowser, registerPublicClient } from './auth-flow.js';
 import { createHub } from '../src/index.js';
 
 const ORIGIN = 'http://localhost:3000';
@@ -45,31 +46,18 @@ describe('client compatibility', () => {
   });
 
   it('binds resource-less authorizations to DEFAULT_RESOURCE instead of refusing', async () => {
-    const registration = await request(hub.app)
-      .post('/register')
-      .send({ redirect_uris: [REDIRECT_URI], token_endpoint_auth_method: 'none' })
-      .expect(201);
-    const { verifier, challenge } = pkcePair();
-    const authorize = await request(hub.app)
-      .get('/authorize')
-      .query({
-        client_id: registration.body.client_id,
-        redirect_uri: REDIRECT_URI,
-        response_type: 'code',
-        code_challenge: challenge,
-        code_challenge_method: 'S256'
-        // deliberately no resource parameter — older Codex, ADK, Gemini Enterprise
-      })
-      .expect(200);
-    const requestToken = authorize.text.match(/name="request" value="([^"]+)"/)?.[1];
-    const login = await request(hub.app).post('/login').type('form').send({ password: PASSWORD, request: requestToken }).expect(302);
-    const code = new URL(login.headers.location).searchParams.get('code')!;
+    const clientId = await registerPublicClient(hub.app, REDIRECT_URI);
+    // Deliberately no resource parameter — older Codex, ADK, Gemini Enterprise.
+    const { code, verifier } = await authorizeInBrowser(hub.app, clientId, {
+      password: PASSWORD,
+      redirectUri: REDIRECT_URI
+    });
     const tokens = await request(hub.app)
       .post('/token')
       .type('form')
-      .send({ grant_type: 'authorization_code', code, code_verifier: verifier, client_id: registration.body.client_id, redirect_uri: REDIRECT_URI })
+      .send({ grant_type: 'authorization_code', code, code_verifier: verifier, client_id: clientId, redirect_uri: REDIRECT_URI })
       .expect(200);
-    const info = await hub.provider.verifyAccessToken(tokens.body.access_token);
+    const info = await hub.verifier.verifyAccessToken(tokens.body.access_token);
     expect(info.resource?.href).toBe(`${ORIGIN}/hub`);
     // The bound token works on /hub and nowhere else — it is not a global token.
     await request(hub.app)
@@ -141,26 +129,13 @@ describe('client compatibility', () => {
   });
 
   it('issues refresh tokens without requiring an offline_access scope (SEP-2207)', async () => {
-    const registration = await request(hub.app)
-      .post('/register')
-      .send({ redirect_uris: [REDIRECT_URI], token_endpoint_auth_method: 'none' })
-      .expect(201);
-    const { verifier, challenge } = pkcePair();
-    const authorize = await request(hub.app)
-      .get('/authorize')
-      .query({
-        client_id: registration.body.client_id,
-        redirect_uri: REDIRECT_URI,
-        response_type: 'code',
-        code_challenge: challenge,
-        code_challenge_method: 'S256',
-        resource: `${ORIGIN}/hub`
-        // no scope parameter at all — most clients never ask for offline_access
-      })
-      .expect(200);
-    const requestToken = authorize.text.match(/name="request" value="([^"]+)"/)?.[1];
-    const login = await request(hub.app).post('/login').type('form').send({ password: PASSWORD, request: requestToken }).expect(302);
-    const code = new URL(login.headers.location).searchParams.get('code')!;
+    const clientId = await registerPublicClient(hub.app, REDIRECT_URI);
+    // No scope parameter at all — most clients never ask for offline_access.
+    const { code, verifier } = await authorizeInBrowser(hub.app, clientId, {
+      password: PASSWORD,
+      redirectUri: REDIRECT_URI,
+      resource: `${ORIGIN}/hub`
+    });
     const tokens = await request(hub.app)
       .post('/token')
       .type('form')
@@ -168,7 +143,7 @@ describe('client compatibility', () => {
         grant_type: 'authorization_code',
         code,
         code_verifier: verifier,
-        client_id: registration.body.client_id,
+        client_id: clientId,
         redirect_uri: REDIRECT_URI,
         resource: `${ORIGIN}/hub`
       })

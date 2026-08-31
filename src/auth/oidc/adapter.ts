@@ -1,3 +1,4 @@
+import { errors } from 'oidc-provider';
 import type { Adapter, AdapterFactory, AdapterPayload } from 'oidc-provider';
 
 import { type CimdResolver, isClientIdMetadataUrl } from '../cimd.js';
@@ -38,9 +39,25 @@ export function createOidcAdapter(store: AuthStore, cimd?: CimdResolver): Adapte
 function clientAdapter(store: AuthStore, cimd?: CimdResolver): Adapter {
   return {
     async upsert(id: string, payload: AdapterPayload): Promise<void> {
-      // `saveClient` also prunes unapproved clients, which is the behaviour the
-      // hub had for registrations before.
-      store.saveClient({ ...(payload as Record<string, unknown>), client_id: id } as never);
+      const record = { ...(payload as Record<string, unknown>), client_id: id } as never;
+      // A NEW client goes through addClient, which is what enforces the ceiling
+      // on unapproved registrations and creates the lifecycle entry the
+      // activity stamps and `mcp-hub-admin clients prune` are built on. Writing
+      // it with saveClient would leave a client nothing ages out.
+      if (store.getClient(id)) {
+        store.updateClient(record);
+        return;
+      }
+      // False means the hub is full of clients that were all confirmed, and
+      // dropping one of those would take a connector somebody uses offline.
+      // Refusing the newcomer is the failure an operator can see and fix, so it
+      // has to surface rather than be swallowed into a successful-looking
+      // registration that stored nothing.
+      if (!store.addClient(record)) {
+        const full = new errors.OIDCProviderError(400, 'too_many_requests');
+        full.error_description = 'the hub is not accepting new client registrations right now';
+        throw full;
+      }
     },
 
     /**
