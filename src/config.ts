@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import type { ToolFilterConfig } from './tool-filter.js';
+import type { PassthroughConfig } from './elicitation.js';
 
 /**
  * One entry of the Claude-Code-style `mcpServers` map.
@@ -15,7 +16,7 @@ import type { ToolFilterConfig } from './tool-filter.js';
  * local server from on-demand lifecycling) and `idleMinutes` (per-server
  * override of the global idle timeout).
  */
-export interface StdioServerConfig extends ToolFilterConfig {
+export interface StdioServerConfig extends ToolFilterConfig, PassthroughConfig {
   kind: 'stdio';
   command: string;
   args: string[];
@@ -59,7 +60,7 @@ export const OAUTH_MODES = new Set(['static', 'dcr', 'cimd']);
 export const OAUTH_GRANTS = new Set(['authorization_code', 'client_credentials']);
 export const OAUTH_CLIENT_AUTH = new Set(['client_secret_basic', 'client_secret_post', 'private_key_jwt']);
 
-export interface RemoteServerConfig extends ToolFilterConfig {
+export interface RemoteServerConfig extends ToolFilterConfig, PassthroughConfig {
   kind: 'remote';
   transport: 'http' | 'sse';
   url: string;
@@ -82,7 +83,7 @@ export interface RemoteServerConfig extends ToolFilterConfig {
  * (the hub supervises). A knob that can only weaken the sandbox is a knob the
  * policy would have to defend.
  */
-export interface DockerServerConfig extends ToolFilterConfig {
+export interface DockerServerConfig extends ToolFilterConfig, PassthroughConfig {
   kind: 'docker';
   image: string;
   /** `never` (default) fails when the image is absent; `missing` lets the hub pull it. */
@@ -123,7 +124,7 @@ export interface DockerServerConfig extends ToolFilterConfig {
  * started by whoever owns the Compose file, and the hub needs no Docker access
  * at all. A Unix socket in a shared volume even works with `network_mode: none`.
  */
-export interface SocketServerConfig extends ToolFilterConfig {
+export interface SocketServerConfig extends ToolFilterConfig, PassthroughConfig {
   kind: 'socket';
   transport: 'unix' | 'tcp';
   socketPath?: string;
@@ -371,6 +372,28 @@ function parseToolFilter(name: string, entry: Record<string, unknown>): ToolFilt
   return result;
 }
 
+/**
+ * Parses `passthrough`, which today governs one thing: whether this server may
+ * ask the person at the far end a question.
+ *
+ * A *partial* for the same reason `parseToolFilter` is one — an entry without
+ * the field has to produce exactly the object it produced before.
+ *
+ * `"off"` exists separately from the global `MCP_ELICITATION` switch because
+ * the two answer different questions. The global one is "is this hub doing
+ * elicitation at all"; this one is "do I trust *this* upstream to put words in
+ * front of my user". A server can be perfectly reliable and still be one whose
+ * prompts an operator does not want shown — that is a phishing judgement, not
+ * an availability one, and it should not require turning the server off.
+ */
+function parsePassthrough(name: string, entry: Record<string, unknown>): PassthroughConfig {
+  if (entry.passthrough === undefined) return {};
+  if (entry.passthrough !== 'auto' && entry.passthrough !== 'off') {
+    throw new ConfigError(`Server "${name}": "passthrough" must be "auto" or "off"`);
+  }
+  return { passthrough: entry.passthrough };
+}
+
 function rejectLifecycle(name: string, entry: Record<string, unknown>, kind: string): void {
   for (const field of ['keepAlive', 'idleMinutes']) {
     if (entry[field] !== undefined) {
@@ -500,7 +523,7 @@ function parseSocketServer(name: string, entry: Record<string, unknown>, type: '
 function parseServer(name: string, entry: Record<string, unknown>, env: NodeJS.ProcessEnv, options?: ParseOptions): ServerConfig {
   const expand = expanderFor(env, options);
   const hub = entry.hub !== false;
-  const toolFilter = parseToolFilter(name, entry);
+  const toolFilter = { ...parseToolFilter(name, entry), ...parsePassthrough(name, entry) };
   if (entry.hub !== undefined && typeof entry.hub !== 'boolean') {
     throw new ConfigError(`Server "${name}": "hub" must be a boolean`);
   }

@@ -275,7 +275,7 @@ export async function createHub(options: HubOptions) {
       next(); // fall through to 404
       return;
     }
-    await serverRequestHandler(managed)(req, res);
+    await serverRequestHandler(managed, store.cookieSecret)(req, res);
   };
 
   for (const route of ['/:name', '/:name/mcp']) {
