@@ -82,7 +82,13 @@ export function createOidcInteractionRoutes(options: OidcInteractionOptions): Ro
     res.status(status).type('html').send(`<p>${message}</p>`);
   };
 
-  router.get('/interaction/:uid', async (req, res, next) => {
+  // The two POSTs below carry a limiter and this GET did not, which is the
+  // asymmetry CodeQL noticed and it was right. The page is unauthenticated by
+  // construction — the uid is all a caller has — and rendering it costs a
+  // provider store lookup, so a flood is cheap to send and not free to serve.
+  // The same window as its siblings; a person opening a login page a hundred
+  // times in fifteen minutes has a different problem.
+  router.get('/interaction/:uid', earlyRateLimit(15 * 60_000, 100, 500), async (req, res, next) => {
     try {
       const details = await provider.interactionDetails(req, res);
       const params = details.params as { client_id?: string; redirect_uri?: string; resource?: string };

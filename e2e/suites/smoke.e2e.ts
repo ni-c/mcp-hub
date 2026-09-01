@@ -5,7 +5,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import { ClientPool } from '../harness/client.js';
 import { startGateway, type Gateway } from '../harness/gateway.js';
-import { enabledTiers, type Tier } from '../harness/tiers.js';
+import { tiersFor, type Tier } from '../harness/tiers.js';
 import { mintApiToken, obtainToken } from '../harness/token.js';
 import { WireClient } from '../harness/wire.js';
 import { REPO_ROOT } from '../harness/workspace.js';
@@ -38,7 +38,16 @@ const FLEET = {
 // node_modules, which is not mounted into the container, and the container
 // already has a suite of its own. `docker-image.e2e.ts` covers the same ground
 // with a fleet the image can actually see.
-const tiers = enabledTiers().filter(tier => tier !== 'docker');
+const tiers = tiersFor(['docker'], 'smoke runs server-everything from node_modules, which the container cannot see');
+
+describe.runIf(tiers.length === 0)('the smoke suite', () => {
+  // A file that registers no suite at all is a *failed* file in vitest, not an
+  // empty one — so a docker-only run would go red for a suite that was never
+  // meant to run in it. One placeholder keeps the file honest and green.
+  it('does not apply to this tier', () => {
+    expect(tiers).toEqual([]);
+  });
+});
 
 describe.each(tiers)('a hub at the %s tier', (tier: Tier) => {
   let gateway: Gateway;

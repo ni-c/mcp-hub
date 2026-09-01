@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 
+import { assertLoopback } from '../harness/loopback.js';
+
 /**
  * A recording reverse proxy, for capturing what a real client puts on the wire.
  *
@@ -69,6 +71,13 @@ const SECRET_SHAPES = [/-----BEGIN [A-Z ]*PRIVATE KEY-----/, /\beyJ[A-Za-z0-9_-]
 
 function main(): void {
   const options = parseArgs(process.argv.slice(2));
+  // The upstream comes from the command line and is forwarded to verbatim,
+  // which is a reverse proxy's whole job and is also, read literally, an SSRF.
+  // The same rule the rest of the suite lives by settles it: this may only ever
+  // point at a throwaway hub on this machine. A capture aimed at a deployed hub
+  // would put its real tokens through redact() and one missed pattern from a
+  // file in git.
+  assertLoopback(options.upstream);
   const externalUrl = `http://127.0.0.1:${options.port}`;
   // Overwriting an existing golden is the thing that turns a collection of
   // assertions into a collection of snapshots: a file breaks, somebody

@@ -161,6 +161,62 @@ function hubEnvironment(options: GatewayOptions, workspace: Workspace, externalU
   };
 }
 
+/**
+ * The environment a spawned hub would read, as `createHub` options.
+ *
+ * Without this, `env` was silently ignored in-process: a suite asking for
+ * `MCP_REQUESTS_PER_MINUTE: 10000` got the default 120 and started failing with
+ * a 429 several tests later, at whichever call happened to cross the line. It
+ * passed locally only because `defaultTier()` prefers `process`, so nothing ran
+ * the affected suites in-process until CI did — which is the whole argument for
+ * the tier being a matrix dimension rather than a default.
+ *
+ * Anything not listed here is read at module scope by `mcp-limits.ts`,
+ * `timings.ts` or `subscriptions.ts`, and cannot be changed after import. Those
+ * throw rather than being dropped: a knob that quietly does nothing is how this
+ * bug happened once already.
+ */
+function hubOptionsFromEnv(env: Record<string, string> | undefined): Partial<HubOptions> {
+  if (!env) return {};
+  const options: Partial<HubOptions> = {};
+  const leftover: string[] = [];
+  for (const [key, value] of Object.entries(env)) {
+    switch (key) {
+      case 'PASSWORD': options.password = value; break;
+      case 'PASSWORD_HASH': options.passwordHash = value; break;
+      case 'RESOURCE_BOUND_TOKENS': options.requireResourceBoundTokens = value !== 'false' && value !== '0'; break;
+      case 'DEFAULT_RESOURCE': options.defaultResource = value; break;
+      case 'MCP_BODY_LIMIT': options.mcpBodyLimit = value; break;
+      case 'MCP_REQUESTS_PER_MINUTE': options.mcpRequestsPerMinute = Number(value); break;
+      case 'MCP_MAX_CONCURRENT_REQUESTS': options.mcpMaxConcurrentRequests = Number(value); break;
+      case 'MCP_MAX_CONCURRENT_STREAMS': options.mcpMaxConcurrentStreams = Number(value); break;
+      case 'IDLE_TIMEOUT_MINUTES': options.idleTimeoutMinutes = Number(value); break;
+      case 'TOOL_CACHE_PATH': options.toolCachePath = value; break;
+      case 'CLIENT_REGISTRATION':
+        options.clientRegistration = value.split(',').map(part => part.trim()) as HubOptions['clientRegistration'];
+        break;
+      case 'CIMD_ALLOWED_ORIGINS': options.cimdAllowedOrigins = value.split(',').map(part => part.trim()).filter(Boolean); break;
+      case 'CIMD_ALLOW_PRIVATE_ADDRESSES': options.cimdAllowPrivateAddresses = value === 'true' || value === '1'; break;
+      case 'DCR_MAX_CLIENTS': options.dcrMaxClients = Number(value); break;
+      case 'DCR_PENDING_TTL_HOURS': options.dcrPendingTtlHours = Number(value); break;
+      case 'DCR_INACTIVE_DAYS': options.dcrInactiveDays = Number(value); break;
+      // Set by the harness itself for the spawned tiers; meaningless here,
+      // where the workspace and the listener are wired up directly.
+      case 'EXTERNAL_URL': case 'CONFIG_PATH': case 'DATA_PATH': case 'PORT': break;
+      default: leftover.push(key);
+    }
+  }
+  if (leftover.length > 0) {
+    throw new Error(
+      `mcp-hub e2e: ${leftover.join(', ')} cannot take effect in-process — it is read once at import by ` +
+        'mcp-limits.ts, timings.ts or subscriptions.ts. Give this suite `tier: \'process\'`, which is where ' +
+        'those knobs are real. Refused rather than ignored: a knob that quietly does nothing is how a suite ' +
+        'comes to pass for the wrong reason.'
+    );
+  }
+  return options;
+}
+
 async function startInProcess(options: GatewayOptions, workspace: Workspace): Promise<Gateway> {
   const log = new LogTail();
   const restoreConsole = interceptConsole(log);
@@ -172,6 +228,7 @@ async function startInProcess(options: GatewayOptions, workspace: Workspace): Pr
       configPath: workspace.configPath,
       dataPath: workspace.data,
       password: options.password ?? E2E_PASSWORD,
+      ...hubOptionsFromEnv(options.env),
       ...options.hubOptions
     });
     if (options.waitUntilSettled !== false) await hub.supervisor.waitUntilSettled();

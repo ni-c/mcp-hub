@@ -65,6 +65,13 @@ jobs:
       # linux/amd64 only. arm64 is covered by container-scan under QEMU, and a
       # QEMU-emulated compose stack running Node, Docker and a dozen children is
       # far too slow and far too flaky to be worth the coverage.
+      # The gha cache backend needs a buildx builder; the default docker driver
+      # cannot export to it, and the failure reads only as "buildx failed".
+      # container-scan in ci.yml sets one up for the same reason.
+      - name: Set up buildx
+        if: matrix.tier == 'docker'
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
       - name: Build the image under test
         if: matrix.tier == 'docker'
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0

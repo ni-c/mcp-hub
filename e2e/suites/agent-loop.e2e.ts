@@ -4,6 +4,7 @@ import { bothCataloguesFleet, everythingFleet } from '../fixtures/fleets.js';
 import { runAgent, transcript, type Scenario } from '../harness/agent.js';
 import { ClientPool } from '../harness/client.js';
 import { startGateway, type Gateway } from '../harness/gateway.js';
+import { tierEnabled } from '../harness/tiers.js';
 import { obtainToken } from '../harness/token.js';
 
 /**
@@ -15,6 +16,18 @@ import { obtainToken } from '../harness/token.js';
  * of scenarios, and each one that exists has to earn its wall-clock.
  */
 
+/**
+ * Not the container.
+ *
+ * The third-party scenario spawns `server-everything` out of `node_modules`,
+ * which is not mounted into the image — the child never starts and the route
+ * answers 503, which reads like a gateway bug and is a missing file. The
+ * container has `docker-image.e2e.ts`, which drives the demo fleet through the
+ * same six meta-tools with a fleet the image can see.
+ */
+const RUNS_HERE = tierEnabled('inproc') || tierEnabled('process');
+const TIER = tierEnabled('process') ? 'process' : 'inproc';
+
 let gateway: Gateway;
 let clients: ClientPool;
 let hubToken: string;
@@ -24,8 +37,10 @@ let everythingClients: ClientPool;
 let everythingToken: string;
 
 beforeAll(async () => {
+  if (!RUNS_HERE) return;
   gateway = await startGateway({
     prefix: 'agent',
+    tier: TIER,
     servers: bothCataloguesFleet(),
     // The agent makes a request per tool per discovery pass, all as one OAuth
     // client. The per-client budget defaults to 120/minute and is a real
@@ -39,6 +54,7 @@ beforeAll(async () => {
 
   everythingGateway = await startGateway({
     prefix: 'agent-everything',
+    tier: TIER,
     servers: everythingFleet(),
     env: { IDLE_TIMEOUT_MINUTES: '0', MCP_REQUESTS_PER_MINUTE: '10000' }
   });
@@ -46,9 +62,11 @@ beforeAll(async () => {
   everythingToken = (await obtainToken(everythingGateway, { resource: 'everything' })).access;
 }, 120_000);
 
+// Optional: the hooks are at file scope and run even for the placeholder
+// suite, where `beforeAll` returned early and there is nothing to close.
 afterEach(async () => {
-  await clients.closeAll();
-  await everythingClients.closeAll();
+  await clients?.closeAll();
+  await everythingClients?.closeAll();
 });
 
 afterAll(async () => {
@@ -68,7 +86,16 @@ const CATALOGUE_DIRECT: Scenario = {
   budget: { ms: 20_000, requests: 30 }
 };
 
-describe('the agent loop', () => {
+describe.runIf(!RUNS_HERE)('the agent loop', () => {
+  // A file that registers no suite is a failed file in vitest, not an empty
+  // one. One placeholder, so a docker-only run is green for a suite that was
+  // never meant to run in it.
+  it('does not apply to this tier', () => {
+    expect(RUNS_HERE).toBe(false);
+  });
+});
+
+describe.runIf(RUNS_HERE)('the agent loop', () => {
   it('reaches every tool the aggregate exposes, deriving arguments from their schemas', async () => {
     const client = await clients.connect('/hub', hubToken);
     const run = await runAgent(gateway, client, CATALOGUE_VIA_HUB);
@@ -132,7 +159,7 @@ describe('the agent loop', () => {
   });
 });
 
-describe('what the agent notices that a fixed call list would not', () => {
+describe.runIf(RUNS_HERE)('what the agent notices that a fixed call list would not', () => {
   it('refuses a schema that requires a property it does not describe', async () => {
     // Not a test of a fixture but of the guard itself: this is the shape a
     // damaged schema takes, and `argsFor` has to fail rather than call the

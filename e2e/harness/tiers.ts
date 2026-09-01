@@ -103,3 +103,22 @@ export function assertTierInUse(expected: Tier, actual: Tier): void {
     );
   }
 }
+
+/**
+ * The enabled tiers a suite can actually run at.
+ *
+ * Some suites cannot run everywhere for a concrete reason — a fleet that lives
+ * in `node_modules`, which is not mounted into the container. Filtering is the
+ * easy part; the trap is what filtering to nothing does. `describe.each([])`
+ * registers no suite at all, and vitest reports "No test suite found in file"
+ * as a *failure* of the whole file. A single-tier run then goes red for a suite
+ * that was never meant to run in it.
+ *
+ * So the reason is required and is printed, and the caller gets an empty array
+ * it has to handle — see `describeEachTier`.
+ */
+export function tiersFor(exclude: readonly Tier[], why: string): Tier[] {
+  const usable = enabledTiers().filter(tier => !exclude.includes(tier));
+  if (usable.length === 0) console.log(`mcp-hub e2e: nothing to run here — ${why}`);
+  return usable;
+}
