@@ -1,5 +1,17 @@
 # Build stage
-FROM node:26-bookworm-slim@sha256:cd565714d4da3e84bfd341e31448f81d47c6362198f152345297c9c1154e6341 AS build
+#
+# node:24-bookworm-slim is the ACTIVE LTS line, not the newest tag, and it is the
+# line the CI test matrix covers. Node 26 is still Current, and libraries check:
+# oidc-provider warns "Unsupported runtime" on any build where process.release.lts
+# is unset, which is every non-LTS build.
+# What keeps this honest is a comparison, not a version number written down here:
+# `node:lts-bookworm-slim` and `node:24-bookworm-slim` MUST resolve to the same
+# digest. The day 24 leaves LTS they diverge, and that is visible; a hardcoded
+# version in a comment is not. Verified 2026-09-01: both resolve to the digest
+# below, Node 24.20.0.
+# Refresh the digest and re-run that comparison together — a stale tag is
+# invisible if only the digest is re-resolved.
+FROM node:24-bookworm-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts
@@ -9,12 +21,12 @@ RUN npm run build && npm prune --omit=dev --ignore-scripts
 
 # Runtime: node + npx for JS servers, uv/uvx + python3 for Python servers,
 # git for servers installed straight from a repository.
-FROM node:26-bookworm-slim@sha256:cd565714d4da3e84bfd341e31448f81d47c6362198f152345297c9c1154e6341
+FROM node:24-bookworm-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e
 COPY --from=ghcr.io/astral-sh/uv:0.12.3@sha256:2d890623d310b57771ce840f0da5eed5fc6d657da05ffaa45d82797b53fa3abc /uv /uvx /usr/local/bin/
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git python3 python3-pip ca-certificates tini \
     && rm -rf /var/lib/apt/lists/*
-# The base image bundles npm 10, whose vendored deps (tar, brace-expansion,
+# The base image bundles npm 11, whose vendored deps (tar, brace-expansion,
 # sigstore, ...) carry known HIGH/CRITICAL CVEs; replace it wholesale. Even
 # current npm still pins three vendored packages to vulnerable releases, so
 # overwrite those in place with the fixed same-major versions (identical
