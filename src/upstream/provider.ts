@@ -1,8 +1,7 @@
 import crypto from 'node:crypto';
 import { SignJWT, exportJWK } from 'jose';
 import type { JWK } from 'jose';
-import type { OAuthClientProvider, OAuthDiscoveryState } from '@modelcontextprotocol/sdk/client/auth.js';
-import type { OAuthClientInformation, OAuthClientMetadata, OAuthTokens } from '@modelcontextprotocol/sdk/shared/auth.js';
+import type { OAuthClientProvider, OAuthDiscoveryState, OAuthClientInformation, OAuthClientMetadata, OAuthTokens } from '@modelcontextprotocol/client';
 import type { UpstreamOAuthConfig } from '../config.js';
 import type { AuthStore, UpstreamCredentials } from '../auth/store.js';
 import { sign } from '../auth/signed-token.js';

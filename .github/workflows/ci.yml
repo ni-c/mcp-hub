@@ -26,6 +26,10 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: npm
       - run: npm ci --ignore-scripts
+      # Once, not per matrix entry: the linter parses the source itself and
+      # cannot see a difference between Node versions.
+      - run: npm run lint
+        if: matrix.node-version == 24
       - run: npm run build
       - run: npm test
         if: matrix.node-version != 24
@@ -121,9 +125,43 @@ jobs:
           ignore-unfixed: true
           exit-code: '1'
 
+  # A release gate, not a pull-request one. `if:` restricts it to tag pushes, so
+  # it never appears on a pull request and the required status checks on main
+  # are untouched — adding a job name is safe, renaming or removing one is not.
+  # `publish` needs it, which is what makes the gate mechanical rather than a
+  # thing somebody remembers to check at eleven at night.
+  #
+  # Only the two cheap tiers: the docker tier builds an image, and `publish` is
+  # about to build the same one two lines further down. It runs nightly and on
+  # any pull request that touches e2e/ or demo/, which is where it earns its
+  # keep.
+  e2e:
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+      - run: npm run test:e2e
+        env:
+          MCPHUB_E2E_TIERS: inproc,process
+
   publish:
-    needs: [test, codeql, secret-scan, container-scan]
-    if: github.event_name == 'push'
+    needs: [test, codeql, secret-scan, container-scan, e2e]
+    # `e2e` only runs on tags, and a *skipped* dependency skips its dependents
+    # by default — which would have quietly stopped every push to main from
+    # publishing `latest`. `!cancelled()` lets a skipped need through; the two
+    # `contains` guards put back the part that matters, which is that nothing
+    # actually failed.
+    if: >-
+      github.event_name == 'push' &&
+      !cancelled() &&
+      !contains(needs.*.result, 'failure') &&
+      !contains(needs.*.result, 'cancelled')
     runs-on: ubuntu-latest
     permissions:
       contents: read

@@ -180,16 +180,26 @@ before gets a CSRF-protected *Approve / Deny* page rather than a silent code.
 This is what stops a page in another tab from riding your session to obtain a
 token.
 
-**Tokens are short-lived and bound.** Access tokens are EdDSA-signed JWTs valid
-for 15 minutes; the verifier pins the algorithm rather than trusting the token
-header. Refresh tokens rotate, reuse of a retired token revokes its family, and
-a refresh cannot request more scope than the original grant. Each token is
-additionally bound (RFC 8707) to the one resource it was issued for, so a token
-for one server reaches neither another server nor `/hub` and `/health`.
+**Tokens are short-lived and bound.** Access tokens are opaque and valid for
+15 minutes. Opaque rather than self-contained on purpose: the value is a
+reference to a stored record, so the hub can withdraw one, which is not possible
+for a signed token that verifies on its own. Refresh tokens rotate, and reusing
+a retired one is treated as a leak — it revokes the whole grant, the access
+tokens issued under it included. Each token is bound (RFC 8707) to the one
+resource it was issued for, so a token for one server reaches neither another
+server nor `/hub` and `/health`.
+
+Admin-minted API tokens are the exception and stay signed JWTs: they are for
+clients that cannot do OAuth at all, and only their record is stored, which is
+what `tokens revoke` deletes.
+
+Nothing an attacker could present is written to `state.json`. Tokens are keyed
+and stored by hash, so read access to the file does not yield a usable
+credential.
 
 **Revocation takes effect at once.** `mcp-hub-admin clients revoke <id>` removes
-the approval and every refresh token, and sets a marker that rejects
-already-issued access tokens immediately — no waiting for the 15-minute expiry.
+the approval and every refresh token, and the next request carrying an
+already-issued access token is refused — no waiting for the 15-minute expiry.
 It works whether or not the hub is running: the CLI is a second process on the
 same state file, and both sides re-read it before touching it, so neither can
 serve a stale copy or write one back over the other.
@@ -205,7 +215,7 @@ password scoped to one resource.
 
 ## Rate limits
 
-| Endpoint | Per IP | Global |
+| Endpoint | Per caller | Global |
 |---|---|---|
 | `/register` | 20 per hour | 200 per hour |
 | `/authorize` | 100 per 15 min | 1000 per 15 min |
@@ -215,10 +225,28 @@ password scoped to one resource.
 | Failed logins | 10 per 15 min | 100 per 15 min |
 | MCP traffic | `MCP_REQUESTS_PER_MINUTE` (120), `MCP_MAX_CONCURRENT_REQUESTS` (4) and `MCP_MAX_CONCURRENT_STREAMS` (32) **per OAuth client** | — |
 
+**A caller is an IPv4 address or an IPv6 /64**, not a single IPv6 address. A
+/64 is the smallest block handed to one subscriber and a residential line
+usually holds a /56 or a /48, so counting individual IPv6 addresses would let
+one host spend every budget above once per address. Log lines still carry the
+full address, because that is what fail2ban should ban.
+
 The auth limiters run **before** body parsing, and they reject without
-inserting the offending IP into their tables, so a flood of forged addresses
-cannot grow memory. The global counters exist precisely because an attacker who
-rotates `X-Forwarded-For` would otherwise dodge the per-IP limit.
+inserting the offending caller into their tables, so a flood of forged
+addresses cannot grow memory. The global counters exist precisely because an
+attacker who rotates `X-Forwarded-For` would otherwise dodge the per-caller
+limit.
+
+The failed-login ceiling refuses the callers that are **guessing** — on their
+first failure rather than their tenth, once the hub as a whole is under a
+distributed attempt — and not the ones that are not. A ceiling that refused
+everyone would mean a hundred wrong passwords could close the only
+administrative way in, which is a cheaper attack than guessing the password.
+
+`/token` reads its own request body, ahead of the authorization server, so it
+carries the same 56 kB ceiling the authorization server applies: the
+credentials are in the body, so nothing can be asked of the caller before it is
+read.
 
 Metadata-document fetches inherit the `/authorize` and `/token` limits, and are
 throttled further on their own: a document is cached for at least a minute, a
@@ -243,13 +271,20 @@ which is what the [fail2ban integration](/guide/deployment#fail2ban) matches on.
 `X-Forwarded-*`. It decides what `req.ip` is, and therefore what the login rate
 limiter counts.
 
-::: danger Two ways to get this wrong
+::: danger Three ways to get this wrong
 **Too permissive:** if a client's own `X-Forwarded-For` is believed, it can
-supply an address, rotate it, and sidestep the per-IP limit entirely.
+supply an address, rotate it, and sidestep the per-caller limit entirely.
 
-**Unset:** every request appears to come from the proxy, so per-IP limiting
+**Unset:** every request appears to come from the proxy, so per-caller limiting
 collapses into a single global counter. The hub logs a warning at startup when
 this happens.
+
+**Set but never matching:** the list is compared against the address the
+connection actually arrives from. A proxy configured as
+`proxy_pass http://localhost:…` on a dual-stack host connects over `::1`, which
+`127.0.0.1` does not cover — so every forwarded header is ignored and the
+result is the *unset* case, without the startup warning. The hub says so once,
+the first time a forwarded header arrives from an address it does not trust.
 :::
 
 List only your own reverse proxy, and make sure that proxy *overwrites*

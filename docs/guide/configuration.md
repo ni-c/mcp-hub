@@ -39,7 +39,8 @@ These names are reserved and rejected at load time, because the hub itself
 serves them:
 
 `mcp` · `hub` · `authorize` · `token` · `register` · `login` · `consent` ·
-`health` · `livez` · `revoke` · `upstream` · `.well-known`
+`health` · `livez` · `revoke` · `upstream` · `.well-known` · `jwks` ·
+`interaction` · `session` · `userinfo`
 
 The check is case-insensitive — `Hub` is rejected just like `hub`.
 
@@ -321,6 +322,47 @@ time through `/hub` only duplicates them.
 
 Claude Code ignores unknown fields, so a file carrying `hub` still works as a
 Claude Code config.
+
+## Letting a server ask the user: `passthrough`
+
+```json
+"imap": { "command": "npx", "args": ["-y", "@ni-c/imap-mcp"], "passthrough": "off" }
+```
+
+On MCP `2026-07-28` a server can ask the person at the far end a question
+before it does something irreversible — and the hub
+[carries it through](/guide/elicitation). `"auto"`, the default, allows that.
+
+`"off"` withdraws this one server's right to put words in front of the user. It
+is a phishing judgement, not an availability one: the server keeps working and
+falls back to whatever it does for a client that cannot be asked. Use it for an
+upstream you route to but do not fully trust with the user's attention.
+
+`MCP_ELICITATION=false` switches the whole feature off for every server at
+once. Like the other fields here, Claude Code ignores `passthrough`.
+
+## Letting a server push: `subscriptions`
+
+```json
+"chatty": { "command": "npx", "args": ["-y", "some-server"], "subscriptions": "off" }
+```
+
+On MCP `2026-07-28` a client can open a
+[`subscriptions/listen`](/guide/subscriptions) stream and hear when this
+server's tools, prompts or resources change. `"auto"`, the default, allows that.
+
+`"off"` withdraws this one server's right to push. It is a separate judgement
+from `passthrough`, and deliberately so: that one is about words shown to a
+person, where the risk is phishing; this one is about volume on a stream nobody
+reads synchronously, where the risk is noise. A server can easily warrant one
+answer and not the other.
+
+A switched-off server is treated like a 2025 connection throughout — the
+capability is withheld as well as the delivery, so nothing is announced that
+will not arrive.
+
+`MCP_SUBSCRIPTIONS=false` switches the feature off hub-wide; the other limits
+are listed on the [Subscriptions](/guide/subscriptions#limits) page.
 
 ## Lifecycle: `keepAlive` and `idleMinutes`
 

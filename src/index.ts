@@ -2,17 +2,22 @@
 import path from 'node:path';
 import express from 'express';
 import type { Request, Response, NextFunction } from 'express';
-import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
+import { requireBearerAuth } from '@modelcontextprotocol/express';
 import { loadConfig, ConfigWatcher, warnMutableDockerImages } from './config.js';
 import { Supervisor, UpstreamAuthRegistry } from './supervisor.js';
 import { ToolCache } from './tool-cache.js';
 import { warnSingleFileMount } from './mount-check.js';
-import { serverRequestHandler, handleMcpRequest } from './proxy.js';
+import { serverRequestHandler, handleMcpRequest, createRoute } from './proxy.js';
 import { buildHubServer } from './hub.js';
 import { AuthStore, DEFAULT_CLIENT_LIMITS } from './auth/store.js';
 import { CimdResolver } from './auth/cimd.js';
-import { HubOAuthProvider } from './auth/provider.js';
-import { createAuthRoutes } from './auth/routes.js';
+import { createOidcInteractionRoutes } from './auth/oidc/interactions.js';
+import { mountOidcProvider } from './auth/oidc/mount.js';
+import { buildOidcProvider } from './auth/oidc/provider.js';
+import { OidcTokenVerifier } from './auth/oidc/verifier.js';
+import { authSecurityHeaders } from './auth/headers.js';
+import { createProtectedResourceRoutes } from './auth/protected-resource.js';
+import { createRegistrationManagementRoutes } from './auth/registration.js';
 import { createUpstreamRoutes } from './upstream/routes.js';
 import { healthHandler } from './health.js';
 import { installFileLogging } from './logfile.js';
@@ -20,6 +25,7 @@ import { canonicalResourceUrl, resourceUrlForRoute } from './auth/resource.js';
 import { ClientRequestGate } from './limits.js';
 import { runStdio } from './stdio.js';
 import { isMainModule } from './main-module.js';
+import { IDLE_TIMEOUT_MS } from './timings.js';
 
 export interface HubOptions {
   externalUrl: string;
@@ -93,8 +99,10 @@ export async function createHub(options: HubOptions) {
   }
   const idleTimeoutMinutes = options.idleTimeoutMinutes ?? 60;
   if (!Number.isSafeInteger(idleTimeoutMinutes) || idleTimeoutMinutes < 0) throw new Error('idleTimeoutMinutes must be a non-negative integer');
+  // IDLE_TIMEOUT_MS is the sub-minute sibling of the documented knob; see timings.ts.
+  const idleTimeoutMs = IDLE_TIMEOUT_MS || idleTimeoutMinutes * 60_000;
   const cache = new ToolCache(options.toolCachePath ?? path.join(options.dataPath, 'tool-cache.json'));
-  if (idleTimeoutMinutes > 0) {
+  if (idleTimeoutMs > 0) {
     cache.load();
     if (!cache.probeWritable()) {
       console.warn(`mcp-hub: tool cache ${cache.filePath} is not writable — on-demand servers warm-start at every boot instead of sleeping through it`);
@@ -118,12 +126,23 @@ export async function createHub(options: HubOptions) {
     }
   }
   const upstreamAuth = new UpstreamAuthRegistry(store, externalUrl);
-  const supervisor = new Supervisor(config, { idleTimeoutMinutes, cache, upstreamAuth });
+  const supervisor = new Supervisor(config, { idleTimeoutMinutes, idleTimeoutMs, cache, upstreamAuth });
   // start() before reapOrphans(): reaping spares the container of any server
   // that is not asleep, so it must see the boot states. Deliberately not
   // awaited: an unreachable Docker endpoint must not hold up the HTTP listener
   // or the stdio children. Children come up (or hydrate into `sleeping`) in
   // the background; paths answer 503 until then.
+  // One long-lived route for the aggregate, because the handler inside owns the
+  // open subscription streams. /hub carries tools and nothing else, so the only
+  // change worth relaying is a child's tool list moving; the supervisor
+  // publishes those here.
+  const hubRoute = createRoute(() => buildHubServer(supervisor, store.cookieSecret).server, {
+    label: '/hub',
+    // Every child, because the aggregate's tool list spans all of them.
+    onDemandChange: () => supervisor.reconcileAll()
+  });
+  supervisor.hubSubscriptions = hubRoute.registry;
+
   supervisor.start();
   void supervisor
     .reapOrphans()
@@ -147,14 +166,6 @@ export async function createHub(options: HubOptions) {
     ? new CimdResolver({ allowedOrigins: options.cimdAllowedOrigins, allowPrivateAddresses: options.cimdAllowPrivateAddresses })
     : undefined;
 
-  const provider = new HubOAuthProvider(store, externalUrl, {
-    requireResource,
-    resolveResource: resource => canonicalResourceUrl(resource, origin, watcher.current),
-    defaultResource: options.defaultResource !== undefined ? resourceUrlForRoute(origin, options.defaultResource) : undefined,
-    cimd,
-    allowDynamicRegistration: mechanisms.includes('dcr')
-  });
-
   const app = express();
   if (!options.trustedProxies?.length) {
     // Without this every request behind a proxy reports the proxy's address,
@@ -164,14 +175,72 @@ export async function createHub(options: HubOptions) {
   app.set('trust proxy', options.trustedProxies ?? false);
   app.disable('x-powered-by');
 
+  /**
+   * A TRUSTED_PROXIES list that never matches is worse than an empty one,
+   * because the empty one is announced above and this is silent.
+   *
+   * The list is compared against the address the connection actually came from,
+   * and the easiest way to get that wrong is also the least visible: a proxy
+   * configured as `proxy_pass http://localhost:…` on a dual-stack host connects
+   * over `::1`, which `127.0.0.1` does not cover. Every forwarded header is
+   * then ignored, `req.ip` becomes the proxy for every request, per-caller rate
+   * limiting collapses into one global counter and every fail2ban line names
+   * the proxy — the exact failure the warning above exists for, with nothing
+   * said about it.
+   *
+   * Diagnosed rather than assumed: a forwarded header arrived and was not
+   * believed, which is the observable half of the mistake. Said once.
+   */
+  if (options.trustedProxies?.length) {
+    let warnedAboutProxy = false;
+    app.use((req: Request, _res: Response, next: NextFunction) => {
+      if (!warnedAboutProxy && req.headers['x-forwarded-for'] !== undefined && req.ip === req.socket.remoteAddress) {
+        warnedAboutProxy = true;
+        console.warn(
+          `mcp-hub: a request from ${req.socket.remoteAddress} carried X-Forwarded-For but that address is not in TRUSTED_PROXIES ` +
+            `(${options.trustedProxies?.join(', ')}), so the header was ignored — check for the 127.0.0.1 vs ::1 mismatch. ` +
+            'Until it matches, per-caller rate limiting and the fail2ban log lines see only the proxy.'
+        );
+      }
+      next();
+    });
+  }
+
   // A liveness check intentionally carries no topology. Detailed child state
   // lives behind OAuth at /health.
   app.get('/livez', (_req, res) => res.status(200).json({ status: 'ok' }));
-  app.use(createAuthRoutes({ provider, store, externalUrl, passwordHash: options.passwordHash, password: options.password, cimd }));
+
+  // The resource server's own discovery document, independent of whichever
+  // authorization server is mounted below.
+  app.use(createProtectedResourceRoutes({ externalUrl }));
+
+  const oidc = buildOidcProvider(store, {
+    externalUrl,
+    requireResource,
+    resolveResource: resource => canonicalResourceUrl(resource, origin, watcher.current),
+    defaultResource: options.defaultResource !== undefined ? resourceUrlForRoute(origin, options.defaultResource) : undefined,
+    allowDynamicRegistration: mechanisms.includes('dcr'),
+    cimd
+  });
+
+  app.use(
+    createOidcInteractionRoutes({
+      provider: oidc,
+      store,
+      externalUrl,
+      password: options.password,
+      passwordHash: options.passwordHash,
+      cimd
+    })
+  );
+  // Ahead of the mount, so the hub's stricter RFC 7592 handlers win the
+  // /register/:id route over oidc-provider's.
+  if (mechanisms.includes('dcr')) app.use(createRegistrationManagementRoutes({ store, externalUrl }));
+  mountOidcProvider(app, oidc, store, { externalUrl, common: [authSecurityHeaders] });
   // The upstream callback and the hub's own client metadata document. Mounted
   // after the auth routes so it inherits nothing from them but sits ahead of
   // the /:name catch-all.
-  app.use(createUpstreamRoutes({ store, provider, registry: upstreamAuth, supervisor, watcher, externalUrl }));
+  app.use(createUpstreamRoutes({ store, registry: upstreamAuth, supervisor, watcher, externalUrl }));
 
   // Registrations age out on a clock, not on traffic, so this cannot wait for
   // the next write to state.json — an idle hub would never clean up at all.
@@ -190,13 +259,30 @@ export async function createHub(options: HubOptions) {
   sweepClients();
   const pruneTimer = setInterval(sweepClients, CLIENT_PRUNE_INTERVAL_MS);
   pruneTimer.unref(); // never a reason to keep the process alive
-  const stopMaintenance = () => clearInterval(pruneTimer);
+  const stopMaintenance = () => {
+    clearInterval(pruneTimer);
+    // The aggregate's handler holds whatever listen streams are open on /hub;
+    // nothing else closes it, because it is not owned by a ManagedServer.
+    void hubRoute.close().catch(() => {});
+  };
 
   // Bearer auth for the MCP endpoints, advertising the path-scoped RFC 9728
   // metadata document in WWW-Authenticate so clients discover the AS.
+  const verifier = new OidcTokenVerifier(store, {
+    externalUrl,
+    requireResource,
+    resolveResource: resource => canonicalResourceUrl(resource, origin, watcher.current)
+  });
+
+  // From @modelcontextprotocol/express, not the frozen server-legacy copy the
+  // codemod reaches for by default. That copy exists for projects still running
+  // the SDK's own authorization server; the hub replaced its own with
+  // oidc-provider first, precisely so this dependency never had to be taken on.
+  // The one thing the maintained middleware needs in return is that the
+  // verifier throws v2's OAuthError -- see OidcTokenVerifier.
   const bearer = (req: Request, res: Response, next: NextFunction) =>
     requireBearerAuth({
-      verifier: provider,
+      verifier,
       resourceMetadataUrl: `${origin}/.well-known/oauth-protected-resource${req.path === '/' ? '' : req.path}`
     })(req, res, next);
 
@@ -231,7 +317,7 @@ export async function createHub(options: HubOptions) {
 
   const dispatch = (name: string) => async (req: Request, res: Response, next: NextFunction) => {
     if (name === 'hub') {
-      await handleMcpRequest(() => buildHubServer(supervisor).server, req, res);
+      await handleMcpRequest(hubRoute, req, res);
       return;
     }
     const managed = supervisor.get(name);
@@ -239,11 +325,15 @@ export async function createHub(options: HubOptions) {
       next(); // fall through to 404
       return;
     }
-    await serverRequestHandler(managed)(req, res);
+    await serverRequestHandler(managed, store.cookieSecret)(req, res);
   };
 
   for (const route of ['/:name', '/:name/mcp']) {
-    app.all(route, bearer, gate.middleware, requireRouteResource, parseMcpJson, (req: Request, res: Response, next: NextFunction) =>
+    // parseMcpJson ahead of the gate, which is a change of order: the gate has
+    // to tell a `subscriptions/listen` POST from an ordinary one, and that only
+    // shows in the parsed body. Authorization still runs first, so the parse is
+    // bounded by mcpBodyLimit and only ever done for a caller allowed to be here.
+    app.all(route, bearer, requireRouteResource, parseMcpJson, gate.middleware, (req: Request, res: Response, next: NextFunction) =>
       void dispatch(String(req.params.name))(req, res, next).catch(next)
     );
   }
@@ -264,7 +354,7 @@ export async function createHub(options: HubOptions) {
     res.status(500).json({ jsonrpc: '2.0', error: { code: -32603, message: 'Internal error' }, id: null });
   });
 
-  return { app, supervisor, watcher, provider, store, upstreamAuth, stopMaintenance };
+  return { app, supervisor, watcher, verifier, store, upstreamAuth, stopMaintenance };
 }
 
 function requireEnv(name: string): string {

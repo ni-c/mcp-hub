@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { Duplex } from 'node:stream';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { Client } from '@modelcontextprotocol/client';
 import { parseConfig, type DockerServerConfig, type HubConfig } from '../src/config.js';
 import { createDockerProxy } from '../src/docker-proxy/server.js';
 import { DockerClient } from '../src/sandbox/docker-client.js';
@@ -176,7 +176,7 @@ describe('a sandboxed server through the proxy', () => {
     // The daemon sees the proxy's serialization: the hub's env key, plus the
     // secret only the proxy can read.
     expect(create?.body?.Env).toEqual(['EXAMPLE=from-hub', 'INJECTED_SECRET=hunter2']);
-    expect((create?.body?.HostConfig as Record<string, unknown>).CapDrop).toEqual(['ALL']);
+    expect((create!.body!.HostConfig as Record<string, unknown>).CapDrop).toEqual(['ALL']);
     expect(requests.some(entry => entry.method === 'UPGRADE' && entry.url.includes('stdin=1'))).toBe(true);
     expect(requests.some(entry => entry.url.includes('/start'))).toBe(true);
 

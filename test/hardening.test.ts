@@ -1,12 +1,14 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { Readable } from 'node:stream';
 import { spawn } from 'node:child_process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ManagedServer, listAllTools } from '../src/supervisor.js';
 import { AuthStore, MAX_UNAPPROVED_CLIENTS } from '../src/auth/store.js';
-import { LoginRateLimiter } from '../src/auth/routes.js';
-import { earlyRateLimit } from '../src/auth/rate-limit.js';
+import { LoginRateLimiter } from '../src/auth/rate-limit.js';
+import { earlyRateLimit, rateLimitKey } from '../src/auth/rate-limit.js';
+import { stripPhantomSecret, withoutPhantomSecret } from '../src/auth/oidc/quirks.js';
 import { ClientRequestGate } from '../src/limits.js';
 import type { NextFunction, Request, Response } from 'express';
 import { ABSOLUTE_CALL_OPTIONS, ABSOLUTE_CALL_TIMEOUT_MS, MAX_FORWARDED_RESULT_BYTES, assertForwardedResultSize } from '../src/mcp-limits.js';
@@ -90,12 +92,50 @@ describe('LoginRateLimiter', () => {
     expect(limiter.isBlocked('10.0.0.1')).toBe(false);
   });
 
-  it('blocks every address once the global cap is reached', () => {
+  /**
+   * The global ceiling used to block every address, which is what made the
+   * lockout below possible. It now refuses the callers that are guessing — on
+   * their first failure rather than their tenth, so the total number of guesses
+   * still collapses — and leaves alone the ones that are not.
+   */
+  it('refuses a caller that has failed once the global cap is reached', () => {
     const limiter = new LoginRateLimiter();
-    // 100 distinct addresses, one failure each: no per-IP counter is anywhere
-    // near its limit, which is exactly what rotating X-Forwarded-For looks like.
+    // 100 distinct addresses, one failure each: no per-caller counter is
+    // anywhere near its limit, which is what rotating X-Forwarded-For looks like.
     for (let i = 0; i < 100; i++) limiter.recordFailure(`10.0.0.${i}`);
-    expect(limiter.isBlocked('192.168.0.1')).toBe(true);
+    expect(limiter.isBlocked('10.0.0.42')).toBe(true);
+    expect(limiter.isBlocked('192.168.0.1')).toBe(false);
+  });
+
+  /**
+   * The lockout this prevents cost one host under a second: a hundred wrong
+   * passwords out of one /64, and the operator holding the correct password was
+   * refused from an address that had never touched the form.
+   */
+  it('does not lock out a caller that has not guessed, once the global ceiling is reached', () => {
+    const limiter = new LoginRateLimiter();
+    for (let network = 0; network < 10; network++) {
+      for (let attempt = 0; attempt < 10; attempt++) limiter.recordFailure(`2001:db8:0:${network}::1`);
+    }
+
+    // The ceiling is reached: every caller that has been guessing is refused.
+    expect(limiter.isBlocked('2001:db8:0:5::1')).toBe(true);
+    // ...and the operator, from an address with nothing recorded against it,
+    // still gets to type the password.
+    expect(limiter.isBlocked('198.51.100.7')).toBe(false);
+
+    // The ceiling still bites the moment that address does guess.
+    limiter.recordFailure('198.51.100.7');
+    expect(limiter.isBlocked('198.51.100.7')).toBe(true);
+  });
+
+  it('counts a whole IPv6 /64 as one caller', () => {
+    const limiter = new LoginRateLimiter();
+    // Ten different addresses, one subscriber network.
+    for (let host = 1; host <= 10; host++) limiter.recordFailure(`2001:db8:1:1::${host}`);
+    expect(limiter.isBlocked('2001:db8:1:1::999')).toBe(true);
+    // A different /64 is a different caller.
+    expect(limiter.isBlocked('2001:db8:1:2::1')).toBe(false);
   });
 
   it('drops entries whose window has passed instead of growing forever', () => {
@@ -153,6 +193,28 @@ describe('ClientRequestGate', () => {
     expect(passed).toBe(4);
 
     gate.middleware({ method: 'POST', auth: { clientId } } as Request, response, next);
+    expect(passed).toBe(5);
+  });
+
+  it('keeps a subscriptions/listen POST out of the in-flight budget too', () => {
+    // The same regression as the GET above, in the shape 2026-07-28 gave it:
+    // there is no standing GET any more, and `subscriptions/listen` is a POST
+    // whose response stays open for the life of the subscription. Counted as
+    // in-flight work it would hold a slot the whole time, and with the default
+    // of four a handful of subscribed clients would lock every tool call on the
+    // hub out with a 429 while nothing was actually running.
+    const gate = new ClientRequestGate(100, 1, 10);
+    const { response } = stubResponse();
+    const clientId = 'client-1';
+    let passed = 0;
+    const next = (() => passed++) as NextFunction;
+    const listen = { method: 'POST', body: { jsonrpc: '2.0', id: 1, method: 'subscriptions/listen' }, auth: { clientId } } as Request;
+
+    for (let i = 0; i < 4; i++) gate.middleware(listen, response, next);
+    expect(passed).toBe(4);
+
+    // The one in-flight slot is still free for real work.
+    gate.middleware({ method: 'POST', body: { method: 'tools/call' }, auth: { clientId } } as Request, response, next);
     expect(passed).toBe(5);
   });
 
@@ -349,6 +411,20 @@ describe('earlyRateLimit', () => {
     expect(call(middleware, '203.0.113.3').passed).toBe(false);
   });
 
+  /**
+   * Without this every per-caller budget in the file is decorative: a /64 is
+   * what one subscriber is handed, and spending a budget once per address in it
+   * is free.
+   */
+  it('spends one budget for a whole IPv6 /64', () => {
+    const middleware = earlyRateLimit(60_000, 2, 100);
+    expect(call(middleware, '2001:db8:abcd:1::1').passed).toBe(true);
+    expect(call(middleware, '2001:db8:abcd:1::2').passed).toBe(true);
+    expect(call(middleware, '2001:db8:abcd:1::3').passed).toBe(false);
+    // The neighbouring network is a different caller and has its own.
+    expect(call(middleware, '2001:db8:abcd:2::1').passed).toBe(true);
+  });
+
   it('gives the budget back once the window has passed, and drops the stale entries', () => {
     vi.useFakeTimers();
     try {
@@ -366,6 +442,137 @@ describe('earlyRateLimit', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('rateLimitKey', () => {
+  it('buckets IPv6 by /64 regardless of how the address is written', () => {
+    expect(rateLimitKey('2001:0db8:0000:0001:dead:beef:0:1')).toBe(rateLimitKey('2001:db8:0:1::2'));
+    expect(rateLimitKey('[2001:db8:0:1::2]')).toBe(rateLimitKey('2001:db8:0:1::3'));
+    expect(rateLimitKey('2001:db8:0:1::1')).not.toBe(rateLimitKey('2001:db8:0:2::1'));
+  });
+
+  it('keeps an IPv4 address whole, mapped form included', () => {
+    expect(rateLimitKey('203.0.113.9')).toBe('203.0.113.9');
+    // What a dual-stack listener reports for an IPv4 peer — the same caller,
+    // and it must not get a second budget for arriving that way.
+    expect(rateLimitKey('::ffff:203.0.113.9')).toBe('203.0.113.9');
+    expect(rateLimitKey('203.0.113.9')).not.toBe(rateLimitKey('203.0.113.10'));
+  });
+
+  it('passes anything unparseable through rather than collapsing it', () => {
+    expect(rateLimitKey('unknown')).toBe('unknown');
+  });
+});
+
+describe('stripPhantomSecret', () => {
+  /**
+   * The status code alone proves nothing here — an oversized body is refused
+   * either way, because the authorization server would reject it a layer down.
+   * What the ceiling changes is whether the hub reads the whole thing first,
+   * and `/token` is unauthenticated by nature, so that is the number worth
+   * pinning.
+   */
+  it('stops reading a token body at the ceiling rather than buffering it', async () => {
+    const chunk = Buffer.alloc(64 * 1024, 'a');
+    const total = 64 * chunk.length; // 4 MiB, if anyone were willing to read it
+    let produced = 0;
+    const req = Readable.from(
+      (function* () {
+        for (let i = 0; i < 64; i++) {
+          produced += chunk.length;
+          yield chunk;
+        }
+      })()
+    ) as Readable & Record<string, unknown>;
+    Object.assign(req, { method: 'POST', headers: {}, url: '/token', httpVersion: '1.1', socket: {} });
+
+    let status = 0;
+    let forwarded = false;
+    const finished = new Promise<void>(resolve => {
+      const res = {
+        status: (code: number) => {
+          status = code;
+          return res;
+        },
+        set: () => res,
+        end: () => {
+          resolve();
+          return res;
+        }
+      };
+      const store = { getClient: () => undefined } as unknown as AuthStore;
+      stripPhantomSecret(store, () => {
+        forwarded = true;
+      })(req as unknown as Request, res as unknown as Response, (() => {}) as NextFunction);
+    });
+    await finished;
+
+    expect(forwarded).toBe(false);
+    expect(status).toBe(400);
+    // One chunk of slack: the ceiling is noticed on the chunk that crosses it.
+    expect(produced).toBeLessThanOrEqual(56 * 1024 + chunk.length);
+    expect(produced).toBeLessThan(total);
+  });
+
+  it('refuses on a declared length above the ceiling without reading at all', async () => {
+    const req = Readable.from([Buffer.from('grant_type=authorization_code')]) as Readable & Record<string, unknown>;
+    Object.assign(req, {
+      method: 'POST',
+      headers: { 'content-length': String(10 * 1024 * 1024) },
+      url: '/token',
+      httpVersion: '1.1',
+      socket: {}
+    });
+    let status = 0;
+    let forwarded = false;
+    const res = {
+      status: (code: number) => {
+        status = code;
+        return res;
+      },
+      set: () => res,
+      end: () => res
+    };
+    const store = { getClient: () => undefined } as unknown as AuthStore;
+    stripPhantomSecret(store, () => {
+      forwarded = true;
+    })(req as unknown as Request, res as unknown as Response, (() => {}) as NextFunction);
+
+    expect(status).toBe(400);
+    expect(forwarded).toBe(false);
+  });
+});
+
+describe('withoutPhantomSecret', () => {
+  it('drops a secret a public client cannot use', () => {
+    const cleaned = withoutPhantomSecret({
+      client_id: 'abc',
+      token_endpoint_auth_method: 'none',
+      client_secret: 'minted-because-the-field-was-omitted',
+      client_secret_expires_at: 0
+    });
+    expect(cleaned).toEqual({ client_id: 'abc', token_endpoint_auth_method: 'none' });
+  });
+
+  it('keeps the secret of a client that authenticates with one', () => {
+    const record = { client_id: 'abc', token_endpoint_auth_method: 'client_secret_post', client_secret: 's' };
+    expect(withoutPhantomSecret(record)).toBe(record);
+  });
+
+  it('keeps the secret when an HMAC response algorithm signs with it', () => {
+    const record = {
+      client_id: 'abc',
+      token_endpoint_auth_method: 'none',
+      id_token_signed_response_alg: 'HS256',
+      client_secret: 's'
+    };
+    expect(withoutPhantomSecret(record)).toBe(record);
+  });
+
+  it('leaves a record without a secret untouched', () => {
+    const record = { client_id: 'abc', token_endpoint_auth_method: 'none' };
+    expect(withoutPhantomSecret(record)).toBe(record);
   });
 });
 
@@ -712,19 +919,40 @@ describe('AuthStore across processes', () => {
 });
 
 describe('MCP response and discovery budgets', () => {
+  /** A child that answers `tools/list` however the test wants it to. */
+  const upstream = (reply: (params: { cursor?: string }) => unknown) =>
+    ({
+      request: async (req: { method: string; params?: { cursor?: string } }) => reply(req.params ?? {})
+    }) as never;
+
   it('caps pagination even when an upstream always returns another cursor', async () => {
     let page = 0;
-    const client = {
-      listTools: async () => ({ tools: [], nextCursor: `page-${++page}` })
-    } as never;
-    await expect(listAllTools(client)).rejects.toThrow(/100 pages/);
+    await expect(listAllTools(upstream(() => ({ tools: [], nextCursor: `page-${++page}` })))).rejects.toThrow(/100 pages/);
   });
 
   it('caps tool count and metadata independently', async () => {
     const many = Array.from({ length: 10_001 }, (_, i) => ({ name: `t${i}`, inputSchema: { type: 'object' as const } }));
-    await expect(listAllTools({ listTools: async () => ({ tools: many }) } as never)).rejects.toThrow(/10000 tools/);
+    await expect(listAllTools(upstream(() => ({ tools: many })))).rejects.toThrow(/10000 tools/);
     const huge = [{ name: 'huge', description: 'x'.repeat(17 * 1024 * 1024), inputSchema: { type: 'object' as const } }];
-    await expect(listAllTools({ listTools: async () => ({ tools: huge }) } as never)).rejects.toThrow(/metadata/);
+    await expect(listAllTools(upstream(() => ({ tools: huge })))).rejects.toThrow(/metadata/);
+  });
+
+  it('walks the pagination itself, one request per page', async () => {
+    // The budgets above are per page, so they only bind if the hub asks for
+    // one page at a time. SDK v2's `listTools()` walks the whole pagination
+    // internally whenever it is called without a cursor — which is every first
+    // call — and returns one merged result; every budget above would then be
+    // measured once, against everything, having already been buffered. So the
+    // shape of the calls is the thing under test, not just the outcome.
+    const cursors: (string | undefined)[] = [];
+    const tools = await listAllTools(
+      upstream(({ cursor }) => {
+        cursors.push(cursor);
+        return cursor === 'second' ? { tools: [{ name: 'b', inputSchema: { type: 'object' } }] } : { tools: [{ name: 'a', inputSchema: { type: 'object' } }], nextCursor: 'second' };
+      })
+    );
+    expect(cursors).toEqual([undefined, 'second']);
+    expect(tools.map(t => t.name)).toEqual(['a', 'b']);
   });
 
   it('rejects forwarded results above 8 MiB and keeps the timeout absolute', () => {

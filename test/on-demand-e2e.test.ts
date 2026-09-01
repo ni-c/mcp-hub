@@ -1,13 +1,12 @@
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
+import type { CallToolResult } from '@modelcontextprotocol/client';
+import { authorizeInBrowser, registerPublicClient } from './auth-flow.js';
 import { createHub } from '../src/index.js';
 import { loadConfig } from '../src/config.js';
 import { ToolCache } from '../src/tool-cache.js';
@@ -22,33 +21,9 @@ let httpServer: ReturnType<Awaited<ReturnType<typeof createHub>>['app']['listen'
 let baseUrl: string;
 let accessToken: string;
 
-function pkcePair() {
-  const verifier = crypto.randomBytes(32).toString('base64url');
-  const challenge = crypto.createHash('sha256').update(verifier).digest('base64url');
-  return { verifier, challenge };
-}
-
 async function obtainToken(app: Express.Application): Promise<string> {
-  const registration = await request(app)
-    .post('/register')
-    .send({ redirect_uris: [REDIRECT_URI], token_endpoint_auth_method: 'none', client_name: 'vitest' })
-    .expect(201);
-  const clientId = registration.body.client_id as string;
-  const { verifier, challenge } = pkcePair();
-  const authorize = await request(app)
-    .get('/authorize')
-    .query({
-      client_id: clientId,
-      redirect_uri: REDIRECT_URI,
-      response_type: 'code',
-      code_challenge: challenge,
-      code_challenge_method: 'S256',
-      state: 'xyz'
-    })
-    .expect(200);
-  const requestToken = authorize.text.match(/name="request" value="([^"]+)"/)?.[1];
-  const login = await request(app).post('/login').type('form').send({ password: PASSWORD, request: requestToken }).expect(302);
-  const code = new URL(login.headers.location).searchParams.get('code')!;
+  const clientId = await registerPublicClient(app, REDIRECT_URI);
+  const { code, verifier } = await authorizeInBrowser(app, clientId, { password: PASSWORD, redirectUri: REDIRECT_URI });
   const tokens = await request(app)
     .post('/token')
     .type('form')

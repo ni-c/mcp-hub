@@ -2,6 +2,11 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
+    // The fast suite is `test/` and nothing else. The end-to-end suite lives in
+    // `e2e/`, runs nightly against a spawned process and a container, and has
+    // its own config — it must never be swept into the gate by vitest's default
+    // glob. Its files are named `*.e2e.ts` for the same reason, twice over.
+    include: ['test/**/*.test.ts'],
     coverage: {
       provider: 'v8',
       include: ['src/**'],

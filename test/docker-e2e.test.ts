@@ -3,7 +3,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
+import type { JSONRPCMessage } from '@modelcontextprotocol/server';
 import { parseConfig, type DockerServerConfig, type HubConfig } from '../src/config.js';
 import { DockerClient } from '../src/sandbox/docker-client.js';
 import { DockerTransport } from '../src/transports/docker.js';

@@ -7,6 +7,306 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- #region changelog -->
 
+## [0.11.0] - 2026-09-01
+
+### Added
+
+- **`list_tools` and `get_tool_schema` carry a child's tool annotations
+  through.** Over `/hub` a client never sees the child's own `tools/list`, so
+  those two answers are the only place it can learn that one of two similarly
+  named tools deletes and the other does not. They came back as name plus
+  description, which left every tool looking identical at exactly the moment a
+  model decides which to call. The proxy endpoint `/<name>/mcp` was already
+  correct; there is a test for it now too, because "already correct" is a
+  property that stops being true silently.
+
+  Verbatim, not summarised into a marker of the hub's own. The specification
+  says a client "MUST consider tool annotations to be untrusted unless they come
+  from trusted servers", and the hub is in no position to vouch for a child it
+  merely forwards to — a derived `kind` would have been the hub's claim about
+  somebody else's server. A child that declared nothing arrives with no
+  `annotations` key at all; an empty object would read as all four defaults,
+  which is a claim it did not make.
+
+- **The six meta-tools annotate themselves**, which they never did. The
+  specification gives `destructiveHint` and `openWorldHint` a default of `true`,
+  so silence declared `list_servers` a destructive tool in an open world.
+  `call_tool` is the one where that really is the answer: whatever the named
+  tool does, `call_tool` does.
+
+- **The hub speaks both MCP revisions on every endpoint.** `2026-07-28` and
+  `2025-11-25`, on `/hub`, on `/<name>/mcp` and over `--stdio`; the client
+  picks during its opening exchange and cannot tell from the answers which one
+  it got. Which traffic is carried on which revision is a
+  [matrix](https://mcp-hub.ni-c.de/reference/standards#what-is-carried-per-revision)
+  now, with a test behind every row, because this project has twice announced
+  something it did not deliver.
+
+  The 2025 path is untouched: it is served by the same transport that always
+  served it, so a `GET` still opens a stream and a `DELETE` still answers 200
+  rather than the 405 the modern handler's own fallback would give. claude.ai
+  opens that stream on every reconnect.
+
+- **Change notifications travel, on both sides.** A `2026-07-28` client opens a
+  `subscriptions/listen` stream and names what it wants — tool, prompt and
+  resource list changes, or specific resource URIs — and the hub delivers.
+  Upstream it subscribes to each child the way that child understands:
+  `subscriptions/listen` to a 2026 server, `resources/subscribe` to a 2025 one.
+  So a server that has never heard of the newer mechanism still reaches a client
+  that speaks nothing else, which is the common case in practice.
+  [Details](https://mcp-hub.ni-c.de/guide/subscriptions).
+
+  This is the second thing the 2026 revision made possible for a stateless
+  gateway, and for the same reason as the first: the state is the open HTTP
+  response rather than a session table, so a client reconnecting without closing
+  anything leaves nothing behind. One handler per route now outlives the
+  request, because it owns those streams — it holds the sockets currently open
+  and no record of who opened them.
+
+  The bookkeeping is a lease per stream rather than a reference count per URI.
+  A count cannot tell "nobody wants this any more" from "the one leaving wanted
+  it too", and gets it wrong in the direction that silently stops delivering to
+  the client that stayed.
+
+  A sleeping [on-demand](https://mcp-hub.ni-c.de/guide/on-demand) server watches
+  nothing: subscribing does not wake it — the acknowledgment comes from the
+  cached capabilities — and the subscription is re-established when something
+  else does, followed by a re-read signal for everything that client was
+  watching. What changed during the nap is not reported, only that there is
+  reason to look. `subscriptions: "off"` withdraws one server's right to push.
+
+- **An end-to-end suite that runs the hub the way it ships.** Three tiers: in
+  this process, as `node dist/index.js`, and as the published image through
+  `demo/compose.yml`. It is not part of `npm test`, which stays fast and stays
+  the pull-request gate; this one runs nightly, on any pull request that touches
+  it, and as a gate on release tags. [What it is
+  for](https://github.com/ni-c/mcp-hub/blob/main/e2e/README.md).
+
+  The tiers exist because a class of question cannot be asked from inside the
+  process being tested. `src/index.ts`'s startup block — environment parsing,
+  the listener, signal handlers — is entered only when the file is the program.
+  `mcp-hub-admin` is a *separate program* sharing `/data` with a running hub,
+  and a test that called the same `AuthStore` instance proves the hub can read
+  its own memory; that mistake shipped once, as a revocation that reported
+  success and did nothing. An `uncaughtException` in-process takes the test
+  runner down rather than the hub. And uid 1000, a read-only root filesystem,
+  the healthcheck and tini cannot be wrong in a bare process at all.
+
+  The consumer is a scripted agent rather than a model. It discovers through the
+  six meta-tools and then builds its arguments *from the schema the hub
+  published*, which is the whole point: a schema damaged in transit — truncated,
+  budget-clipped, missing a property it declares required — stops working there
+  and nowhere else. A model handed a broken schema improvises around it, and
+  improvisation is not an assertion.
+
+  Alongside it: thirteen fixture servers that each misbehave in one specific way
+  no off-the-shelf server does, a four-cell client-era × child-era matrix built
+  on one catalogue registered twice so a difference can only be the hub's, raw
+  `fetch` conformance checks that assert an HTTP status and a JSON-RPC code
+  together, and a recorder for what real clients put on the wire.
+
+- **`src/timings.ts`.** The supervisor's ping interval, wake timeout, idle
+  sweep and backoff curve read the environment, the same way `mcp-limits.ts`
+  already did for the call deadline. `IDLE_TIMEOUT_MS` is the sub-minute sibling
+  of `IDLE_TIMEOUT_MINUTES`.
+
+  Defaults are unchanged, so no deployment behaves differently. What changes is
+  that the behaviour becomes observable: at the shipped numbers, watching a
+  server fall asleep costs a minute and the five-minute backoff ceiling cannot
+  be reached at all. Four minutes of a test suite spent asleep is four minutes
+  somebody eventually deletes.
+
+### Fixed
+
+- **Three capabilities the hub announced but did not serve.** `listChanged` for
+  tools, prompts and resources is now advertised only on the revision that
+  carries it, and is true there; `resources.subscribe` likewise, having been
+  stripped outright since 0.6.3. `logging` is no longer advertised at all —
+  `logging/setLevel` never had a handler, so a client that believed it got a
+  `-32601` at call time, and on `2026-07-28` the level is per-request `_meta`
+  with no RPC left to implement.
+
+  A 2025 client is now told none of the three. That is a visible change, and the
+  honest one: it was never going to receive any of them.
+
+- **A `subscriptions/listen` POST no longer occupies an in-flight slot.** It is
+  a POST whose response stays open for the life of the subscription, so counted
+  as work in progress it held one of `MCP_MAX_CONCURRENT_REQUESTS` (default
+  four) the entire time — a handful of subscribed clients would have locked
+  every tool call on the hub out with a 429 while nothing was running. It is the
+  standing channel by another name and is charged to
+  `MCP_MAX_CONCURRENT_STREAMS`, where the 2025 era's `GET` already went.
+
+- **Elicitation travels end to end.** A child server that needs to ask the
+  person at the far end something — `smtp-mcp` before it sends, `imap-mcp`
+  before it expunges a mailbox — now reaches them through the hub instead of
+  silently falling back to a weaker check. On `2026-07-28` a question is a
+  *result*, not a push: the call ends, the person decides, the client retries
+  with the answer. Nothing is held open, so the stateless transport is what
+  makes this work rather than what prevented it.
+
+  The hub adds what follows from the question crossing a trust boundary. It is
+  attributed to the server that asked, after the text has been stripped of the
+  bidirectional and zero-width characters that could visually undo that line.
+  Embedded `sampling/createMessage` and `roots/list` requests are dropped and
+  named in the log — relaying them would spend the caller's model budget and
+  hand out its workspace layout on a child's say-so. The child's `_meta` is
+  removed. The resumption state is signed and bound to the server, the tool,
+  the OAuth client and the endpoint, so it cannot be pasted onto another call.
+
+  The capability is mirrored per request from what the client itself declared,
+  and never widened — so it is announced only for a call whose answer has
+  somewhere to go. A `2025-11-25` client over HTTP is therefore not offered it
+  at all, and the child takes its own fallback, which is the same rule this
+  project already applies to `listChanged`.
+
+  `"passthrough": "off"` on a server withdraws its right to put words in front
+  of the user without switching it off; `MCP_ELICITATION=false` is the global
+  brake. Four further `MCP_ELICITATION_*` variables bound rounds, lifetime,
+  message size and payload size. See
+  [Elicitation](https://mcp-hub.ni-c.de/guide/elicitation).
+
+- **A question from a server that had gone to sleep was lost.** The hub decided
+  whether a child could be asked by reading the protocol era off its client,
+  and an on-demand child that is asleep has none — so the first tool call after
+  an idle nap silently took the weaker path and the second one worked. The wake
+  now happens before the decision.
+
+### Changed
+
+- **On MCP SDK 2.0.** The single `@modelcontextprotocol/sdk` package has been
+  replaced by the split `@modelcontextprotocol/{core,client,server,node,express}`.
+  Behaviour is unchanged by the migration itself: no wire format, endpoint or
+  response differs, and deployments need do nothing. Speaking `2026-07-28` as
+  well is a separate change, listed under Added above — it is what the
+  migration was for.
+
+  Notably **not** installed is `@modelcontextprotocol/server-legacy`, the frozen
+  copy of v1's authorization-server helpers that npm marks deprecated on
+  install. Replacing the hand-written OAuth server with `oidc-provider` first is
+  what made that possible — this migration only had to touch the MCP wire layer.
+
+  Two things the mechanical migration would have changed quietly, and did not:
+  `tools/list` is still walked one page at a time, because v2's `listTools()`
+  aggregates the whole pagination internally and would have bypassed the tool
+  count and metadata budgets that bound what a hostile child can make the hub
+  hold in memory; and a malformed line on a child's stdio is still reported,
+  because v2's read buffer skips unparseable lines in silence.
+
+- **The authorization server is now `oidc-provider` instead of ~900 lines of
+  hand-written OAuth.** Every endpoint keeps its path, the login and consent
+  pages are the same pages, and the discovery document advertises everything it
+  advertised before — there is a test that compares it field by field against
+  the old one and fails on anything that is not a written-down decision.
+
+  **This is a clean cut, not a migration: every client re-registers and
+  authorizes once more.** Tokens issued by the previous server are refused
+  rather than honoured, because a credential nothing can revoke is worse than a
+  reconnect. Registrations, approvals and API tokens in `state.json` are
+  untouched; only the OAuth artifacts are new.
+
+  Access tokens are **opaque** rather than JWTs. That is what makes
+  `mcp-hub-admin clients revoke` take effect on the next call instead of when
+  the token expires: oidc-provider never persists a JWT, so a JWT could not be
+  withdrawn at all. Nothing that presents a token has to change.
+
+  Several things got stricter on the way. Replaying a rotated refresh token now
+  revokes the grant's access tokens as well. Client assertions may not be valid
+  for longer than five minutes. Nothing an authorization server holds is written
+  to `state.json` in a form anyone could present — the file used to keep hashes
+  of refresh tokens, and now keeps hashes of everything. A `Host` header can no
+  longer influence the URLs in the discovery document.
+
+  Visible differences, none of which change what is allowed: redirects use
+  `303` where they used `302`, `invalid_client` may be answered `401` rather
+  than `400` (RFC 6749 §5.2 allows either), a rejected redirect URI is reported
+  as `invalid_redirect_uri`, and the login page lives at `/interaction/<id>/`
+  instead of being rendered by `/authorize` directly. The discovery document
+  gained the OpenID fields oidc-provider always publishes; no ID token is ever
+  issued.
+
+- **Four more reserved server names: `jwks`, `interaction`, `session` and
+  `userinfo`.** They are paths the authorization server answers on, and a server
+  configured under one of them would shadow the login flow rather than merely be
+  unreachable. A configuration using one of these names is now refused at
+  startup with the same message as for `token` or `authorize`.
+
+- **Both images now run on Node 24 ("Krypton"), the active LTS line, instead of
+  Node 26.** Node 26 is Current until October, and a non-LTS build leaves
+  `process.release.lts` unset — which is not cosmetic, because libraries branch
+  on it. It is also what the CI matrix already tests against, so the container
+  and the test runs no longer sat on different majors.
+
+  Nothing else changes: npm is still replaced wholesale and its three vulnerable
+  vendored packages still overwritten in place, verified against the built
+  image.
+
+### Security
+
+Five findings from an internal review of the authorization surface, which is the
+half that was rewritten onto oidc-provider in this cycle and had not been looked
+at adversarially since.
+
+- **`/token` bounds the body it reads.** It is the one provider path whose
+  request stream the hub takes away from the library — `stripPhantomSecret` has
+  to read it to strip a presented secret — and it read it without a ceiling.
+  `/token` cannot ask who is calling before it reads, because the credentials
+  are in the body, so an anonymous 300 MB request took the process from 157 MB
+  resident to 1.4 GB, and the per-path budget still allows fifty of them per
+  caller per window. The ceiling is oidc-provider's own 56 KiB, so nothing a
+  legitimate client sends changes, and an oversized body now gets the same
+  answer the library would have given it.
+
+- **A public client's record no longer carries a secret.** RFC 7591 makes
+  `client_secret_basic` the default when `token_endpoint_auth_method` is
+  omitted — which is what Claude and ChatGPT both do — so the authorization
+  server minted and persisted a real secret before `clientDefaults` rewrote the
+  method to `none`. Two consequences, neither visible from outside:
+  `state.json` gained a value someone could present, which is the one thing it
+  is careful never to hold; and `stripPhantomSecret` gates on the stored client
+  having no secret, so it stopped firing for exactly the clients it exists for.
+  A connector that echoed the secret from its registration response got
+  `401 invalid_client` — the failure quirk 2 was written to prevent. The
+  response still carries a secret, because ChatGPT insists on one; only the
+  record is cleaned.
+
+- **A hundred wrong passwords no longer lock the operator out.** The global
+  failure ceiling refused every address once it was reached, so an attacker
+  could close the only administrative way in — from one host, in under a second,
+  renewable every fifteen minutes — and the operator holding the correct
+  password got `429` from an address that had never touched the form. The
+  ceiling now refuses the callers that are guessing, and refuses them on their
+  first failure rather than their tenth once the hub is under a distributed
+  attempt, so the total number of guesses still collapses. What it no longer
+  does is let them spend somebody else's budget.
+
+- **Every per-caller budget counts an IPv6 /64, not an address.** A /64 is the
+  smallest block one subscriber is handed, and a /56 or /48 is what a
+  residential line usually gets, so a limiter keyed on the full address counted
+  one host as billions of callers: twenty-five registrations from twenty-five
+  addresses in one network spent twenty-five budgets of twenty. IPv4 keeps its
+  own address, and an IPv4-mapped form is folded back onto it so the same caller
+  is not counted twice for arriving over a dual-stack listener. Log lines are
+  unchanged — fail2ban still gets the host that actually connected.
+
+- **A `TRUSTED_PROXIES` list that never matches is now said out loud.** It is
+  compared against the address the connection came from, and the easiest way to
+  get it wrong is the least visible: a proxy configured as
+  `proxy_pass http://localhost:…` on a dual-stack host arrives over `::1`,
+  which `127.0.0.1` does not cover. Every forwarded header is then ignored and
+  per-caller limiting collapses into one global counter — the exact failure the
+  startup warning covers for an *unset* list, with nothing said when the list is
+  merely wrong. The hub now says so once, when a forwarded header arrives from
+  an address it does not trust.
+
+Unchanged, and confirmed by the same review: the docker policy proxy refused
+every one of thirty-three attempts to reach the daemon past it — privileged
+containers, host mounts, `Mounts` instead of `Binds`, foreign images, prototype
+pollution in the create body, duplicate query parameters, encoded traversal in a
+container name, `exec`, `build`, `networks/create`; and the metadata-document
+fetcher refused literal private addresses, IPv4-mapped ones and public names
+that resolve inward.
+
 ## [0.10.0] - 2026-08-27
 
 ### Added

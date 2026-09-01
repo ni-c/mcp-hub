@@ -7,9 +7,23 @@ Thanks for taking the time. Small, focused changes with tests land fastest.
 ```sh
 git clone https://github.com/ni-c/mcp-hub.git && cd mcp-hub
 npm install
-npm test          # vitest: config, OAuth flow, proxy E2E, hub, hot reload, API tokens
+npm test          # vitest: config, OAuth flow, proxy, hub, hot reload, API tokens
 npm run dev       # tsx; needs EXTERNAL_URL, PASSWORD, CONFIG_PATH, DATA_PATH
 ```
+
+There is a second suite that runs the hub as a real process and as the
+published image. It is not part of `npm test` and does not need to be run
+before every push:
+
+```sh
+npm run build                                    # the spawned tiers execute dist/
+MCPHUB_E2E_TIERS=inproc,process npm run test:e2e
+```
+
+What it is for, and why it is separate, is in [`e2e/README.md`](e2e/README.md).
+Run it when you touch `src/index.ts`, `src/supervisor.ts`, `src/auth/store.ts`,
+`src/limits.ts`, the Dockerfiles or `demo/` — those are the places where "it
+works in-process" and "it works" are different claims.
 
 A minimal dev environment:
 
@@ -22,8 +36,14 @@ EXTERNAL_URL=http://localhost:3000 PASSWORD=dev \
 ## Expectations
 
 - **Tests.** Behaviour changes come with a test that fails without the change.
-  The suite is fast (~2 s) — run it before pushing. CI runs it on Node 20 and
-  22, plus CodeQL and a Trivy scan of the container image.
+  The fast suite runs in a few seconds — run it before pushing. CI runs it on
+  Node 22 and 24, plus CodeQL and a Trivy scan of both container images. The
+  end-to-end suite runs nightly, on any pull request that touches `e2e/` or
+  `demo/`, and as a gate on release tags.
+- **Nothing sleeps in a test.** Wait for a condition with a deadline, never for
+  a duration. Timing constants live in `src/timings.ts` so that behaviour which
+  takes a minute in production can be *configured* short rather than waited out;
+  a suite that sleeps is a suite somebody deletes.
 - **Comments** explain constraints the code cannot show — not what the next
   line does.
 - **Security-sensitive areas** (`src/auth/*`): please describe the attack you

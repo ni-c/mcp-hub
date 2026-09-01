@@ -1,4 +1,4 @@
-import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
+import type { OAuthClientInformationFull } from '@modelcontextprotocol/server';
 import { isPrivateAddress, resolvePublicAddress } from './address.js';
 import { guardedRequest } from './pinned-fetch.js';
 import { isSafeRedirectUri } from './redirect-uri.js';

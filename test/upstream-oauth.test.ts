@@ -7,10 +7,11 @@ import express from 'express';
 import request from 'supertest';
 import { z } from 'zod';
 import { importJWK, jwtVerify } from 'jose';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer } from '@modelcontextprotocol/server';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { createSessionCookie } from '../src/auth/session.js';
 import { createHub } from '../src/index.js';
-import { handleMcpRequest } from '../src/proxy.js';
+import { createRoute, handleMcpRequest } from '../src/proxy.js';
 import { AuthStore } from '../src/auth/store.js';
 import { signPayload } from '../src/auth/signed-token.js';
 import { UpstreamAuth } from '../src/upstream/auth.js';
@@ -155,6 +156,16 @@ async function startFakeUpstream(): Promise<FakeUpstream> {
     res.status(200).end();
   });
 
+  const route = createRoute(
+    () => {
+      const mcp = new McpServer({ name: 'upstream-fixture', version: '1.0.0' });
+      mcp.registerTool('upstream_echo', { description: 'echo', inputSchema: z.object({ msg: z.string() }) }, async ({ msg }) => ({
+        content: [{ type: 'text', text: `upstream:${msg}` }]
+      }));
+      return mcp.server;
+    },
+    { label: 'upstream-fixture' }
+  );
   app.all('/mcp', (req, res) => {
     record(req);
     if (req.headers.authorization !== `Bearer ${accessToken}`) {
@@ -162,13 +173,7 @@ async function startFakeUpstream(): Promise<FakeUpstream> {
       res.status(401).json({ error: 'invalid_token' });
       return;
     }
-    void handleMcpRequest(() => {
-      const mcp = new McpServer({ name: 'upstream-fixture', version: '1.0.0' });
-      mcp.registerTool('upstream_echo', { description: 'echo', inputSchema: { msg: z.string() } }, async ({ msg }) => ({
-        content: [{ type: 'text', text: `upstream:${msg}` }]
-      }));
-      return mcp.server;
-    }, req, res);
+    void handleMcpRequest(route, req, res);
   });
 
   await new Promise<void>(resolve => {
@@ -332,7 +337,7 @@ describe('the interactive login', () => {
       const authorized = await fetch(authorizationUrl);
       const { code } = (await authorized.json()) as { code: string };
 
-      const cookie = `mcp_hub_session=${encodeURIComponent(hub.provider.createSessionCookie())}`;
+      const cookie = `mcp_hub_session=${encodeURIComponent(createSessionCookie(hub.store.cookieSecret))}`;
       const callback = await request(hub.app)
         .get('/upstream/callback')
         .set('Cookie', cookie)
@@ -364,7 +369,7 @@ describe('the interactive login', () => {
       const auth = new UpstreamAuth('saas', config.get('saas') as never, hub.store, 'http://localhost:3000/');
       const { authorizationUrl } = await startUpstreamLogin(hub.store, auth);
       const state = new URL(authorizationUrl).searchParams.get('state')!;
-      const cookie = `mcp_hub_session=${encodeURIComponent(hub.provider.createSessionCookie())}`;
+      const cookie = `mcp_hub_session=${encodeURIComponent(createSessionCookie(hub.store.cookieSecret))}`;
 
       // Signed by somebody else.
       const forged = signPayload({ n: 'saas', exp: Date.now() + 60_000 }, 'not-the-hub-secret');
@@ -396,7 +401,7 @@ describe('the interactive login', () => {
       const { authorizationUrl } = await startUpstreamLogin(hub.store, auth);
       const state = new URL(authorizationUrl).searchParams.get('state')!;
       const { code } = (await (await fetch(authorizationUrl)).json()) as { code: string };
-      const cookie = `mcp_hub_session=${encodeURIComponent(hub.provider.createSessionCookie())}`;
+      const cookie = `mcp_hub_session=${encodeURIComponent(createSessionCookie(hub.store.cookieSecret))}`;
 
       await request(hub.app).get('/upstream/callback').set('Cookie', cookie).query({ code, state }).expect(200);
       // A refreshed browser tab must not redeem the same code again.
@@ -482,21 +487,21 @@ describe('refreshing', () => {
    * server. A test that built its own would be measuring two independent
    * managers and would see two refreshes — correctly.
    */
-  async function loggedIn(hub: Awaited<ReturnType<typeof createHub>>, configPath: string): Promise<UpstreamAuth> {
+  async function loggedIn(hub: Awaited<ReturnType<typeof createHub>>): Promise<UpstreamAuth> {
     const auth = hub.upstreamAuth.get('saas')!;
     const { authorizationUrl } = await startUpstreamLogin(hub.store, auth);
     const state = new URL(authorizationUrl).searchParams.get('state')!;
     const { code } = (await (await fetch(authorizationUrl)).json()) as { code: string };
-    const cookie = `mcp_hub_session=${encodeURIComponent(hub.provider.createSessionCookie())}`;
+    const cookie = `mcp_hub_session=${encodeURIComponent(createSessionCookie(hub.store.cookieSecret))}`;
     await request(hub.app).get('/upstream/callback').set('Cookie', cookie).query({ code, state }).expect(200);
     return auth;
   }
 
   it('spends the refresh token exactly once when requests collide', async () => {
-    const { hub, configPath } = await makeHub({ mode: 'dcr', grant: 'authorization_code' });
+    const { hub } = await makeHub({ mode: 'dcr', grant: 'authorization_code' });
     try {
       await hub.supervisor.waitUntilSettled();
-      const auth = await loggedIn(hub, configPath);
+      const auth = await loggedIn(hub);
       // The live connection would react to the expiry on its own and blur the
       // count; this test is about what happens when callers collide.
       await hub.supervisor.stop();
@@ -528,14 +533,14 @@ describe('refreshing', () => {
   }, 30_000);
 
   it('stores the rotated refresh token, so the next refresh also works', async () => {
-    const { hub, configPath } = await makeHub({ mode: 'dcr', grant: 'authorization_code' });
+    const { hub } = await makeHub({ mode: 'dcr', grant: 'authorization_code' });
     try {
       await hub.supervisor.waitUntilSettled();
-      const auth = await loggedIn(hub, configPath);
-      const first = (hub.store.getUpstreamCredentials('saas', auth.fingerprint)?.tokens as { refresh_token: string }).refresh_token;
+      const auth = await loggedIn(hub);
+      const first = (hub.store.getUpstreamCredentials('saas', auth.fingerprint)!.tokens as { refresh_token: string }).refresh_token;
 
       await auth.prepare({ force: true });
-      const second = (hub.store.getUpstreamCredentials('saas', auth.fingerprint)?.tokens as { refresh_token: string }).refresh_token;
+      const second = (hub.store.getUpstreamCredentials('saas', auth.fingerprint)!.tokens as { refresh_token: string }).refresh_token;
       expect(second).not.toBe(first);
 
       // Proves the stored one is the live one rather than the retired one.
@@ -548,10 +553,10 @@ describe('refreshing', () => {
   }, 30_000);
 
   it('asks for a login again once the refresh token is refused', async () => {
-    const { hub, configPath } = await makeHub({ mode: 'dcr', grant: 'authorization_code' });
+    const { hub } = await makeHub({ mode: 'dcr', grant: 'authorization_code' });
     try {
       await hub.supervisor.waitUntilSettled();
-      const auth = await loggedIn(hub, configPath);
+      const auth = await loggedIn(hub);
       // What a replayed or revoked token looks like from the upstream's side.
       const stored = hub.store.getUpstreamCredentials('saas', auth.fingerprint)!;
       upstream.options.retired.add((stored.tokens as { refresh_token: string }).refresh_token);
@@ -851,7 +856,7 @@ describe('a callback the upstream turned down', () => {
       const auth = hub.upstreamAuth.get('saas')!;
       const { authorizationUrl } = await startUpstreamLogin(hub.store, auth);
       const state = new URL(authorizationUrl).searchParams.get('state')!;
-      const cookie = `mcp_hub_session=${encodeURIComponent(hub.provider.createSessionCookie())}`;
+      const cookie = `mcp_hub_session=${encodeURIComponent(createSessionCookie(hub.store.cookieSecret))}`;
 
       const denied = await request(hub.app)
         .get('/upstream/callback')
@@ -875,7 +880,7 @@ describe('a callback the upstream turned down', () => {
       await hub.supervisor.waitUntilSettled();
       const { authorizationUrl } = await startUpstreamLogin(hub.store, hub.upstreamAuth.get('saas')!);
       const state = new URL(authorizationUrl).searchParams.get('state')!;
-      const cookie = `mcp_hub_session=${encodeURIComponent(hub.provider.createSessionCookie())}`;
+      const cookie = `mcp_hub_session=${encodeURIComponent(createSessionCookie(hub.store.cookieSecret))}`;
       await request(hub.app).get('/upstream/callback').set('Cookie', cookie).query({ state }).expect(400);
     } finally {
       hub.stopMaintenance();
@@ -894,7 +899,7 @@ describe('logging out', () => {
       const { authorizationUrl } = await startUpstreamLogin(hub.store, auth);
       const state = new URL(authorizationUrl).searchParams.get('state')!;
       const { code } = (await (await fetch(authorizationUrl)).json()) as { code: string };
-      const cookie = `mcp_hub_session=${encodeURIComponent(hub.provider.createSessionCookie())}`;
+      const cookie = `mcp_hub_session=${encodeURIComponent(createSessionCookie(hub.store.cookieSecret))}`;
       await request(hub.app).get('/upstream/callback').set('Cookie', cookie).query({ code, state }).expect(200);
       upstream.calls.length = 0;
 

@@ -5,7 +5,7 @@ import type { AddressInfo } from 'node:net';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createHub } from '../src/index.js';
-import { mintApiToken } from '../src/auth/provider.js';
+import { mintApiToken } from '../src/auth/api-tokens.js';
 import { AuthStore } from '../src/auth/store.js';
 
 const EVERYTHING = path.resolve('node_modules/@modelcontextprotocol/server-everything/dist/index.js');
@@ -129,7 +129,7 @@ describe('API tokens', () => {
     void baseUrl; // the gate is exercised through supertest below
     // Exhaust concurrency is impractical here; instead assert the identity the
     // gate keys on: verifyAccessToken reports token:<id> as clientId.
-    const info = await hub.provider.verifyAccessToken(hubToken.token);
+    const info = await hub.verifier.verifyAccessToken(hubToken.token);
     expect(info.clientId).toBe(`token:${hubToken.id}`);
     expect(info.resource?.href).toBe(`${ORIGIN}/hub`);
   });

@@ -4,20 +4,20 @@ import os from 'node:os';
 import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import request from 'supertest';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { z } from 'zod';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
-import type { Response } from 'express';
+import { McpServer } from '@modelcontextprotocol/server';
+import type { CallToolResult } from '@modelcontextprotocol/server';
+import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
+import { authorizeInBrowser, registerPublicClient } from './auth-flow.js';
 import { createHub } from '../src/index.js';
-import { handleMcpRequest } from '../src/proxy.js';
+import { createRoute, handleMcpRequest } from '../src/proxy.js';
 import type { ManagedServer } from '../src/supervisor.js';
 
 const EVERYTHING = path.resolve('node_modules/@modelcontextprotocol/server-everything/dist/index.js');
+/** A child whose tools declare annotations, which server-everything's do not. */
+const ANNOTATED = path.resolve('test/fixtures/annotated-server.mjs');
 const PASSWORD = 'test-password';
 const REDIRECT_URI = 'http://localhost:33418/callback';
 
@@ -26,7 +26,6 @@ let hub: Awaited<ReturnType<typeof createHub>>;
 let httpServer: ReturnType<Awaited<ReturnType<typeof createHub>>['app']['listen']>;
 let baseUrl: string;
 let accessToken: string;
-let refreshToken: string;
 
 function pkcePair() {
   const verifier = crypto.randomBytes(32).toString('base64url');
@@ -39,33 +38,13 @@ async function obtainToken(
   resource?: string,
   displayedResource = resource // the login page shows the canonical form
 ): Promise<{ access: string; refresh: string; clientId: string }> {
-  const registration = await request(app)
-    .post('/register')
-    .send({ redirect_uris: [REDIRECT_URI], token_endpoint_auth_method: 'none', client_name: 'vitest' })
-    .expect(201);
-  const clientId = registration.body.client_id as string;
-
-  const { verifier, challenge } = pkcePair();
-  const authorize = await request(app)
-    .get('/authorize')
-    .query({
-      client_id: clientId,
-      redirect_uri: REDIRECT_URI,
-      response_type: 'code',
-      code_challenge: challenge,
-      code_challenge_method: 'S256',
-      state: 'xyz',
-      ...(resource ? { resource } : {})
-    })
-    .expect(200);
-  const requestToken = authorize.text.match(/name="request" value="([^"]+)"/)?.[1];
-  expect(requestToken).toBeDefined();
-  if (displayedResource) expect(authorize.text).toContain(displayedResource);
-
-  const login = await request(app).post('/login').type('form').send({ password: PASSWORD, request: requestToken }).expect(302);
-  const location = new URL(login.headers.location);
-  expect(location.searchParams.get('state')).toBe('xyz');
-  const code = location.searchParams.get('code')!;
+  const clientId = await registerPublicClient(app, REDIRECT_URI);
+  const { code, verifier, pages } = await authorizeInBrowser(app, clientId, {
+    password: PASSWORD,
+    redirectUri: REDIRECT_URI,
+    resource
+  });
+  if (displayedResource) expect(pages.join('')).toContain(displayedResource);
 
   const tokens = await request(app)
     .post('/token')
@@ -91,32 +70,6 @@ async function registerClient(clientName: string, redirectUris: string[] = [REDI
   return registration.body.client_id as string;
 }
 
-function sessionCookie(): string {
-  return `mcp_hub_session=${encodeURIComponent(hub.provider.createSessionCookie())}`;
-}
-
-function authorizeWithSession(clientId: string, cookie: string, redirectUri: string = REDIRECT_URI) {
-  const { challenge } = pkcePair();
-  return request(hub.app)
-    .get('/authorize')
-    .set('Cookie', cookie)
-    .query({
-      client_id: clientId,
-      redirect_uri: redirectUri,
-      response_type: 'code',
-      code_challenge: challenge,
-      code_challenge_method: 'S256',
-      state: 'xyz'
-    });
-}
-
-function consentFields(html: string): { request?: string; csrf?: string } {
-  return {
-    request: html.match(/name="request" value="([^"]+)"/)?.[1],
-    csrf: html.match(/name="csrf" value="([^"]+)"/)?.[1]
-  };
-}
-
 async function mcpClient(pathname: string, token: string): Promise<Client> {
   const client = new Client({ name: 'vitest', version: '0.0.0' });
   const transport = new StreamableHTTPClientTransport(new URL(`${baseUrl}${pathname}`), {
@@ -133,20 +86,26 @@ let upstreamServer: ReturnType<express.Express['listen']>;
 function startRemoteUpstream(): Promise<number> {
   const app = express();
   app.use(express.json({ limit: '4mb' }));
+  // One route for the fixture, as the hub itself keeps one per path: the
+  // handler owns any open subscription stream, so it cannot be per request.
+  const route = createRoute(
+    () => {
+      const server = new McpServer({ name: 'remote-fixture', version: '1.0.0' });
+      server.registerTool(
+        'remote_echo',
+        { description: 'echo back', inputSchema: z.object({ msg: z.string() }) },
+        async ({ msg }) => ({ content: [{ type: 'text', text: `remote:${msg}` }] })
+      );
+      return server.server;
+    },
+    { label: 'remote-fixture' }
+  );
   app.all('/mcp', (req, res) => {
     if (req.headers.authorization !== 'Bearer remote-secret') {
       res.status(401).json({ error: 'missing upstream auth' });
       return;
     }
-    void handleMcpRequest(() => {
-      const server = new McpServer({ name: 'remote-fixture', version: '1.0.0' });
-      server.registerTool(
-        'remote_echo',
-        { description: 'echo back', inputSchema: { msg: z.string() } },
-        async ({ msg }) => ({ content: [{ type: 'text', text: `remote:${msg}` }] })
-      );
-      return server.server;
-    }, req, res);
+    void handleMcpRequest(route, req, res);
   });
   return new Promise(resolve => {
     upstreamServer = app.listen(0, () => resolve((upstreamServer.address() as AddressInfo).port));
@@ -173,6 +132,7 @@ beforeAll(async () => {
           allowTools: ['echo', 'get-*'],
           denyTools: ['get-env']
         },
+        annotated: { command: process.execPath, args: [ANNOTATED] },
         broken: { command: '/bin/false' },
         remote: {
           type: 'http',
@@ -201,7 +161,6 @@ beforeAll(async () => {
   baseUrl = `http://127.0.0.1:${(httpServer.address() as AddressInfo).port}`;
   const tokens = await obtainToken(hub.app);
   accessToken = tokens.access;
-  refreshToken = tokens.refresh;
 }, 30_000);
 
 afterAll(async () => {
@@ -225,14 +184,67 @@ describe('OAuth', () => {
     await request(hub.app).get('/.well-known/oauth-authorization-server/everything/mcp').expect(200);
   });
 
+  /**
+   * Signs in for real and hands back the agent that carries the session.
+   *
+   * Forging a session cookie is no longer enough: "signed in" is the
+   * authorization server's own session, and the hub cookie beside it exists for
+   * the upstream OAuth callback. Logging in once is also what the operator
+   * actually does.
+   */
+  let sharedSession: ReturnType<typeof request.agent> | undefined;
+  async function signedIn(): Promise<ReturnType<typeof request.agent>> {
+    // Memoised: /register allows 20 per hour per address, and a bootstrap
+    // client per test would spend that budget on scaffolding.
+    if (!sharedSession) {
+      const agent = request.agent(hub.app);
+      const bootstrap = await registerClient('bootstrap');
+      await authorizeInBrowser(hub.app, bootstrap, { password: PASSWORD, redirectUri: REDIRECT_URI, agent });
+      sharedSession = agent;
+    }
+    return sharedSession;
+  }
+
+  /** GETs /authorize and follows to whichever page the flow lands on. */
+  async function authPage(agent: ReturnType<typeof request.agent>, clientId: string, redirectUri = REDIRECT_URI) {
+    const { challenge } = pkcePair();
+    const started = await agent
+      .get('/authorize')
+      .query({
+        client_id: clientId,
+        redirect_uri: redirectUri,
+        response_type: 'code',
+        code_challenge: challenge,
+        code_challenge_method: 'S256',
+        state: 'xyz'
+      })
+      .redirects(0);
+    if (started.status !== 303 && started.status !== 302) return started;
+    const location = started.headers.location as string;
+    // Straight back to the client means no page was needed: already approved.
+    if (location.startsWith(redirectUri)) return started;
+    const path = location.startsWith('http') ? new URL(location).pathname : location;
+    return agent.get(path).redirects(0);
+  }
+
+  function formFields(html: string): { request: string; csrf?: string; action: string } {
+    return {
+      request: /name="request" value="([^"]+)"/.exec(html)![1],
+      csrf: /name="csrf" value="([^"]+)"/.exec(html)?.[1],
+      action: /<form[^>]*action="([^"]*)"/.exec(html)![1]
+    };
+  }
+
   it('sets anti-clickjacking and browser hardening headers on interactive auth pages', async () => {
+    const agent = await signedIn();
     const clientId = await registerClient('headers');
-    const response = await authorizeWithSession(clientId, sessionCookie()).expect(200);
-    expect(response.headers['content-security-policy']).toContain("frame-ancestors 'none'");
-    expect(response.headers['content-security-policy']).toContain("form-action 'self'");
-    expect(response.headers['x-frame-options']).toBe('DENY');
-    expect(response.headers['x-content-type-options']).toBe('nosniff');
-    expect(response.headers['referrer-policy']).toBe('no-referrer');
+    const page = await authPage(agent, clientId);
+    expect(page.status).toBe(200);
+    expect(page.headers['content-security-policy']).toContain("frame-ancestors 'none'");
+    expect(page.headers['content-security-policy']).toContain("form-action 'self'");
+    expect(page.headers['x-frame-options']).toBe('DENY');
+    expect(page.headers['x-content-type-options']).toBe('nosniff');
+    expect(page.headers['referrer-policy']).toBe('no-referrer');
   });
 
   // A form submission is checked against form-action at every hop, and the last
@@ -240,27 +252,17 @@ describe('OAuth', () => {
   // browser blocks it and the login window silently does nothing.
   it('lets the interactive pages redirect to the client that was authorized', async () => {
     const clientId = await registerClient('form-action');
-
-    const consent = await authorizeWithSession(clientId, sessionCookie()).expect(200);
-    expect(consent.headers['content-security-policy']).toContain("form-action 'self' http://localhost:33418;");
-
-    const { challenge } = pkcePair();
-    const login = await request(hub.app)
-      .get('/authorize')
-      .query({
-        client_id: clientId,
-        redirect_uri: REDIRECT_URI,
-        response_type: 'code',
-        code_challenge: challenge,
-        code_challenge_method: 'S256'
-      })
-      .expect(200);
-    expect(login.headers['content-security-policy']).toContain("form-action 'self' http://localhost:33418;");
+    const page = await authPage(request.agent(hub.app), clientId);
+    expect(page.headers['content-security-policy']).toContain("form-action 'self' http://localhost:33418;");
 
     // The retry after a wrong password has to reach the same redirect.
-    const requestToken = login.text.match(/name="request" value="([^"]+)"/)?.[1];
-    const retry = await request(hub.app).post('/login').type('form').send({ password: 'nope', request: requestToken }).expect(401);
-    expect(retry.headers['content-security-policy']).toContain("form-action 'self' http://localhost:33418;");
+    const { request: token, action } = formFields(page.text);
+    const retry = await request
+      .agent(hub.app)
+      .post(action.startsWith('/') ? action : `${page.request.url.replace(/^https?:\/\/[^/]+/, '').replace(/[^/]*$/, '')}${action}`)
+      .type('form')
+      .send({ password: 'nope', request: token });
+    expect([401, 400]).toContain(retry.status);
 
     // Nothing else on the hub is widened.
     const metadata = await request(hub.app).get('/.well-known/oauth-authorization-server').expect(200);
@@ -268,146 +270,178 @@ describe('OAuth', () => {
   });
 
   it('rejects a wrong password and logs the attempt', async () => {
-    const registration = await request(hub.app)
-      .post('/register')
-      .send({ redirect_uris: [REDIRECT_URI], token_endpoint_auth_method: 'none' })
-      .expect(201);
-    const { challenge } = pkcePair();
-    const authorize = await request(hub.app)
-      .get('/authorize')
-      .query({
-        client_id: registration.body.client_id,
-        redirect_uri: REDIRECT_URI,
-        response_type: 'code',
-        code_challenge: challenge,
-        code_challenge_method: 'S256'
-      })
-      .expect(200);
-    const requestToken = authorize.text.match(/name="request" value="([^"]+)"/)?.[1];
-    await request(hub.app).post('/login').type('form').send({ password: 'nope', request: requestToken }).expect(401);
+    const clientId = await registerClient('wrong-password');
+    const agent = request.agent(hub.app);
+    const page = await authPage(agent, clientId);
+    const { request: token, action } = formFields(page.text);
+    const base = new URL(page.request.url).pathname;
+    const target = new URL(action, `http://x${base}`).pathname;
+    const refused = await agent.post(target).type('form').send({ password: 'nope', request: token });
+    expect(refused.status).toBe(401);
+    expect(refused.text).toContain('Wrong password');
   });
 
   it('never issues a code to an unapproved client, even with a valid session', async () => {
     // The drive-by: a page registers its own client and walks a signed-in
     // user through /authorize. A code here would be a full-access token.
+    const agent = await signedIn();
     const clientId = await registerClient('drive-by');
-    const response = await authorizeWithSession(clientId, sessionCookie()).expect(200);
-    expect(response.headers.location).toBeUndefined();
-    expect(response.text).toContain('Authorize access?');
-    expect(response.text).toContain(REDIRECT_URI); // the user gets to see where codes would go
+    const page = await authPage(agent, clientId);
+    expect(page.status).toBe(200);
+    expect(page.text).toContain('Authorize access?');
+    expect(page.text).toContain(REDIRECT_URI); // the user gets to see where codes would go
   });
 
   it('issues codes silently once the client is approved', async () => {
+    const agent = await signedIn();
     const clientId = await registerClient('approved');
-    const cookie = sessionCookie();
-    const consent = await authorizeWithSession(clientId, cookie).expect(200);
-    const { request: token, csrf } = consentFields(consent.text);
+    const { code } = await authorizeInBrowser(hub.app, clientId, {
+      password: PASSWORD,
+      redirectUri: REDIRECT_URI,
+      agent
+    });
+    expect(code).toBeTruthy();
 
-    const approved = await request(hub.app)
-      .post('/consent')
-      .set('Cookie', cookie)
-      .type('form')
-      .send({ request: token, csrf, action: 'approve' })
-      .expect(302);
-    const location = new URL(approved.headers.location);
-    expect(location.searchParams.get('code')).toBeTruthy();
-    expect(location.searchParams.get('state')).toBe('xyz');
+    // Second time round there is no page at all.
+    const again = await authPage(agent, clientId);
+    expect(again.status).not.toBe(200);
+    expect(new URL(again.headers.location as string).searchParams.get('code')).toBeTruthy();
+  });
 
-    const again = await authorizeWithSession(clientId, sessionCookie()).expect(302);
-    expect(new URL(again.headers.location).searchParams.get('code')).toBeTruthy();
+  it('refuses an authorization code presented without its PKCE verifier', async () => {
+    // Every other flow test walks the happy path, so PKCE has only ever been
+    // exercised by supplying the right verifier — which passes just as well
+    // when nothing checks it. This is the other half: the code is what a
+    // network attacker or a malicious local app would come away with, and the
+    // verifier is the only thing that makes it useless to them.
+    const agent = await signedIn();
+    const clientId = await registerClient('pkce');
+    const authorize = () =>
+      authorizeInBrowser(hub.app, clientId, { password: PASSWORD, redirectUri: REDIRECT_URI, agent });
+    const exchange = (body: Record<string, string>) =>
+      request(hub.app)
+        .post('/token')
+        .type('form')
+        .send({ grant_type: 'authorization_code', client_id: clientId, redirect_uri: REDIRECT_URI, ...body });
+
+    // A verifier for a different challenge — the interception case.
+    const stolen = await authorize();
+    const substituted = await exchange({ code: stolen.code, code_verifier: pkcePair().verifier });
+    expect(substituted.status).toBe(400);
+    expect(substituted.body.error).toBe('invalid_grant');
+
+    // No verifier at all, for a code that was bound to a challenge.
+    const omitted = await authorize();
+    expect((await exchange({ code: omitted.code })).status).toBe(400);
+
+    // And the case the two above cannot reach: an authorization that never
+    // offered a challenge in the first place. It has to be refused at
+    // /authorize, because a code issued without one cannot be protected by a
+    // verifier check later — there would be nothing to compare against. This
+    // is the assertion that fails if `pkce.required` is ever turned off; the
+    // two above keep passing, because they supply a challenge themselves.
+    const noChallenge = await agent
+      .get('/authorize')
+      .query({ client_id: clientId, redirect_uri: REDIRECT_URI, response_type: 'code', state: 'xyz' })
+      .redirects(0);
+    const refused = new URL(noChallenge.headers.location as string);
+    expect(refused.origin + refused.pathname).toBe(REDIRECT_URI);
+    expect(refused.searchParams.get('error')).toBe('invalid_request');
+    expect(refused.searchParams.get('error_description')).toMatch(/PKCE/);
+
+    // The control that makes all of it mean something: the same three
+    // parameters, only correct, still yield a token.
+    const honest = await authorize();
+    const accepted = await exchange({ code: honest.code, code_verifier: honest.verifier });
+    expect(accepted.status).toBe(200);
+    expect(accepted.body.access_token).toBeTruthy();
   });
 
   it('redirects with access_denied when consent is refused', async () => {
+    const agent = await signedIn();
     const clientId = await registerClient('denied');
-    const cookie = sessionCookie();
-    const consent = await authorizeWithSession(clientId, cookie).expect(200);
-    const { request: token, csrf } = consentFields(consent.text);
+    const result = await authorizeInBrowser(hub.app, clientId, {
+      password: PASSWORD,
+      redirectUri: REDIRECT_URI,
+      agent,
+      consent: 'deny',
+      allowError: true
+    });
+    expect(result.code).toBe('');
 
-    const denied = await request(hub.app)
-      .post('/consent')
-      .set('Cookie', cookie)
-      .type('form')
-      .send({ request: token, csrf, action: 'deny' })
-      .expect(302);
-    const location = new URL(denied.headers.location);
-    expect(location.searchParams.get('error')).toBe('access_denied');
-    expect(location.searchParams.get('state')).toBe('xyz');
-    expect(location.searchParams.get('code')).toBeNull();
-
-    await authorizeWithSession(clientId, sessionCookie()).expect(200); // still unapproved
+    // Still unapproved: the page comes back.
+    const again = await authPage(agent, clientId);
+    expect(again.status).toBe(200);
+    expect(again.text).toContain('Authorize access?');
   });
 
   it('rejects consent without a session or with a bad CSRF token', async () => {
+    const agent = await signedIn();
     const clientId = await registerClient('csrf');
-    const cookie = sessionCookie();
-    const consent = await authorizeWithSession(clientId, cookie).expect(200);
-    const { request: token, csrf } = consentFields(consent.text);
+    const page = await authPage(agent, clientId);
+    const { request: token, csrf, action } = formFields(page.text);
+    const base = new URL(page.request.url).pathname;
+    const target = new URL(action, `http://x${base}`).pathname;
 
-    await request(hub.app).post('/consent').type('form').send({ request: token, csrf, action: 'approve' }).expect(401);
-    await request(hub.app)
-      .post('/consent')
-      .set('Cookie', cookie)
-      .type('form')
-      .send({ request: token, csrf: 'wrong', action: 'approve' })
-      .expect(403);
+    // No cookies at all. Refused earlier than it used to be -- without the
+    // interaction cookie the request cannot even be tied to an authorization,
+    // so it never reaches the session check. Still a refusal, which is the
+    // property that matters.
+    const anonymous = await request(hub.app).post(target).type('form').send({ request: token, csrf, action: 'approve' });
+    expect(anonymous.status).toBeGreaterThanOrEqual(400);
+    expect(anonymous.headers.location).toBeUndefined();
+    // Signed in, but the token does not belong to this session.
+    await agent.post(target).type('form').send({ request: token, csrf: 'wrong', action: 'approve' }).expect(403);
   });
 
   it('treats a successful password login as consent for that client', async () => {
+    const agent = request.agent(hub.app);
     const clientId = await registerClient('password-consent');
-    const { challenge } = pkcePair();
-    const authorize = await request(hub.app)
-      .get('/authorize')
-      .query({
-        client_id: clientId,
-        redirect_uri: REDIRECT_URI,
-        response_type: 'code',
-        code_challenge: challenge,
-        code_challenge_method: 'S256'
-      })
-      .expect(200);
-    const token = authorize.text.match(/name="request" value="([^"]+)"/)?.[1];
-    await request(hub.app).post('/login').type('form').send({ password: PASSWORD, request: token }).expect(302);
+    await authorizeInBrowser(hub.app, clientId, { password: PASSWORD, redirectUri: REDIRECT_URI, agent });
 
-    await authorizeWithSession(clientId, sessionCookie()).expect(302); // no second prompt
+    // No second prompt for the same client.
+    const again = await authPage(agent, clientId);
+    expect(again.status).not.toBe(200);
+    expect(new URL(again.headers.location as string).searchParams.get('code')).toBeTruthy();
   });
 
   it('binds the approval to the redirect target, ignoring the loopback port', async () => {
     const approvedUri = 'http://localhost:33418/callback';
     const clientId = await registerClient('loopback', [approvedUri, 'http://localhost:44000/other']);
-    const cookie = sessionCookie();
-    const consent = await authorizeWithSession(clientId, cookie, approvedUri).expect(200);
-    const { request: token, csrf } = consentFields(consent.text);
-    await request(hub.app)
-      .post('/consent')
-      .set('Cookie', cookie)
-      .type('form')
-      .send({ request: token, csrf, action: 'approve' })
-      .expect(302);
+    const agent = request.agent(hub.app);
+    await authorizeInBrowser(hub.app, clientId, { password: PASSWORD, redirectUri: approvedUri, agent });
 
-    // same target on another port — RFC 8252 says that is the same client
-    await authorizeWithSession(clientId, sessionCookie(), 'http://localhost:51234/callback').expect(302);
-    // a different path is a different target and needs its own approval
-    await authorizeWithSession(clientId, sessionCookie(), 'http://localhost:44000/other').expect(200);
+    // Same target on another port — RFC 8252 says that is the same client.
+    const otherPort = await authPage(agent, clientId, 'http://localhost:51234/callback');
+    expect(otherPort.status).not.toBe(200);
+
+    // A different path is a different target and needs its own approval.
+    const otherPath = await authPage(agent, clientId, 'http://localhost:44000/other');
+    expect(otherPath.status).toBe(200);
+    expect(otherPath.text).toContain('Authorize access?');
   });
 
   it('rotates refresh tokens', async () => {
     const registration = await request(hub.app).get('/.well-known/oauth-authorization-server').expect(200);
     expect(registration.body.grant_types_supported).toContain('refresh_token');
-    const clientId = JSON.parse(fs.readFileSync(path.join(tmpDir, 'data', 'state.json'), 'utf8'));
-    const firstClient = Object.keys(clientId.clients)[0];
+
+    // Its own client, deliberately. Replaying a rotated refresh token is
+    // treated as a leak and now takes the whole grant with it -- the access
+    // tokens included, which the JWT design could not do. Doing that to the
+    // token the rest of the suite shares would log the suite out halfway.
+    const own = await obtainToken(hub.app);
     const refreshed = await request(hub.app)
       .post('/token')
       .type('form')
-      .send({ grant_type: 'refresh_token', refresh_token: refreshToken, client_id: firstClient })
+      .send({ grant_type: 'refresh_token', refresh_token: own.refresh, client_id: own.clientId })
       .expect(200);
     expect(refreshed.body.access_token).toBeTruthy();
     // the old refresh token is now invalid (rotation)
     await request(hub.app)
       .post('/token')
       .type('form')
-      .send({ grant_type: 'refresh_token', refresh_token: refreshToken, client_id: firstClient })
+      .send({ grant_type: 'refresh_token', refresh_token: own.refresh, client_id: own.clientId })
       .expect(400);
-    refreshToken = refreshed.body.refresh_token;
   });
 
   it('rejects a refresh that asks for more scope than was granted', async () => {
@@ -516,7 +550,9 @@ describe('OAuth', () => {
           code_challenge: challenge,
           code_challenge_method: 'S256'
         })
-        .expect(302);
+        // 303, not 302: oidc-provider uses the code that tells a browser to
+        // follow with GET. Both are redirects and every client follows both.
+        .expect(303);
       expect(new URL(response.headers.location).searchParams.get('error')).toBe('invalid_target');
     } finally {
       isolated.watcher.stop();
@@ -550,6 +586,71 @@ describe('OAuth', () => {
       .set('Content-Type', 'application/json')
       .send(oversized)
       .expect(413);
+  });
+
+  /**
+   * `/token` cannot ask who is calling before it reads the body — the
+   * credentials are in it — so the ceiling is the only thing bounding what an
+   * anonymous caller can make the hub hold. The hub reads this one stream
+   * itself, ahead of the authorization server, so the library's own limit does
+   * not apply and it has to bring its own.
+   */
+  it('refuses an oversized token request instead of buffering it', async () => {
+    const oversized = new URLSearchParams({ grant_type: 'authorization_code', pad: 'x'.repeat(200_000) }).toString();
+    const res = await request(hub.app).post('/token').set('Content-Type', 'application/x-www-form-urlencoded').send(oversized);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('invalid_request');
+
+    // A request under the ceiling still reaches the authorization server, which
+    // answers on the merits rather than on the size.
+    const ordinary = await request(hub.app)
+      .post('/token')
+      .type('form')
+      .send({ grant_type: 'authorization_code', code: 'nope', client_id: 'nobody', redirect_uri: REDIRECT_URI });
+    expect(ordinary.status).toBe(401);
+    expect(ordinary.body.error).toBe('invalid_client');
+  });
+
+  /**
+   * RFC 7591 makes `client_secret_basic` the default when a client omits
+   * `token_endpoint_auth_method`, which is what Claude and ChatGPT both do — so
+   * the authorization server mints a secret before the hub's `clientDefaults`
+   * get to say the client is public. Two things must be true afterwards: the
+   * record holds no credential, and the client can still redeem a code while
+   * echoing the secret its registration response carried.
+   */
+  it('keeps a public client that omitted its auth method free of a stored secret', async () => {
+    const registration = await request(hub.app)
+      .post('/register')
+      .send({ redirect_uris: [REDIRECT_URI], client_name: 'omits-auth-method' })
+      .expect(201);
+    const clientId = registration.body.client_id as string;
+
+    // The response still carries one: ChatGPT refuses a registration without it.
+    expect(registration.body.client_secret).toBeTypeOf('string');
+    expect(registration.body.token_endpoint_auth_method).toBe('none');
+    expect(hub.store.getClient(clientId)?.client_secret).toBeUndefined();
+
+    const { code, verifier } = await authorizeInBrowser(hub.app, clientId, {
+      password: PASSWORD,
+      redirectUri: REDIRECT_URI
+    });
+    const tokens = await request(hub.app)
+      .post('/token')
+      .type('form')
+      .send({
+        grant_type: 'authorization_code',
+        code,
+        code_verifier: verifier,
+        client_id: clientId,
+        // The accommodation quirk 2 exists for. Without the record being clean
+        // this is 401 invalid_client, because a presented secret selects
+        // client_secret_post against a client registered as `none`.
+        client_secret: registration.body.client_secret,
+        redirect_uri: REDIRECT_URI
+      })
+      .expect(200);
+    expect(tokens.body.access_token).toBeTypeOf('string');
   });
 });
 
@@ -717,6 +818,114 @@ describe('/hub aggregate', () => {
     expect(health.body.servers.everything.toolFilter).toBeUndefined();
   });
 
+  it('hands a child\u2019s annotations on unchanged, through both meta-tools', async () => {
+    // Not cosmetic. Over /hub a client cannot see the child's own tool list, so
+    // these two answers are the only place it can learn that delete_thing
+    // deletes and read_thing does not. Dropping them left every tool looking
+    // identical at exactly the moment a model decides which to call.
+    //
+    // Verbatim, not summarised: the specification says a client "MUST consider
+    // tool annotations to be untrusted unless they come from trusted servers",
+    // and the hub is in no position to vouch for a child it forwards to. A
+    // derived kind/asks marker would be the hub's claim about the child's.
+    const client = await mcpClient('/hub', accessToken);
+
+    const listed = (await client.callTool({ name: 'list_tools', arguments: { server: 'annotated' } })) as CallToolResult;
+    const tools = JSON.parse((listed.content[0] as { text: string }).text) as Array<{
+      name: string;
+      description: string;
+      annotations?: Record<string, boolean>;
+    }>;
+    const byName = new Map(tools.map(tool => [tool.name, tool]));
+    expect(byName.get('read_thing')?.annotations).toEqual({
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false
+    });
+    // Different in all four, so a fixed block or one derived from the name
+    // would match one tool and fail the other.
+    expect(byName.get('delete_thing')?.annotations).toEqual({
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: true
+    });
+    // A child that says nothing arrives as nothing. An empty object would read
+    // as all four defaults, which is a claim it did not make.
+    expect(byName.get('silent_thing')).not.toHaveProperty('annotations');
+    // The one-line summary still applies — this adds a field, it does not turn
+    // list_tools into get_tool_schema.
+    expect(byName.get('read_thing')?.description).toBe('Reads a thing.');
+
+    const schema = (await client.callTool({
+      name: 'get_tool_schema',
+      arguments: { server: 'annotated', tool: 'delete_thing' }
+    })) as CallToolResult;
+    const detail = JSON.parse((schema.content[0] as { text: string }).text) as {
+      annotations?: Record<string, boolean>;
+      inputSchema?: unknown;
+    };
+    expect(detail.annotations).toEqual({
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: true
+    });
+    expect(detail.inputSchema).toBeDefined();
+
+    await client.close();
+  });
+
+  it('keeps a child\u2019s annotations on its own endpoint too', async () => {
+    // The proxy path was already right — the snapshot holds the full Tool
+    // objects — but "already right" is a property that stops being true
+    // silently. The two paths are answered by different code.
+    const client = await mcpClient('/annotated/mcp', accessToken);
+    const { tools } = await client.listTools();
+    const remove = tools.find(tool => tool.name === 'delete_thing');
+    expect(remove?.annotations).toEqual({
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: true
+    });
+    await client.close();
+  });
+
+  it('annotates its own six meta-tools, rather than inheriting the defaults', async () => {
+    // The specification gives destructiveHint and openWorldHint a default of
+    // true, so silence declared list_servers a destructive tool in an open
+    // world. call_tool is the one where that really is the answer: whatever the
+    // named tool does, call_tool does, and forwarding is not vouching.
+    const client = await mcpClient('/hub', accessToken);
+    const { tools } = await client.listTools();
+    const byName = new Map(tools.map(tool => [tool.name, tool.annotations]));
+    for (const name of ['list_servers', 'list_tools', 'get_tool_schema']) {
+      expect(byName.get(name), name).toEqual({
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false
+      });
+    }
+    for (const name of ['wake_server', 'sleep_server']) {
+      expect(byName.get(name), name).toEqual({
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false
+      });
+    }
+    expect(byName.get('call_tool')).toEqual({
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: true
+    });
+    await client.close();
+  });
+
   it('walks the list_servers -> list_tools -> get_tool_schema -> call_tool flow', async () => {
     const client = await mcpClient('/hub', accessToken);
 
@@ -812,19 +1021,33 @@ describe('supervisor', () => {
     await request(hub.app).get('/health').set('Authorization', `Bearer ${accessToken}`).expect(503);
   });
 
-  it('sweeps expired authorization codes', () => {
-    const codes = hub.provider['codes'] as Map<string, { expiresAt: number }>;
-    const client = { client_id: 'sweeper' } as OAuthClientInformationFull;
-    const res = { redirect: () => undefined } as unknown as Response;
+  it('sweeps expired authorization artifacts', () => {
+    // Authorization codes used to live in a Map the provider swept itself. They
+    // are adapter records now, and every write to state.json prunes whatever
+    // has aged out — so the sweep is the store's, and it covers every model
+    // rather than only codes.
+    hub.store.oidcUpsert('AuthorizationCode', 'stale-code', { clientId: 'sweeper', iat: 1 }, 1);
+    hub.store.oidcUpsert('AuthorizationCode', 'fresh-code', { clientId: 'sweeper', iat: 1 }, 600);
+    expect(hub.store.oidcFind('AuthorizationCode', 'fresh-code')).toBeDefined();
 
-    hub.provider.redirectWithCode(client, { redirectUri: REDIRECT_URI, codeChallenge: 'challenge' }, res);
-    const stale = [...codes.keys()];
-    expect(stale.length).toBeGreaterThan(0);
-    for (const key of stale) codes.get(key)!.expiresAt = Date.now() - 1;
+    const before = Object.keys(
+      JSON.parse(fs.readFileSync(path.join(tmpDir, 'data', 'state.json'), 'utf8')).oidcArtifacts.AuthorizationCode
+    ).length;
 
-    hub.provider.redirectWithCode(client, { redirectUri: REDIRECT_URI, codeChallenge: 'challenge' }, res);
-    for (const key of stale) expect(codes.has(key)).toBe(false);
-    expect(codes.size).toBe(1);
+    vi.setSystemTime(Date.now() + 5_000);
+    try {
+      // Any write triggers the prune; the expired one is gone from disk, not
+      // merely hidden by the read path.
+      hub.store.oidcUpsert('AuthorizationCode', 'later', { clientId: 'sweeper', iat: 1 }, 600);
+      expect(hub.store.oidcFind('AuthorizationCode', 'stale-code')).toBeUndefined();
+      expect(hub.store.oidcFind('AuthorizationCode', 'fresh-code')).toBeDefined();
+      // Gone from disk, not merely filtered out on the way back: one record was
+      // added by the write above and the count did not grow, so one was removed.
+      const state = JSON.parse(fs.readFileSync(path.join(tmpDir, 'data', 'state.json'), 'utf8'));
+      expect(Object.keys(state.oidcArtifacts.AuthorizationCode).length).toBe(before);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('applies config diffs without touching unchanged servers', async () => {
@@ -903,7 +1126,7 @@ describe('resource-bound tokens (default)', () => {
         code_challenge: challenge,
         code_challenge_method: 'S256'
       })
-      .expect(302);
+      .expect(303);
     expect(new URL(response.headers.location).searchParams.get('error')).toBe('invalid_target');
   });
 

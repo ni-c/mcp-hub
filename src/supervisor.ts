@@ -1,23 +1,32 @@
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport, getDefaultEnvironment } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
-import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+import { StdioClientTransport, getDefaultEnvironment } from '@modelcontextprotocol/client/stdio';
+import { Client, StreamableHTTPClientTransport, SSEClientTransport, UnauthorizedError } from '@modelcontextprotocol/client';
+import type { Transport, ServerCapabilities, Implementation, Tool, McpSubscription, SubscriptionFilter } from '@modelcontextprotocol/client';
+import type { ServerEvent } from '@modelcontextprotocol/server';
+import { ListToolsResultSchema } from '@modelcontextprotocol/core';
 import { VERSION } from './version.js';
 import { MAX_TOOL_LIST_PAGES, MAX_TOOLS, MAX_TOOL_METADATA_BYTES, jsonSize } from './mcp-limits.js';
-import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
-import type { ServerCapabilities, Implementation, Tool } from '@modelcontextprotocol/sdk/types.js';
+import {
+  BACKOFF_INITIAL_MS,
+  BACKOFF_MAX_MS,
+  BACKOFF_RESET_AFTER_MS,
+  IDLE_SWEEP_INTERVAL_MS,
+  MAX_UNUSED_RESTARTS,
+  PING_INTERVAL_MS,
+  PING_TIMEOUT_MS,
+  WAKE_TIMEOUT_MS
+} from './timings.js';
 import type { HubConfig, ServerConfig, RemoteServerConfig, ConfigDiff } from './config.js';
 import { SocketTransport } from './transports/socket.js';
 import { DockerTransport } from './transports/docker.js';
 import { DockerClient, parseSandboxDockerHost } from './sandbox/docker-client.js';
-import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
 import type { AuthStore } from './auth/store.js';
 import { UpstreamAuth, UpstreamLoginRequiredError } from './upstream/auth.js';
 import { credentialFingerprint } from './upstream/provider.js';
 import { ToolCache } from './tool-cache.js';
 import type { ToolCacheEntry } from './tool-cache.js';
 import { filterTools, hasToolFilter, unmatchedPatterns } from './tool-filter.js';
+import type { RouteChannel, SubscriptionRegistry } from './subscriptions.js';
+import { subscriptionsAllowed } from './subscriptions.js';
 
 export type ServerState = 'starting' | 'up' | 'down' | 'stopped' | 'sleeping' | 'unauthorized';
 
@@ -79,14 +88,6 @@ export function setDockerClient(client: DockerClient | undefined): void {
   sharedDockerClient = client;
 }
 
-const BACKOFF_INITIAL_MS = 1_000;
-const BACKOFF_MAX_MS = 5 * 60_000;
-const BACKOFF_RESET_AFTER_MS = 5 * 60_000;
-const PING_INTERVAL_MS = 60_000;
-const PING_TIMEOUT_MS = 30_000;
-const WAKE_TIMEOUT_MS = 120_000;
-const MAX_UNUSED_RESTARTS = 5;
-const IDLE_SWEEP_INTERVAL_MS = 60_000;
 
 /** How an on-demand server behaves; an empty object means "always running" (today's behaviour). */
 export interface ManagedServerOptions {
@@ -105,6 +106,42 @@ export interface ManagedServerOptions {
   /** Outbound OAuth for a remote server that needs it. Injected here rather
    *  than built in buildTransport(), which runs on every single start. */
   auth?: UpstreamAuth;
+  /** Every change event this child emits, for listeners that are not its own
+   *  route — today only the /hub aggregate, whose tool list spans all children. */
+  onUpstreamEvent?: (event: ServerEvent) => void;
+  /**
+   * Whether anyone listening on /hub wants tool-list changes.
+   *
+   * A child has to be told to watch its tool list when the only interested
+   * party is the aggregate, not this child's own route. Without it the hub
+   * subscribes to nothing upstream and the /hub listener waits forever for an
+   * event the hub was never sent.
+   */
+  aggregateWantsTools?: () => boolean;
+}
+
+/** Whether two upstream listen filters ask for the same thing. */
+function sameFilter(a: SubscriptionFilter | undefined, b: SubscriptionFilter): boolean {
+  if (!a) return false;
+  // JSON rather than a joined string: with a plain separator, ['a b'] and
+  // ['a', 'b'] compare equal, and the hub would skip a reconcile it owed.
+  const uris = (filter: SubscriptionFilter) => JSON.stringify([...(filter.resourceSubscriptions ?? [])].sort());
+  return (
+    (a.toolsListChanged ?? false) === (b.toolsListChanged ?? false) &&
+    (a.promptsListChanged ?? false) === (b.promptsListChanged ?? false) &&
+    (a.resourcesListChanged ?? false) === (b.resourcesListChanged ?? false) &&
+    uris(a) === uris(b)
+  );
+}
+
+/** Whether a filter asks for nothing at all, in which case nothing is held upstream. */
+function emptyFilter(filter: SubscriptionFilter): boolean {
+  return (
+    !filter.toolsListChanged &&
+    !filter.promptsListChanged &&
+    !filter.resourcesListChanged &&
+    (filter.resourceSubscriptions?.length ?? 0) === 0
+  );
 }
 
 interface WakeWaiter {
@@ -113,7 +150,7 @@ interface WakeWaiter {
   timer: NodeJS.Timeout;
 }
 
-export async function listAllTools(client: Pick<Client, 'listTools'>): Promise<Tool[]> {
+export async function listAllTools(client: Pick<Client, 'request'>): Promise<Tool[]> {
   const tools: Tool[] = [];
   let cursor: string | undefined;
   let pages = 0;
@@ -121,7 +158,15 @@ export async function listAllTools(client: Pick<Client, 'listTools'>): Promise<T
   const seenCursors = new Set<string>();
   do {
     if (++pages > MAX_TOOL_LIST_PAGES) throw new Error(`tools/list exceeded ${MAX_TOOL_LIST_PAGES} pages`);
-    const page = await client.listTools({ cursor });
+    // `request` rather than `listTools`, deliberately. SDK v2's `listTools()`
+    // walks the whole pagination itself whenever no cursor is given -- which is
+    // every first call -- and hands back one merged result. That would collapse
+    // this loop into a single iteration and take all three budgets below with
+    // it, leaving only the SDK's own page cap and no limit on tool count or
+    // metadata size at all. The budgets exist because a hostile child's tool
+    // list is a way to exhaust the hub's memory, and with it every other
+    // server's availability. One page per request is what makes them apply.
+    const page = await client.request({ method: 'tools/list', params: { cursor } }, ListToolsResultSchema);
     metadataBytes += jsonSize(page.tools);
     if (metadataBytes > MAX_TOOL_METADATA_BYTES) throw new Error(`tools/list metadata exceeded ${MAX_TOOL_METADATA_BYTES} bytes`);
     tools.push(...page.tools);
@@ -153,6 +198,22 @@ export class ManagedServer {
   lastError?: string;
   /** Last time a request was actually forwarded; the idle sweep measures from here. */
   lastUsedAt = 0;
+  /**
+   * What the clients on this server's route are listening for. Created by the
+   * proxy, which owns the route's handler; the supervisor only publishes into
+   * it and reads its merged demand.
+   *
+   * Deliberately not consulted by the idle sweep: an open subscription is an
+   * intent, not a reason to keep a child process running. A sleeping child
+   * emits nothing, and the resync on the next wake is what makes that gap
+   * recoverable instead of silent.
+   */
+  channel?: RouteChannel;
+
+  /** The lease book of this server's route, or nothing if no client ever asked. */
+  private get subscriptions(): SubscriptionRegistry | undefined {
+    return this.channel?.registry;
+  }
 
   private backoffMs: number;
   private startedAt = 0;
@@ -169,6 +230,13 @@ export class ManagedServer {
    * kill the new child.
    */
   private generation = 0;
+  /** The one upstream listen stream carrying this route's whole demand (modern era). */
+  private upstream?: McpSubscription;
+  private upstreamFilter?: SubscriptionFilter;
+  /** URIs the child was told about one at a time (2025 era). */
+  private upstreamUris = new Set<string>();
+  private reconciling = false;
+  private reconcileQueued = false;
 
   constructor(
     readonly name: string,
@@ -313,7 +381,28 @@ export class ManagedServer {
       }
     }
     const transport = this.buildTransport();
-    const client = new Client({ name: 'mcp-hub', version: VERSION }, { capabilities: {} });
+    const client = new Client(
+      { name: 'mcp-hub', version: VERSION },
+      {
+        // Still nothing. The hub is not the one who can answer an elicitation —
+        // the person at the far end is — so declaring the capability on this
+        // shared connection would be a promise the hub cannot keep. What it
+        // declares per forwarded request is a different matter.
+        capabilities: {},
+        // 'auto' probes with server/discover and falls back to the 2025
+        // sequence when the child does not answer it, so a legacy child
+        // connects exactly as before. What it buys is the modern era where the
+        // child supports it: there, input_required comes back as a *result*
+        // the hub can forward, instead of a server→client request it would
+        // have nowhere to put.
+        versionNegotiation: { mode: 'auto' },
+        // The client would otherwise answer an input_required itself — from
+        // handlers the hub never registered, so every elicitation would be
+        // silently declined on the caller's behalf. A gateway has to hand the
+        // question on, not answer it.
+        inputRequired: { autoFulfill: false }
+      }
+    );
     transport.onclose = () => this.onExit(this.exitReason(), generation);
     try {
       await client.connect(transport);
@@ -338,13 +427,160 @@ export class ManagedServer {
     console.log(`[${this.name}] up (${this.serverInfo?.name ?? 'unknown'} ${this.serverInfo?.version ?? ''})`.trim());
     this.resolveWakeWaiters();
     if (this.capabilities?.tools) {
-      client.setNotificationHandler(ToolListChangedNotificationSchema, () => void this.refreshTools());
+      client.setNotificationHandler('notifications/tools/list_changed', () => {
+        void this.refreshTools();
+        this.publishUpstream({ kind: 'tools_list_changed' });
+      });
       await this.refreshTools();
     } else {
       this.options.persist?.(this);
     }
+    this.watchUpstream(client);
+    // A subscription taken while this child was asleep is an intent, not a
+    // connection: nothing was held upstream, so it has to be re-established
+    // here rather than at the moment the client asked. The same is true after
+    // a crash — shutdown() throws the client away and every subscription with
+    // it. Without this a subscription is silently dead from the first nap on.
+    this.reconcileSubscriptions();
+    // And because nothing was held, the hub cannot know what changed while the
+    // child was gone. Telling the listeners to read everything again is the
+    // only honest answer.
+    this.subscriptions?.resync();
+    // The aggregate's tool list spans this child, so its listeners have the
+    // same gap: whatever changed while the child was away is invisible to them
+    // too. One re-read tells them so.
+    if (this.options.aggregateWantsTools?.() === true) this.options.onUpstreamEvent?.({ kind: 'tools_list_changed' });
     this.pingTimer = setInterval(() => void this.checkAlive(), PING_INTERVAL_MS);
     this.pingTimer.unref();
+  }
+
+  /** One change event to this route's listeners and to the /hub aggregate. */
+  private publishUpstream(event: ServerEvent): void {
+    this.subscriptions?.publish(event);
+    this.options.onUpstreamEvent?.(event);
+  }
+
+  /**
+   * Route the child's change notifications to the clients waiting for them.
+   *
+   * The same four handlers serve both eras. On a 2025 connection the child
+   * sends these unsolicited; on 2026-07-28 they arrive on the listen stream
+   * that `reconcileSubscriptions` opens, and the SDK dispatches them to these
+   * very registrations. So the era difference is confined to *asking*, not to
+   * receiving — which is the whole reason this is one code path.
+   *
+   * Gated on the declared capability for the same reason the handlers below
+   * are only registered for what the child said it has: a handler for a
+   * notification the child cannot send is a claim nobody checked.
+   */
+  private watchUpstream(client: Client): void {
+    if (this.capabilities?.prompts) {
+      client.setNotificationHandler('notifications/prompts/list_changed', () => this.publishUpstream({ kind: 'prompts_list_changed' }));
+    }
+    if (this.capabilities?.resources) {
+      client.setNotificationHandler('notifications/resources/list_changed', () => this.publishUpstream({ kind: 'resources_list_changed' }));
+      client.setNotificationHandler('notifications/resources/updated', notification =>
+        this.publishUpstream({ kind: 'resource_updated', uri: notification.params.uri })
+      );
+    }
+  }
+
+  /**
+   * Bring what the child is told to watch in line with what the clients want.
+   *
+   * Fire-and-forget with a single-flight guard: it is called from lease
+   * acquire/release, which happen on the request path and must not wait for an
+   * upstream round trip. A change arriving mid-reconcile queues exactly one
+   * more pass, so the last caller's demand always wins without a backlog.
+   */
+  reconcileSubscriptions(): void {
+    if (this.reconciling) {
+      this.reconcileQueued = true;
+      return;
+    }
+    this.reconciling = true;
+    void this.runReconcile()
+      .catch(error => console.error(`[${this.name}] could not update subscriptions: ${(error as Error).message}`))
+      .finally(() => {
+        this.reconciling = false;
+        if (!this.reconcileQueued) return;
+        this.reconcileQueued = false;
+        this.reconcileSubscriptions();
+      });
+  }
+
+  private async runReconcile(): Promise<void> {
+    const client = this.client;
+    const registry = this.subscriptions;
+    // Asleep, down, or nobody listening: there is nothing to hold. State is not
+    // dropped — it lives in the leases, and start() replays it.
+    if (!client || this.state !== 'up') return;
+    if (!subscriptionsAllowed(this.config)) return;
+    const demand = registry?.demand() ?? { toolsListChanged: false, promptsListChanged: false, resourcesListChanged: false, uris: [] };
+    // The union spans both books: this route's leases and the aggregate's.
+    const wantsTools = demand.toolsListChanged || this.options.aggregateWantsTools?.() === true;
+    // A child that never advertised `subscribe` cannot be asked for resource
+    // updates; asking anyway earns a -32601 per URI and nothing else.
+    const canSubscribe = this.capabilities?.resources?.subscribe === true;
+    const uris = canSubscribe ? demand.uris : [];
+    if (client.getProtocolEra() === 'modern') {
+      await this.reconcileModern(client, {
+        toolsListChanged: wantsTools && this.capabilities?.tools?.listChanged === true,
+        promptsListChanged: demand.promptsListChanged && this.capabilities?.prompts?.listChanged === true,
+        resourcesListChanged: demand.resourcesListChanged && this.capabilities?.resources?.listChanged === true,
+        resourceSubscriptions: uris
+      });
+      return;
+    }
+    await this.reconcileLegacy(client, uris);
+  }
+
+  /**
+   * One listen stream carries the whole route's demand.
+   *
+   * A filter cannot be widened in place, so any change to the union means
+   * closing the stream and opening a new one. That is a real gap — a
+   * notification landing between the two is lost — which is why the reopen is
+   * followed by nothing: the client that just subscribed gets its resync from
+   * the acquire path, and the ones already listening were not affected by
+   * whatever the new lease added.
+   */
+  private async reconcileModern(client: Client, filter: SubscriptionFilter): Promise<void> {
+    if (sameFilter(this.upstreamFilter, filter)) return;
+    const previous = this.upstream;
+    this.upstream = undefined;
+    this.upstreamFilter = undefined;
+    if (previous) await previous.close().catch(() => {});
+    if (emptyFilter(filter)) return;
+    const subscription = await client.listen(filter);
+    // A close() racing the await above already cleared the field; honour that
+    // rather than installing a stream nobody wants.
+    if (this.client !== client) {
+      await subscription.close().catch(() => {});
+      return;
+    }
+    this.upstream = subscription;
+    this.upstreamFilter = filter;
+  }
+
+  /**
+   * The 2025 era asks per URI and gets list_changed unsolicited, so only the
+   * resource set is negotiated — as a diff, because re-subscribing a URI the
+   * child already holds is a round trip that buys nothing.
+   */
+  private async reconcileLegacy(client: Client, uris: string[]): Promise<void> {
+    const wanted = new Set(uris);
+    for (const uri of wanted) {
+      if (this.upstreamUris.has(uri)) continue;
+      await client.subscribeResource({ uri });
+      this.upstreamUris.add(uri);
+    }
+    // Snapshotted before the loop, which removes from the very set it reads.
+    const stale = [...this.upstreamUris].filter(uri => !wanted.has(uri));
+    for (const uri of stale) {
+      await client.unsubscribeResource({ uri }).catch(() => {});
+      this.upstreamUris.delete(uri);
+    }
   }
 
   /**
@@ -471,6 +707,14 @@ export class ManagedServer {
     this.generation++;
     clearTimeout(this.restartTimer);
     clearInterval(this.pingTimer);
+    // The upstream subscription belongs to the connection that is going away.
+    // Forgetting it here is what makes the next start() reconcile from scratch
+    // instead of believing a stream it no longer holds is still open. The
+    // leases themselves are untouched — they are the clients' intent, and they
+    // outlive any one child process.
+    this.upstream = undefined;
+    this.upstreamFilter = undefined;
+    this.upstreamUris.clear();
     this.rejectWakeWaiters(new Error(`Server "${this.name}" is shutting down`));
     // Same local-client rule as checkAlive(). This path happens to be safe
     // today because the member access precedes the await, but Supervisor.stop()
@@ -486,6 +730,11 @@ export class ManagedServer {
   async stop(): Promise<void> {
     await this.shutdown();
     this.state = 'stopped';
+    // Unlike sleep(), this server is not coming back: the route's handler holds
+    // open listen streams and would otherwise outlive everything it serves.
+    const channel = this.channel;
+    this.channel = undefined;
+    await channel?.close().catch(() => {});
   }
 
   /** Same teardown as stop(), but the server stays wakeable. */
@@ -500,6 +749,13 @@ export class ManagedServer {
 export interface SupervisorOptions {
   /** Global idle timeout for on-demand servers; 0 (the default) disables on-demand lifecycling entirely. */
   idleTimeoutMinutes?: number;
+  /**
+   * The same timeout in milliseconds, for callers who need it finer than a
+   * minute. Wins over `idleTimeoutMinutes` when set; `0`/absent leaves the
+   * minute value in charge, so it cannot also express "never sleep" — that is
+   * `idleTimeoutMinutes: 0`, which already means it.
+   */
+  idleTimeoutMs?: number;
   cache?: ToolCache;
   sweepIntervalMs?: number;
   wakeTimeoutMs?: number;
@@ -558,16 +814,64 @@ export class Supervisor {
     return this.options.idleTimeoutMinutes ?? 0;
   }
 
+  /** The global idle timeout as one number, whichever unit the caller gave it in. */
+  private get idleTimeoutMs(): number {
+    return this.options.idleTimeoutMs || this.idleTimeoutMinutes * 60_000;
+  }
+
+  /**
+   * What the clients on the /hub route are listening for.
+   *
+   * /hub exposes tools and nothing else, so the only change worth relaying is
+   * "some child's tool list moved, re-read mine". Set by the proxy, which owns
+   * that route's handler.
+   */
+  hubSubscriptions?: SubscriptionRegistry;
+
+  /**
+   * Relay a child's change event to the /hub aggregate.
+   *
+   * Only the tool list crosses: /hub does not aggregate resources or prompts,
+   * so a resources/list_changed from one child describes nothing a /hub client
+   * can read. Sending it anyway would be the same kind of empty promise the
+   * capability table exists to prevent.
+   */
+  private onChildEvent(cfg: ServerConfig, event: ServerEvent): void {
+    if (event.kind !== 'tools_list_changed') return;
+    if (cfg.hub === false || !subscriptionsAllowed(cfg)) return;
+    this.hubSubscriptions?.publish(event);
+  }
+
+  /**
+   * Bring every child's upstream subscription in line.
+   *
+   * Called when the /hub aggregate's demand moves, because that one book is
+   * shared by all of them — unlike a per-server route, where only its own
+   * child is affected.
+   */
+  reconcileAll(): void {
+    for (const server of this.servers.values()) server.reconcileSubscriptions();
+  }
+
+  private aggregateWantsTools(cfg: ServerConfig): boolean {
+    if (cfg.hub === false || !subscriptionsAllowed(cfg)) return false;
+    return this.hubSubscriptions?.demand().toolsListChanged === true;
+  }
+
   private buildManaged(name: string, cfg: ServerConfig): ManagedServer {
-    if ((cfg.kind !== 'stdio' && cfg.kind !== 'docker') || cfg.keepAlive || this.idleTimeoutMinutes <= 0) {
+    const onUpstreamEvent = (event: ServerEvent) => this.onChildEvent(cfg, event);
+    const aggregateWantsTools = () => this.aggregateWantsTools(cfg);
+    if ((cfg.kind !== 'stdio' && cfg.kind !== 'docker') || cfg.keepAlive || this.idleTimeoutMs <= 0) {
       const auth = cfg.kind === 'remote' ? this.options.upstreamAuth?.for(name, cfg) : undefined;
-      return new ManagedServer(name, cfg, auth ? { auth } : {});
+      return new ManagedServer(name, cfg, { onUpstreamEvent, aggregateWantsTools, ...(auth ? { auth } : {}) });
     }
     return new ManagedServer(name, cfg, {
       onDemand: true,
-      idleMs: (cfg.idleMinutes ?? this.idleTimeoutMinutes) * 60_000,
+      idleMs: cfg.idleMinutes !== undefined ? cfg.idleMinutes * 60_000 : this.idleTimeoutMs,
       wakeTimeoutMs: this.options.wakeTimeoutMs,
-      persist: server => this.persist(server)
+      persist: server => this.persist(server),
+      onUpstreamEvent,
+      aggregateWantsTools
     });
   }
 
@@ -609,7 +913,7 @@ export class Supervisor {
   }
 
   private startIdleSweep(): void {
-    if (this.idleTimeoutMinutes <= 0 || this.sweepTimer) return;
+    if (this.idleTimeoutMs <= 0 || this.sweepTimer) return;
     this.sweepTimer = setInterval(() => this.sweepIdle(), this.options.sweepIntervalMs ?? IDLE_SWEEP_INTERVAL_MS);
     this.sweepTimer.unref();
   }

@@ -4,7 +4,7 @@ import { AuthStore, clientLimitsFromEnv } from './auth/store.js';
 import { isSafeRedirectUri } from './auth/redirect-uri.js';
 import { clampDisplayName } from './auth/text.js';
 import { isClientIdMetadataUrl } from './auth/cimd.js';
-import { mintApiToken } from './auth/provider.js';
+import { mintApiToken } from './auth/api-tokens.js';
 import { loadConfig } from './config.js';
 import type { UpstreamAuth } from './upstream/auth.js';
 import { authFor, requireOAuthServer, startUpstreamLogin, upstreamStatus } from './upstream/login.js';

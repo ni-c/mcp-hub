@@ -1,0 +1,13 @@
+{
+  // Type-checking only, and deliberately a separate file rather than an
+  // `include` added to the root config: that one has `rootDir: "src"` and emits
+  // into `dist/`, which is what `npm publish` ships. Adding `e2e/` there would
+  // put the whole fixture fleet into the published tarball.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    "types": ["node"]
+  },
+  "include": ["e2e/**/*.ts", "src/**/*"]
+}

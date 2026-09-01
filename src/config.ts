@@ -3,6 +3,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import type { ToolFilterConfig } from './tool-filter.js';
+import type { PassthroughConfig } from './elicitation.js';
+import type { SubscriptionsConfig } from './subscriptions.js';
+import { CONFIG_POLL_INTERVAL_MS } from './timings.js';
 
 /**
  * One entry of the Claude-Code-style `mcpServers` map.
@@ -15,7 +18,7 @@ import type { ToolFilterConfig } from './tool-filter.js';
  * local server from on-demand lifecycling) and `idleMinutes` (per-server
  * override of the global idle timeout).
  */
-export interface StdioServerConfig extends ToolFilterConfig {
+export interface StdioServerConfig extends ToolFilterConfig, PassthroughConfig, SubscriptionsConfig {
   kind: 'stdio';
   command: string;
   args: string[];
@@ -59,7 +62,7 @@ export const OAUTH_MODES = new Set(['static', 'dcr', 'cimd']);
 export const OAUTH_GRANTS = new Set(['authorization_code', 'client_credentials']);
 export const OAUTH_CLIENT_AUTH = new Set(['client_secret_basic', 'client_secret_post', 'private_key_jwt']);
 
-export interface RemoteServerConfig extends ToolFilterConfig {
+export interface RemoteServerConfig extends ToolFilterConfig, PassthroughConfig, SubscriptionsConfig {
   kind: 'remote';
   transport: 'http' | 'sse';
   url: string;
@@ -82,7 +85,7 @@ export interface RemoteServerConfig extends ToolFilterConfig {
  * (the hub supervises). A knob that can only weaken the sandbox is a knob the
  * policy would have to defend.
  */
-export interface DockerServerConfig extends ToolFilterConfig {
+export interface DockerServerConfig extends ToolFilterConfig, PassthroughConfig, SubscriptionsConfig {
   kind: 'docker';
   image: string;
   /** `never` (default) fails when the image is absent; `missing` lets the hub pull it. */
@@ -123,7 +126,7 @@ export interface DockerServerConfig extends ToolFilterConfig {
  * started by whoever owns the Compose file, and the hub needs no Docker access
  * at all. A Unix socket in a shared volume even works with `network_mode: none`.
  */
-export interface SocketServerConfig extends ToolFilterConfig {
+export interface SocketServerConfig extends ToolFilterConfig, PassthroughConfig, SubscriptionsConfig {
   kind: 'socket';
   transport: 'unix' | 'tcp';
   socketPath?: string;
@@ -149,6 +152,15 @@ const RESERVED_NAMES = new Set([
   'livez',
   'revoke',
   '.well-known',
+  // Served by the authorization server. `interaction` is where an
+  // unauthenticated authorization request is sent to log in, and `jwks` and
+  // `session` are endpoints oidc-provider registers whether or not the hub
+  // advertises them. A server of one of these names would shadow the auth flow
+  // rather than merely be unreachable.
+  'jwks',
+  'interaction',
+  'session',
+  'userinfo',
   // The upstream OAuth callback lives under /upstream/…; a server of that name
   // would be reachable at /upstream and is too close for comfort.
   'upstream'
@@ -362,6 +374,49 @@ function parseToolFilter(name: string, entry: Record<string, unknown>): ToolFilt
   return result;
 }
 
+/**
+ * Parses `passthrough`, which today governs one thing: whether this server may
+ * ask the person at the far end a question.
+ *
+ * A *partial* for the same reason `parseToolFilter` is one — an entry without
+ * the field has to produce exactly the object it produced before.
+ *
+ * `"off"` exists separately from the global `MCP_ELICITATION` switch because
+ * the two answer different questions. The global one is "is this hub doing
+ * elicitation at all"; this one is "do I trust *this* upstream to put words in
+ * front of my user". A server can be perfectly reliable and still be one whose
+ * prompts an operator does not want shown — that is a phishing judgement, not
+ * an availability one, and it should not require turning the server off.
+ */
+function parsePassthrough(name: string, entry: Record<string, unknown>): PassthroughConfig {
+  if (entry.passthrough === undefined) return {};
+  if (entry.passthrough !== 'auto' && entry.passthrough !== 'off') {
+    throw new ConfigError(`Server "${name}": "passthrough" must be "auto" or "off"`);
+  }
+  return { passthrough: entry.passthrough };
+}
+
+/**
+ * Parses `subscriptions`, the sibling of `passthrough`: whether this server may
+ * push change notifications to the clients that ask for them.
+ *
+ * A *partial* for the same reason the two above are — an entry without the
+ * field has to produce exactly the object it produced before.
+ *
+ * Separate from `passthrough` because the two are different judgements about
+ * different traffic. `passthrough` is about words shown to a person, and the
+ * risk is phishing. This one is about volume and timing on a stream nobody is
+ * reading synchronously, and the risk is noise. A server can easily warrant one
+ * answer and not the other.
+ */
+function parseSubscriptions(name: string, entry: Record<string, unknown>): SubscriptionsConfig {
+  if (entry.subscriptions === undefined) return {};
+  if (entry.subscriptions !== 'auto' && entry.subscriptions !== 'off') {
+    throw new ConfigError(`Server "${name}": "subscriptions" must be "auto" or "off"`);
+  }
+  return { subscriptions: entry.subscriptions };
+}
+
 function rejectLifecycle(name: string, entry: Record<string, unknown>, kind: string): void {
   for (const field of ['keepAlive', 'idleMinutes']) {
     if (entry[field] !== undefined) {
@@ -491,7 +546,7 @@ function parseSocketServer(name: string, entry: Record<string, unknown>, type: '
 function parseServer(name: string, entry: Record<string, unknown>, env: NodeJS.ProcessEnv, options?: ParseOptions): ServerConfig {
   const expand = expanderFor(env, options);
   const hub = entry.hub !== false;
-  const toolFilter = parseToolFilter(name, entry);
+  const toolFilter = { ...parseToolFilter(name, entry), ...parsePassthrough(name, entry), ...parseSubscriptions(name, entry) };
   if (entry.hub !== undefined && typeof entry.hub !== 'boolean') {
     throw new ConfigError(`Server "${name}": "hub" must be a boolean`);
   }
@@ -630,7 +685,7 @@ export class ConfigWatcher extends EventEmitter {
     private readonly filePath: string,
     public current: HubConfig,
     private readonly env: NodeJS.ProcessEnv = process.env,
-    private readonly pollIntervalMs = 3_000,
+    private readonly pollIntervalMs = CONFIG_POLL_INTERVAL_MS,
     private readonly parseOptions?: ParseOptions,
     private readonly validate?: (config: HubConfig) => void
   ) {

@@ -1,13 +1,16 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import path from 'node:path';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { randomBytes } from 'node:crypto';
+import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import { loadConfig, parseConfig, ConfigWatcher, warnMutableDockerImages, type HubConfig } from './config.js';
 import { Supervisor, UpstreamAuthRegistry } from './supervisor.js';
 import { AuthStore } from './auth/store.js';
 import { ToolCache } from './tool-cache.js';
 import { buildHubServer } from './hub.js';
 import { isMainModule } from './main-module.js';
+import { SubscriptionRegistry } from './subscriptions.js';
+import { IDLE_TIMEOUT_MS } from './timings.js';
 
 export interface StdioHubOptions {
   /** Path to the mcp.json. A missing file starts an empty hub instead of failing. */
@@ -107,8 +110,10 @@ export function createStdioHub(options: StdioHubOptions) {
   // exactly the cost this feature exists to avoid. The snapshot lives next to
   // the config rather than in a DATA_PATH — there is no state directory in
   // this mode, and no other state to put in one.
+  // IDLE_TIMEOUT_MS is the sub-minute sibling of the documented knob; see timings.ts.
+  const idleTimeoutMs = IDLE_TIMEOUT_MS || idleTimeoutMinutes * 60_000;
   const cache = new ToolCache(options.toolCachePath ?? path.join(path.dirname(options.configPath), '.mcp-hub', 'tool-cache.json'));
-  if (idleTimeoutMinutes > 0) {
+  if (idleTimeoutMs > 0) {
     cache.load();
     if (!cache.probeWritable()) {
       console.warn(`mcp-hub: tool cache ${cache.filePath} is not writable — on-demand servers warm-start at every launch instead of sleeping through it`);
@@ -116,7 +121,7 @@ export function createStdioHub(options: StdioHubOptions) {
   }
 
   const upstreamAuth = buildUpstreamAuth(config, options.dataPath);
-  const supervisor = new Supervisor(config, { idleTimeoutMinutes, cache, upstreamAuth });
+  const supervisor = new Supervisor(config, { idleTimeoutMinutes, idleTimeoutMs, cache, upstreamAuth });
   supervisor.start(); // children come up (or hydrate into `sleeping`) in the background
   void supervisor
     .reapOrphans()
@@ -137,18 +142,84 @@ export function createStdioHub(options: StdioHubOptions) {
     console.warn(`mcp-hub: ${path.dirname(options.configPath)} does not exist — config hot reload is off`);
   }
 
-  return { server: buildHubServer(supervisor), supervisor, watcher };
+  // The seal on a half-finished tool call, which in this mode only ever has to
+  // survive between two legs of the same connection. There is no /data here and
+  // nothing to persist: the process IS the session, so a key drawn once at
+  // start is not a shortcut but the right lifetime. When the process ends there
+  // is no question left to resume.
+  const requestStateSecret = randomBytes(32).toString('base64url');
+
+  // A factory rather than an instance: the entry point below decides the era
+  // from the opening exchange and pins one instance to the connection, and it
+  // can only do that if it owns the construction.
+  return { build: () => buildHubServer(supervisor, requestStateSecret), supervisor, watcher };
 }
 
 export async function runStdio(options: StdioHubOptions): Promise<void> {
   redirectStdoutLogging();
-  const { server, supervisor, watcher } = createStdioHub(options);
-  await server.connect(new StdioServerTransport());
+  const { build, supervisor, watcher } = createStdioHub(options);
+
+  // serveStdio rather than server.connect(new StdioServerTransport()): the
+  // protocol era is decided by the opening exchange, and only this entry point
+  // owns that decision. With a hand-wired transport the connection is 2025 for
+  // its whole life, and a child's `input_required` would be answered by the
+  // SDK's legacy shim instead of reaching the person at the keyboard.
+  //
+  // That matters most here of all the hub's doors. Over HTTP the hub is
+  // stateless and shared, so a 2025 client has nowhere to receive a question;
+  // a workstation hub is spawned per client session and belongs to exactly one
+  // person, which is precisely the case where asking them is worth something.
+  //
+  // legacy: 'serve' is the default and is documented as serving a 2025 opening
+  // "exactly as a hand-wired stdio server serves it today" — so nothing changes
+  // for a client that speaks the old era. What is new is only that a modern
+  // opening is now accepted instead of being answered in the old one.
+  // The aggregate's tool list moves whenever a child's does, and over stdio the
+  // hub cannot see the client's listen filter: `serveStdio` owns the request and
+  // offers no hook for one. So it holds a standing lease instead — one client,
+  // one connection, one thing worth watching.
+  //
+  // That is not a way of pushing at someone who did not ask.
+  // `sendToolListChanged()` reaches only the subscriptions actually open, so a
+  // client that never sent `subscriptions/listen` receives nothing; the lease
+  // only decides whether the hub bothers to watch the children upstream.
+  let registry: SubscriptionRegistry | undefined;
+  const handle = serveStdio(
+    () => {
+      const hub = build();
+      registry?.close();
+      registry = new SubscriptionRegistry(
+        {
+          toolsChanged: () => hub.sendToolListChanged(),
+          // /hub aggregates tools and nothing else, so the other three describe
+          // nothing a client of this endpoint could read.
+          promptsChanged: () => {},
+          resourcesChanged: () => {},
+          resourceUpdated: () => {}
+        },
+        { onDemandChange: () => supervisor.reconcileAll() }
+      );
+      registry.acquire({
+        toolsListChanged: true,
+        promptsListChanged: false,
+        resourcesListChanged: false,
+        resourceSubscriptions: []
+      });
+      supervisor.hubSubscriptions = registry;
+      return hub;
+    },
+    {
+      legacy: 'serve',
+      onerror: error => console.error(`mcp-hub: stdio connection error: ${error.message}`)
+    }
+  );
   console.error(`mcp-hub: serving the hub aggregate over stdio (config ${options.configPath})`);
 
   const shutdown = async (signal: string) => {
     console.error(`mcp-hub: received ${signal}, shutting down`);
     watcher.stop();
+    registry?.close();
+    await handle.close();
     await supervisor.stop();
     process.exit(0);
   };

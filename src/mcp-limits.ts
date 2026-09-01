@@ -36,7 +36,7 @@ export const ABSOLUTE_CALL_OPTIONS = {
  * path and by the tests, and index.ts is the only place allowed to end the
  * process over a bad environment.
  */
-function positiveIntegerEnv(name: string, fallback: number): number {
+export function positiveIntegerEnv(name: string, fallback: number): number {
   const raw = process.env[name];
   if (raw === undefined || raw === '') return fallback;
   const value = Number(raw);
@@ -47,7 +47,19 @@ function positiveIntegerEnv(name: string, fallback: number): number {
   return value;
 }
 
-function booleanEnv(name: string, fallback: boolean): boolean {
+/** Same contract as `positiveIntegerEnv`, for the knobs where `0` means "off". */
+export function nonNegativeIntegerEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') return fallback;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 0) {
+    console.error(`mcp-hub: ${name} must be a non-negative integer, using ${fallback}`);
+    return fallback;
+  }
+  return value;
+}
+
+export function booleanEnv(name: string, fallback: boolean): boolean {
   const raw = process.env[name]?.trim().toLowerCase();
   if (raw === undefined || raw === '') return fallback;
   if (raw === 'true' || raw === '1') return true;

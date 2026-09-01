@@ -179,6 +179,7 @@ export function createDockerProxy(options: ProxyOptions): http.Server {
     // The URL is caller-controlled and this log is read by fail2ban: a
     // percent-encoded newline in a container name would otherwise let the
     // caller write its own log lines.
+    // eslint-disable-next-line no-control-regex -- matching them is the point
     const safeUrl = url.replace(/[\u0000-\u001f\u007f]/g, '?').slice(0, 500);
     if (!decision.allow) console.warn(`docker-proxy: DENY ${method} ${safeUrl}: ${decision.reason}`);
     else console.log(`docker-proxy: allow ${decision.method} ${decision.path.split('?')[0]}`);

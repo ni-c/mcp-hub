@@ -1,6 +1,6 @@
 {
   "name": "@ni-c/mcp-hub",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "Serve multiple stdio MCP servers from one container: Claude-Code-style mcpServers config, path-based routing, hub meta-tools, and CIMD-first OAuth 2.1 + API tokens for ChatGPT, Claude and any Streamable-HTTP MCP client.",
   "keywords": [
     "mcp",
@@ -48,25 +48,38 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
+    "test:e2e:watch": "vitest --config vitest.e2e.config.ts",
+    "typecheck:e2e": "tsc -p tsconfig.e2e.json",
+    "e2e:record": "tsx e2e/tools/record.ts",
+    "e2e:curate": "tsx e2e/tools/curate.ts",
     "prepublishOnly": "npm test && npm run build",
-    "assets": "node scripts/gen-assets.mjs",
-    "assets:check": "node scripts/gen-assets.mjs --check"
+    "assets": "svg-asset-set",
+    "assets:check": "svg-asset-set --check",
+    "lint": "oxlint --deny-warnings"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@modelcontextprotocol/client": "^2.0.0",
+    "@modelcontextprotocol/core": "^2.0.0",
+    "@modelcontextprotocol/express": "^2.0.0",
+    "@modelcontextprotocol/node": "^2.0.0",
+    "@modelcontextprotocol/server": "^2.0.0",
     "bcryptjs": "^3.0.2",
     "express": "^5.1.0",
     "jose": "^6.2.8",
+    "oidc-provider": "^9.12.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@modelcontextprotocol/server-everything": "^2026.7.4",
-    "@resvg/resvg-js": "^2.6.2",
     "@types/express": "^5.0.0",
     "@types/node": "^26.2.0",
+    "@types/oidc-provider": "^9.11.1",
     "@types/supertest": "^7.2.1",
     "@vitest/coverage-v8": "4.1.11",
+    "oxlint": "^1.80.0",
     "supertest": "^7.0.0",
+    "svg-asset-set": "https://github.com/ni-c/svg-asset-set/releases/download/v0.1.0/svg-asset-set-0.1.0.tgz",
     "tsx": "^4.19.0",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"

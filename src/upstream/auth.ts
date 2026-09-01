@@ -1,11 +1,5 @@
-import {
-  discoverOAuthServerInfo,
-  exchangeAuthorization,
-  refreshAuthorization,
-  startAuthorization
-} from '@modelcontextprotocol/sdk/client/auth.js';
-import type { OAuthDiscoveryState } from '@modelcontextprotocol/sdk/client/auth.js';
-import type { OAuthClientInformation, OAuthTokens } from '@modelcontextprotocol/sdk/shared/auth.js';
+import { discoverOAuthServerInfo, exchangeAuthorization, refreshAuthorization, startAuthorization } from '@modelcontextprotocol/client';
+import type { OAuthDiscoveryState, OAuthClientInformation, OAuthTokens } from '@modelcontextprotocol/client';
 import type { RemoteServerConfig } from '../config.js';
 import type { AuthStore, UpstreamCredentials, UpstreamLogin } from '../auth/store.js';
 import { isPrivateAddress, resolvePublicAddress } from '../auth/address.js';
