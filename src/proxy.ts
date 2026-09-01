@@ -98,13 +98,21 @@ function buildProxyServer(managed: ManagedServer, secret: string): Server {
   };
   // Real usage: wakes a sleeping on-demand server (blocking until it is up)
   // and resets its idle window. Everything else is answered without a child.
+  //
+  // Separate from use() because one caller has to ask the child a question
+  // BEFORE it forwards: forwardCall reads the negotiated era off the child's
+  // client, and a sleeping child has none. Deciding first and waking second
+  // made the first call after a nap silently take the weaker path.
+  const ready = async (): Promise<void> => {
+    if (managed.state !== 'up' || !managed.client) await managed.wake();
+    managed.markUsed();
+  };
   const use = async <S extends ClientResultSchema>(
     request: { method: string; params?: unknown },
     resultSchema: S,
     options: ForwardOptions = {}
   ): Promise<StandardSchemaV1.InferOutput<S>> => {
-    if (managed.state !== 'up' || !managed.client) await managed.wake();
-    managed.markUsed();
+    await ready();
     return forwardLive(request, resultSchema, options);
   };
   const caps = managed.capabilities ?? {};
@@ -133,7 +141,7 @@ function buildProxyServer(managed: ManagedServer, secret: string): Server {
         console.warn(`[${managed.name}] refused tools/call "${logged}": not permitted by allowTools/denyTools`);
         throw new ProtocolError(ProtocolErrorCode.MethodNotFound, `Unknown tool: ${req.params.name}`);
       }
-      return forwardCall(managed, req, ctx, use, secret);
+      return forwardCall(managed, req, ctx, ready, use, secret);
     });
   }
   if (caps.resources) {
@@ -175,9 +183,16 @@ async function forwardCall(
   managed: ManagedServer,
   req: { method: string; params: { name: string; [key: string]: unknown } },
   ctx: ServerContext,
+  ready: () => Promise<void>,
   use: <S extends ClientResultSchema>(request: { method: string; params?: unknown }, schema: S, options?: ForwardOptions) => Promise<StandardSchemaV1.InferOutput<S>>,
   secret: string
 ): Promise<CallToolResult | InputRequiredResult> {
+  // Before condition 3 is even readable: the era is negotiated by the child's
+  // client, and an on-demand child that is asleep has none. Waking after the
+  // decision made the first call following a nap take the fallback and the
+  // second one succeed — the worst shape a security guarantee can have.
+  await ready();
+
   // `RequestMetaEnvelope` is published as `{}`, so the reserved keys cannot be
   // reached through it by name. The constant is the SDK's own, and the value it
   // holds is whatever the client sent — untrusted either way, and only ever

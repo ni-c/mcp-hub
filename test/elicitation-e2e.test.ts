@@ -83,7 +83,11 @@ beforeAll(async () => {
     dataPath: path.join(tmpDir, 'data'),
     password: PASSWORD,
     requireResourceBoundTokens: false,
-    idleTimeoutMinutes: 0
+    // On-demand, so a server can be put to sleep mid-file. The era verdict
+    // lives on the child's client and a sleeping child has none — see the
+    // sleeping case below. 60 minutes because no test here should ever meet
+    // the idle sweep by accident.
+    idleTimeoutMinutes: 60
   });
   await hub.supervisor.waitUntilSettled();
   httpServer = hub.app.listen(0);
@@ -122,6 +126,22 @@ describe('a question reaching the far end', () => {
     });
     expect(JSON.stringify(answered)).toContain('did delete it');
 
+    await client.close();
+  }, 30_000);
+
+  it('carries the first question of a server that was asleep', async () => {
+    // Whether the child speaks the modern era is read off its client, and a
+    // sleeping child has none. Deciding that before the wake made the very
+    // first question after a nap fall back silently — and the second one work.
+    // A guarantee that holds on the second try is not one.
+    const managed = hub.supervisor.get('elicit');
+    await managed?.sleep();
+    expect(managed?.state).toBe('sleeping');
+
+    const client = await connectAsking();
+    const asked = asInputRequired(await call(client, 'confirm_thing', { arguments: { what: 'delete it' } }));
+    expect(asked.resultType).toBe('input_required');
+    expect(asked.inputRequests?.confirm?.params.message).toContain('Really delete it?');
     await client.close();
   }, 30_000);
 
