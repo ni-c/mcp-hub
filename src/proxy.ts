@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
 import { CallToolResultSchema, CompleteResultSchema, GetPromptResultSchema, ListPromptsResultSchema, ListResourcesResultSchema, ListResourceTemplatesResultSchema, ListToolsResultSchema, ReadResourceResultSchema } from '@modelcontextprotocol/core';
-import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node';
-import { Server, ProtocolError, ProtocolErrorCode } from '@modelcontextprotocol/server';
+import { NodeStreamableHTTPServerTransport, toNodeHandler, toWebRequest } from '@modelcontextprotocol/node';
+import { Server, ProtocolError, ProtocolErrorCode, createMcpHandler, isLegacyRequest } from '@modelcontextprotocol/server';
 import type { ListToolsResult, ServerCapabilities, StandardSchemaV1 } from '@modelcontextprotocol/server';
 import type { ManagedServer } from './supervisor.js';
 import { ABSOLUTE_CALL_OPTIONS, assertForwardedResultSize } from './mcp-limits.js';
@@ -115,8 +115,22 @@ function buildProxyServer(managed: ManagedServer): Server {
   return server;
 }
 
-/** Handle one Streamable-HTTP request against an MCP Server built on the fly. */
-export async function handleMcpRequest(buildServer: () => Server, req: Request, res: Response): Promise<void> {
+/**
+ * The 2025-era path, unchanged: one `Server` and one stateless transport per
+ * HTTP request, both closed when the response closes.
+ *
+ * Kept as its own function rather than folded into the modern handler's
+ * `legacy: 'stateless'` fallback, because the two are not the same on the wire.
+ * That fallback answers GET and DELETE with `405`; this transport answers a GET
+ * with an open `text/event-stream` and a DELETE with `200`. claude.ai opens such
+ * a stream on every reconnect — which is why `ClientRequestGate` counts GETs
+ * separately in the first place — so switching it to `405` would be a visible
+ * change to the one client the stateless design was built around. The stream
+ * carries nothing today, but "carries nothing" and "is refused" are different
+ * answers, and this is not the change in which to find out how clients tell them
+ * apart.
+ */
+async function handleLegacyRequest(buildServer: () => Server, req: Request, res: Response): Promise<void> {
   const server = buildServer();
   const transport = new NodeStreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
@@ -128,6 +142,37 @@ export async function handleMcpRequest(buildServer: () => Server, req: Request, 
   });
   await server.connect(transport);
   await transport.handleRequest(req, res, req.body);
+}
+
+/**
+ * Handle one MCP request in whichever protocol era it arrives in.
+ *
+ * `isLegacyRequest` decides, and its contract is one-way: everything it calls
+ * false — including a malformed envelope or a header/body mismatch — belongs to
+ * the modern handler, which owns those error answers. Only what it calls true
+ * may reach the legacy path.
+ *
+ * The modern handler is built per request. It is documented as long-lived and
+ * has `close()`, which matters once `subscriptions/listen` is forwarded to
+ * children; until then it holds nothing between requests, and a fresh one per
+ * request is the same lifecycle the legacy path has always had.
+ */
+export async function handleMcpRequest(buildServer: () => Server, req: Request, res: Response): Promise<void> {
+  const probe = await toWebRequest(req, req.body);
+  if (await isLegacyRequest(probe)) {
+    await handleLegacyRequest(buildServer, req, res);
+    return;
+  }
+
+  const handler = createMcpHandler(() => buildServer(), {
+    // Strict: the legacy era is served above, by the transport that has always
+    // served it. A second, differently-behaving legacy path underneath this one
+    // would be unreachable and misleading.
+    legacy: 'reject',
+    onerror: error => console.error(`mcp-hub: modern-era request failed: ${error.message}`)
+  });
+  res.on('close', () => void handler.close());
+  await toNodeHandler(handler)(req, res, req.body);
 }
 
 /** Express handler for /<name> and /<name>/mcp. */

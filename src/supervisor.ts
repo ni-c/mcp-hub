@@ -317,7 +317,28 @@ export class ManagedServer {
       }
     }
     const transport = this.buildTransport();
-    const client = new Client({ name: 'mcp-hub', version: VERSION }, { capabilities: {} });
+    const client = new Client(
+      { name: 'mcp-hub', version: VERSION },
+      {
+        // Still nothing. The hub is not the one who can answer an elicitation —
+        // the person at the far end is — so declaring the capability on this
+        // shared connection would be a promise the hub cannot keep. What it
+        // declares per forwarded request is a different matter.
+        capabilities: {},
+        // 'auto' probes with server/discover and falls back to the 2025
+        // sequence when the child does not answer it, so a legacy child
+        // connects exactly as before. What it buys is the modern era where the
+        // child supports it: there, input_required comes back as a *result*
+        // the hub can forward, instead of a server→client request it would
+        // have nowhere to put.
+        versionNegotiation: { mode: 'auto' },
+        // The client would otherwise answer an input_required itself — from
+        // handlers the hub never registered, so every elicitation would be
+        // silently declined on the caller's behalf. A gateway has to hand the
+        // question on, not answer it.
+        inputRequired: { autoFulfill: false }
+      }
+    );
     transport.onclose = () => this.onExit(this.exitReason(), generation);
     try {
       await client.connect(transport);
