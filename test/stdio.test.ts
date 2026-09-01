@@ -4,12 +4,17 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
-import type { CallToolResult } from '@modelcontextprotocol/client';
+import type { CallToolResult, ClientOptions } from '@modelcontextprotocol/client';
+import { withInputRequired } from '@modelcontextprotocol/client';
+import { CallToolResultSchema } from '@modelcontextprotocol/core';
+import { serveStdio } from '@modelcontextprotocol/server/stdio';
+import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { createStdioHub, redirectStdoutLogging } from '../src/stdio.js';
 import { loadConfig } from '../src/config.js';
 import { ToolCache } from '../src/tool-cache.js';
 
 const EVERYTHING = path.resolve('node_modules/@modelcontextprotocol/server-everything/dist/index.js');
+const ELICIT_FIXTURE = path.resolve('test/fixtures/modern-elicit-server.mjs');
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -43,10 +48,35 @@ function startHub(configPath: string, options: { idleTimeoutMinutes?: number; to
 
 async function connect(hub: ReturnType<typeof startHub>): Promise<Client> {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  await hub.server.connect(serverTransport);
+  // build() rather than a ready-made instance: runStdio hands the factory to
+  // serveStdio, which pins one instance per connection once the opening
+  // exchange has settled the era. Calling it here is what that entry point does.
+  await hub.build().connect(serverTransport);
   const client = new Client({ name: 'vitest', version: '1.0.0' });
   await client.connect(clientTransport);
   return client;
+}
+
+/**
+ * The same hub through the entry point that owns the era decision.
+ *
+ * `connect()` above wires a server to a transport by hand, which pins the
+ * connection to 2025 whatever the client asks for. This one goes through
+ * serveStdio, so a modern client actually gets the modern era — and a legacy
+ * one still gets what it always got.
+ */
+async function connectVia(hub: ReturnType<typeof startHub>, options: ClientOptions = {}): Promise<{ client: Client; close: () => Promise<void> }> {
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const handle = serveStdio(() => hub.build(), { transport: serverTransport });
+  const client = new Client({ name: 'vitest', version: '1.0.0' }, options);
+  await client.connect(clientTransport);
+  return {
+    client,
+    close: async () => {
+      await client.close();
+      await handle.close();
+    }
+  };
 }
 
 afterEach(async () => {
@@ -224,6 +254,32 @@ describe('the --stdio entrypoint', () => {
 
   // npm links a bin entry as node_modules/.bin/<name> — a symlink whose
   // basename is the command, not the file. Started that way, the entry point
+  it('accepts a modern opening on the real process', async () => {
+    // The two tests around this one prove the 2025 opening still works. This is
+    // the other half: runStdio hands the factory to serveStdio, so a client that
+    // offers the 2026 revision is answered in it rather than talked back down.
+    // Against the hand-wired transport this was structurally impossible.
+    const configPath = writeConfig({});
+    const client = new Client(
+      { name: 'vitest', version: '1.0.0' },
+      { capabilities: { elicitation: { form: {} } }, versionNegotiation: { mode: 'auto' } }
+    );
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: ['--import', 'tsx', path.resolve('src/index.ts'), '--stdio'],
+      cwd: path.resolve('.'),
+      env: { ...process.env, CONFIG_PATH: configPath } as Record<string, string>
+    });
+    await client.connect(transport);
+    try {
+      expect(client.getProtocolEra()).toBe('modern');
+      const { tools } = await client.listTools();
+      expect(tools.map(t => t.name)).toContain('call_tool');
+    } finally {
+      await client.close();
+    }
+  }, 30_000);
+
   // has to recognise itself; the first version compared basenames, so
   // `npx @ni-c/mcp-hub` exited 0 without doing anything.
   it('starts when it is invoked through a bin symlink', async () => {
@@ -313,4 +369,61 @@ describe('upstream OAuth in stdio mode', () => {
       warn.mockRestore();
     }
   });
+});
+
+describe('stdio speaks both eras', () => {
+  // Over HTTP the hub is stateless and shared, so a 2025 client has nowhere to
+  // receive a question. Here the process belongs to one client — which is the
+  // one place where asking a person is worth the most, and the one place it
+  // used to be impossible because the transport was wired by hand.
+
+  it('still serves a 2025 client exactly as before', async () => {
+    const hub = startHub(writeConfig({}));
+    const { client, close } = await connectVia(hub, { versionNegotiation: { mode: 'legacy' } });
+    expect(client.getProtocolEra()).toBe('legacy');
+    const { tools } = await client.listTools();
+    expect(tools.map(t => t.name)).toContain('call_tool');
+    await close();
+  });
+
+  it('carries a child question to the person at the keyboard', async () => {
+    const hub = startHub(writeConfig({ elicit: { command: process.execPath, args: [ELICIT_FIXTURE] } }));
+    await waitFor(() => hub.supervisor.get('elicit')?.state === 'up');
+
+    const { client, close } = await connectVia(hub, {
+      capabilities: { elicitation: { form: {} } },
+      versionNegotiation: { mode: 'auto' },
+      // The point is to see the question, not to have the client answer it.
+      inputRequired: { autoFulfill: false }
+    });
+    expect(client.getProtocolEra()).toBe('modern');
+
+    const args = { server: 'elicit', tool: 'confirm_thing', arguments: { what: 'delete it' } };
+    const asked = (await client.request(
+      { method: 'tools/call', params: { name: 'call_tool', arguments: args } },
+      withInputRequired(CallToolResultSchema),
+      { allowInputRequired: true }
+    )) as { resultType?: string; requestState?: string; inputRequests?: Record<string, { params: { message: string } }> };
+
+    expect(asked.resultType).toBe('input_required');
+    expect(asked.inputRequests?.confirm?.params.message).toContain('Really delete it?');
+    expect(asked.inputRequests?.confirm?.params.message.startsWith('Server "elicit" asks:')).toBe(true);
+
+    const answered = await client.request(
+      {
+        method: 'tools/call',
+        params: {
+          name: 'call_tool',
+          arguments: args,
+          inputResponses: { confirm: { action: 'accept', content: { confirm: true } } },
+          requestState: asked.requestState
+        }
+      },
+      withInputRequired(CallToolResultSchema),
+      { allowInputRequired: true }
+    );
+    expect(JSON.stringify(answered)).toContain('did delete it');
+
+    await close();
+  }, 30_000);
 });

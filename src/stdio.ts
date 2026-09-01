@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
+import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import { loadConfig, parseConfig, ConfigWatcher, warnMutableDockerImages, type HubConfig } from './config.js';
 import { Supervisor, UpstreamAuthRegistry } from './supervisor.js';
 import { AuthStore } from './auth/store.js';
@@ -145,18 +145,41 @@ export function createStdioHub(options: StdioHubOptions) {
   // is no question left to resume.
   const requestStateSecret = randomBytes(32).toString('base64url');
 
-  return { server: buildHubServer(supervisor, requestStateSecret), supervisor, watcher };
+  // A factory rather than an instance: the entry point below decides the era
+  // from the opening exchange and pins one instance to the connection, and it
+  // can only do that if it owns the construction.
+  return { build: () => buildHubServer(supervisor, requestStateSecret), supervisor, watcher };
 }
 
 export async function runStdio(options: StdioHubOptions): Promise<void> {
   redirectStdoutLogging();
-  const { server, supervisor, watcher } = createStdioHub(options);
-  await server.connect(new StdioServerTransport());
+  const { build, supervisor, watcher } = createStdioHub(options);
+
+  // serveStdio rather than server.connect(new StdioServerTransport()): the
+  // protocol era is decided by the opening exchange, and only this entry point
+  // owns that decision. With a hand-wired transport the connection is 2025 for
+  // its whole life, and a child's `input_required` would be answered by the
+  // SDK's legacy shim instead of reaching the person at the keyboard.
+  //
+  // That matters most here of all the hub's doors. Over HTTP the hub is
+  // stateless and shared, so a 2025 client has nowhere to receive a question;
+  // a workstation hub is spawned per client session and belongs to exactly one
+  // person, which is precisely the case where asking them is worth something.
+  //
+  // legacy: 'serve' is the default and is documented as serving a 2025 opening
+  // "exactly as a hand-wired stdio server serves it today" — so nothing changes
+  // for a client that speaks the old era. What is new is only that a modern
+  // opening is now accepted instead of being answered in the old one.
+  const handle = serveStdio(() => build(), {
+    legacy: 'serve',
+    onerror: error => console.error(`mcp-hub: stdio connection error: ${error.message}`)
+  });
   console.error(`mcp-hub: serving the hub aggregate over stdio (config ${options.configPath})`);
 
   const shutdown = async (signal: string) => {
     console.error(`mcp-hub: received ${signal}, shutting down`);
     watcher.stop();
+    await handle.close();
     await supervisor.stop();
     process.exit(0);
   };
