@@ -1,6 +1,6 @@
 {
   "name": "@ni-c/mcp-hub",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "Serve multiple stdio MCP servers from one container: Claude-Code-style mcpServers config, path-based routing, hub meta-tools, and CIMD-first OAuth 2.1 + API tokens for ChatGPT, Claude and any Streamable-HTTP MCP client.",
   "keywords": [
     "mcp",
@@ -48,6 +48,11 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
+    "test:e2e:watch": "vitest --config vitest.e2e.config.ts",
+    "typecheck:e2e": "tsc -p tsconfig.e2e.json",
+    "e2e:record": "tsx e2e/tools/record.ts",
+    "e2e:curate": "tsx e2e/tools/curate.ts",
     "prepublishOnly": "npm test && npm run build",
     "assets": "svg-asset-set",
     "assets:check": "svg-asset-set --check",

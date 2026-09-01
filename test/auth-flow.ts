@@ -15,7 +15,28 @@ import request from 'supertest';
  * So: follow redirects, and whenever a page comes back, fill in whichever form
  * it is showing and post it to its own `action`. That is what a browser does,
  * and it is the only part of this that both servers genuinely agree on.
+ *
+ * `app` is an Express application or a base URL. supertest accepts both — its
+ * `Test` constructor concatenates a string app with the path instead of asking
+ * a server for its address — and that is what lets the E2E suite drive a hub
+ * running in another process, or in a container, through this same code. A base
+ * URL therefore carries no trailing slash, because concatenation is all it gets.
  */
+
+/** An Express app, or the base URL of a hub running somewhere else. */
+export type AuthTarget = Express.Application | string;
+
+/**
+ * supertest's own `App` union does not include an Express `Application`: it
+ * lists `RequestListener`, and Express's overloaded call signature is not
+ * assignable to that one. Every caller in this repository has always passed an
+ * Express app, and it has always worked, because vitest transpiles rather than
+ * type-checks. The cast puts that mismatch in one place with its reason,
+ * instead of leaving it to be rediscovered by whoever first points `tsc` here.
+ */
+function target(app: AuthTarget): Parameters<typeof request>[0] {
+  return app as Parameters<typeof request>[0];
+}
 
 export interface AuthorizeResult {
   code: string;
@@ -66,11 +87,11 @@ export interface AuthorizeOptions {
  * silent stall here is the single most confusing failure mode in this suite.
  */
 export async function authorizeInBrowser(
-  app: Express.Application,
+  app: AuthTarget,
   clientId: string,
   options: AuthorizeOptions
 ): Promise<AuthorizeResult> {
-  const agent = options.agent ?? request.agent(app);
+  const agent = options.agent ?? request.agent(target(app));
   const { verifier, challenge } = pkcePair();
   const pages: string[] = [];
 
@@ -122,11 +143,11 @@ export async function authorizeInBrowser(
 
 /** Registers a public client the way an MCP client would. */
 export async function registerPublicClient(
-  app: Express.Application,
+  app: AuthTarget,
   redirectUri: string,
   overrides: Record<string, unknown> = {}
 ): Promise<string> {
-  const res = await request(app)
+  const res = await request(target(app))
     .post('/register')
     .send({
       client_name: 'vitest',
