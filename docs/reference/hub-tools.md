@@ -161,8 +161,13 @@ snapshot is [persisted to disk](/guide/on-demand#the-tool-cache), which is what
 lets a sleeping server answer at all.
 
 Clients are not notified of those changes — the [stateless
-transport](/guide/architecture#stateless-transport) has no channel for
-server-initiated messages — but the next `list_tools` call reflects them.
+transport](/guide/architecture#stateless-transport) has no channel for push
+traffic — but the next `list_tools` call reflects them.
+
+`call_tool` does carry one thing outward that looks like a push and is not: on
+`2026-07-28` a child asking the user something comes back through this
+meta-tool as the call's result, and the answer goes in on the retry. See
+[Elicitation](/guide/elicitation).
 
 ## When to use direct paths instead
 

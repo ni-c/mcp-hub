@@ -3,8 +3,8 @@ layout: home
 
 hero:
   name: mcp-hub
-  text: One container for all your MCP servers
-  tagline: Serve many stdio MCP servers over one HTTPS endpoint for ChatGPT, Claude, Le Chat, Cursor and any other MCP client — with the Claude Code config format you already have, path-based routing, a context-friendly aggregate endpoint, and OAuth 2.1 in both directions.
+  text: The dual-era MCP gateway
+  tagline: One container for all your MCP servers, speaking both MCP revisions on every endpoint — 2026-07-28 and 2025-11-25, the client picks. Serve many stdio servers over one HTTPS endpoint for ChatGPT, Claude, Le Chat, Cursor and any other MCP client, with the Claude Code config format you already have, path-based routing, a context-friendly aggregate endpoint, and OAuth 2.1 in both directions.
   image:
     src: /logo.svg
     alt: mcp-hub
@@ -44,6 +44,14 @@ features:
     details: A single connector that exposes every server through six meta-tools — so your model's context holds 6 tool schemas instead of N×tools. Per-server allowTools and denyTools narrow that further — a filtered tool is hidden and refused, not merely hidden.
     link: /reference/hub-tools
     linkText: Meta-tool reference
+  - icon:
+      src: /icons/ask.svg
+      width: 26
+      height: 26
+    title: Both eras, and elicitation with them
+    details: 'Every endpoint answers MCP 2026-07-28 and 2025-11-25 alike — the client picks, and cannot tell from the answers. On the 2026 revision a child server''s question reaches the person at the far end: attributed to the server that asked, stripped of anything that could lie about it, and sealed so it cannot be resumed on another call.'
+    link: /guide/elicitation
+    linkText: How elicitation travels
   - icon:
       src: /icons/oauth.svg
       width: 26

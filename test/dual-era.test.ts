@@ -137,6 +137,61 @@ describe('both protocol eras from one endpoint', () => {
     await modern.close();
   }, 30_000);
 
+  it('reads resources identically on both eras', async () => {
+    // Every row of the capability matrix in docs/reference/standards.md has a
+    // test, and this is the resources row. Listing, templates and a read, all
+    // three, because the proxy registers them as three separate handlers.
+    const legacy = await connect('/everything/mcp', 'legacy');
+    const modern = await connect('/everything/mcp', 'auto');
+
+    const uri = (await legacy.listResources()).resources[0].uri;
+    expect((await modern.listResources()).resources[0].uri).toBe(uri);
+    expect(JSON.stringify((await modern.listResourceTemplates()).resourceTemplates)).toBe(
+      JSON.stringify((await legacy.listResourceTemplates()).resourceTemplates)
+    );
+    expect(JSON.stringify((await modern.readResource({ uri })).contents)).toBe(
+      JSON.stringify((await legacy.readResource({ uri })).contents)
+    );
+
+    await legacy.close();
+    await modern.close();
+  }, 30_000);
+
+  it('gets prompts identically on both eras', async () => {
+    const legacy = await connect('/everything/mcp', 'legacy');
+    const modern = await connect('/everything/mcp', 'auto');
+
+    const names = (await legacy.listPrompts()).prompts.map(p => p.name).sort();
+    expect(names.length).toBeGreaterThan(0);
+    expect((await modern.listPrompts()).prompts.map(p => p.name).sort()).toEqual(names);
+
+    const args = { name: 'args-prompt', arguments: { city: 'Luxembourg' } };
+    expect(JSON.stringify((await modern.getPrompt(args)).messages)).toBe(
+      JSON.stringify((await legacy.getPrompt(args)).messages)
+    );
+
+    await legacy.close();
+    await modern.close();
+  }, 30_000);
+
+  it('completes an argument identically on both eras', async () => {
+    const legacy = await connect('/everything/mcp', 'legacy');
+    const modern = await connect('/everything/mcp', 'auto');
+
+    const args = {
+      ref: { type: 'ref/prompt' as const, name: 'completable-prompt' },
+      argument: { name: 'department', value: '' }
+    };
+    const fromLegacy = await legacy.complete(args);
+    expect(fromLegacy.completion.values.length).toBeGreaterThan(0);
+    expect(JSON.stringify((await modern.complete(args)).completion)).toBe(
+      JSON.stringify(fromLegacy.completion)
+    );
+
+    await legacy.close();
+    await modern.close();
+  }, 30_000);
+
   it('sends a broken modern request to the modern handler, not to the legacy one', async () => {
     // The routing predicate is one-way by contract: everything it calls false
     // belongs to the modern path, "including its validation-ladder rejections".

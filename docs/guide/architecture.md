@@ -125,11 +125,39 @@ does **not** send a session `DELETE` first. Any per-session state would
 accumulate one entry per reconnect, forever, and take processes or memory with
 it. Statelessness makes that impossible by construction.
 
-The cost is that server-initiated messages have nowhere to go. `listChanged`
+The cost lands on one era only, and it is worth being precise about which.
+
+On **`2025-11-25`** server-initiated messages have nowhere to go. `listChanged`
 notifications, resource subscriptions and sampling are not delivered to
 clients. Request/response traffic — tools, resources, prompts, completions — is
 forwarded in full, and the proxy advertises only the capabilities its child
 actually declared.
+
+On **`2026-07-28`** the same statelessness is the reason a thing works rather
+than the reason it does not. That revision removed the server→client request
+channel outright: a server that needs input answers `input_required`, the call
+ends, and the client retries carrying the answer. There is nothing to hold
+between the two legs, which is precisely what this transport is good at — so
+[elicitation travels end to end](/guide/elicitation), through `/hub` and
+`/<name>/mcp` alike. What is still missing on both eras is the push traffic:
+`listChanged` and `subscriptions/listen` to a child. The full split is the
+[capability matrix](/reference/standards#what-is-carried-per-revision).
+
+### Why a 2025 client is not bridged to a modern child
+
+A child on `2026-07-28` can raise a question that a `2025-11-25` client, over
+HTTP, has no way to receive: this transport builds one `Server` per request, so
+it never saw an `initialize` and holds no client capabilities to route an
+answer back to. Bridging it anyway would need a pending registry, a JSON-RPC id
+translation, and — because a 2025 elicitation carries no field naming the call
+that triggered it — a lock serialising every tool call per child across all
+clients. A gateway that makes itself a bottleneck, with a five-minute hang as
+its failure mode.
+
+So the hub does not announce the capability to the child, and the child takes
+its own fallback. Same rule as `listChanged` above: say only what can be
+delivered. Over stdio the question does not arise — `mcp-hub-stdio` is spawned
+per client session, so both eras reach a person.
 
 ## Supervisor lifecycle
 

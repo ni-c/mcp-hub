@@ -93,7 +93,51 @@ Streamable HTTP, stateless — no session state to leak — with SSE accepted fo
 upstreams that only speak that. Bearer tokens are read from the `Authorization`
 header only; there is no query-parameter or form-body form.
 
-The MCP protocol version is negotiated by the SDK rather than pinned by the hub.
+The hub speaks **both** MCP revisions on every endpoint, and the client picks:
+
+| Revision | How it is chosen | Where |
+|---|---|---|
+| **`2026-07-28`** | `server/discover` | `/hub`, `/<name>/mcp`, `mcp-hub-stdio` |
+| **`2025-11-25`** | `initialize` | the same three |
+
+Which one you are on is a wire detail. The rule the hub holds itself to is that
+a client cannot tell from the answers: same tools, same names, same endpoint.
+
+### What is carried, per revision
+
+Every row here has a test, and the ones that say **no** say so because there is
+no test that could pass — not because the detail was left out of the table. The
+hub has twice announced something it did not deliver (`listChanged`,
+`resources.subscribe`), and both cost more to find than they would have cost to
+admit.
+
+| Traffic | `2026-07-28` | `2025-11-25` |
+|---|---|---|
+| `tools/list`, `tools/call` | carried | carried |
+| `resources/list`, `resources/templates/list`, `resources/read` | carried | carried |
+| `prompts/list`, `prompts/get` | carried | carried |
+| `completion/complete` | carried | carried |
+| **Elicitation** — a child asking the person a question | **carried both ways** | not offered |
+| Embedded `sampling/createMessage` or `roots/list` in a child's question | dropped, and named in the log | — |
+| `listChanged` notifications | not delivered | not delivered |
+| `resources/subscribe` | not advertised, refused | not advertised, refused |
+| `subscriptions/listen` to a child | not forwarded | — |
+
+**Elicitation is the row worth reading twice.** It is what
+[`smtp-mcp`](/guide/elicitation) and `imap-mcp` use to put a question in front
+of a person before they send or delete something, and behind a gateway it used
+to have nowhere to go. On `2026-07-28` it does: the question is a *result*, the
+call ends, the person decides, and the client retries with the answer. Nothing
+is held open, which is exactly why a stateless hub can carry it. See
+[Elicitation](/guide/elicitation).
+
+To a `2025-11-25` client over HTTP the hub does not offer it at all. That
+revision delivers a question as a server-initiated request, and a stateless hub
+has no channel for one — so rather than announce a capability whose answer
+would be dropped, the hub stays quiet and the child takes its own fallback.
+That is the same rule as the two rows above it, applied before the mistake
+instead of after.
+
 The authorization behaviour follows the specification revision that made
 metadata documents the preferred registration mechanism and deprecated dynamic
 registration — which the hub still serves, because most clients still need it.

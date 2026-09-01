@@ -123,6 +123,12 @@ servers whose entries changed. Everything else keeps its connections.
 that reconnects without closing its previous session — which claude.ai does,
 roughly every five minutes — cannot leak processes or memory.
 
+**Both MCP revisions, on every endpoint.** `2026-07-28` and `2025-11-25`; the
+client picks and cannot tell from the answers which one it got. On the 2026
+revision a child server's [question reaches the
+person](/guide/elicitation) at the far end, which is the one thing a gateway
+used to take away from servers like `smtp-mcp` and `imap-mcp`.
+
 **Light enough for a Raspberry Pi.** A stated project goal: one Node process,
 no database — state is one JSON file plus an Ed25519 key under `/data` — a
 six runtime dependencies, and multi-arch images (`amd64`/`arm64`). The
@@ -135,9 +141,10 @@ keeps the hub comfortable on a single-board computer.
   the same operating-system user as the hub and can read its mounted files and
   environment. Only run stdio packages you trust; put anything else in its own
   container and connect it as a remote server. See [Security](/guide/security).
-- **Not a notification bridge.** The stateless transport delivers
-  request/response traffic in full, but server-initiated messages
-  (`listChanged`, subscriptions, sampling) are not forwarded to clients.
+- **Not a notification bridge.** Request/response traffic is delivered in full
+  on both MCP revisions, and on `2026-07-28` that includes a child's
+  [question to the user](/guide/elicitation) — but push traffic
+  (`listChanged`, subscriptions) is not forwarded to clients on either.
 - **Not a multi-user system.** There is one password. Anyone who has it can
   approve a client and reach every server the hub exposes.
 

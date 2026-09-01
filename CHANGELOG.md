@@ -9,13 +9,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The hub speaks both MCP revisions on every endpoint.** `2026-07-28` and
+  `2025-11-25`, on `/hub`, on `/<name>/mcp` and over `--stdio`; the client
+  picks during its opening exchange and cannot tell from the answers which one
+  it got. Which traffic is carried on which revision is a
+  [matrix](https://mcp-hub.ni-c.de/reference/standards#what-is-carried-per-revision)
+  now, with a test behind every row, because this project has twice announced
+  something it did not deliver.
+
+  The 2025 path is untouched: it is served by the same transport that always
+  served it, so a `GET` still opens a stream and a `DELETE` still answers 200
+  rather than the 405 the modern handler's own fallback would give. claude.ai
+  opens that stream on every reconnect.
+
+- **Elicitation travels end to end.** A child server that needs to ask the
+  person at the far end something — `smtp-mcp` before it sends, `imap-mcp`
+  before it expunges a mailbox — now reaches them through the hub instead of
+  silently falling back to a weaker check. On `2026-07-28` a question is a
+  *result*, not a push: the call ends, the person decides, the client retries
+  with the answer. Nothing is held open, so the stateless transport is what
+  makes this work rather than what prevented it.
+
+  The hub adds what follows from the question crossing a trust boundary. It is
+  attributed to the server that asked, after the text has been stripped of the
+  bidirectional and zero-width characters that could visually undo that line.
+  Embedded `sampling/createMessage` and `roots/list` requests are dropped and
+  named in the log — relaying them would spend the caller's model budget and
+  hand out its workspace layout on a child's say-so. The child's `_meta` is
+  removed. The resumption state is signed and bound to the server, the tool,
+  the OAuth client and the endpoint, so it cannot be pasted onto another call.
+
+  The capability is mirrored per request from what the client itself declared,
+  and never widened — so it is announced only for a call whose answer has
+  somewhere to go. A `2025-11-25` client over HTTP is therefore not offered it
+  at all, and the child takes its own fallback, which is the same rule this
+  project already applies to `listChanged`.
+
+  `"passthrough": "off"` on a server withdraws its right to put words in front
+  of the user without switching it off; `MCP_ELICITATION=false` is the global
+  brake. Four further `MCP_ELICITATION_*` variables bound rounds, lifetime,
+  message size and payload size. See
+  [Elicitation](https://mcp-hub.ni-c.de/guide/elicitation).
+
+### Fixed
+
+- **A question from a server that had gone to sleep was lost.** The hub decided
+  whether a child could be asked by reading the protocol era off its client,
+  and an on-demand child that is asleep has none — so the first tool call after
+  an idle nap silently took the weaker path and the second one worked. The wake
+  now happens before the decision.
+
 ### Changed
 
 - **On MCP SDK 2.0.** The single `@modelcontextprotocol/sdk` package has been
   replaced by the split `@modelcontextprotocol/{core,client,server,node,express}`.
-  Behaviour is unchanged: the hub still speaks the `2025-11-25` protocol
-  revision, and no wire format, endpoint or response differs. Deployments need
-  do nothing.
+  Behaviour is unchanged by the migration itself: no wire format, endpoint or
+  response differs, and deployments need do nothing. Speaking `2026-07-28` as
+  well is a separate change, listed under Added above — it is what the
+  migration was for.
 
   Notably **not** installed is `@modelcontextprotocol/server-legacy`, the frozen
   copy of v1's authorization-server helpers that npm marks deprecated on

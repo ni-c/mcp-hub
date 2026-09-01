@@ -76,6 +76,22 @@ The proxy image (`ghcr.io/ni-c/mcp-hub-docker-proxy`) reads its own set:
 | `HTTP_HEADERS_TIMEOUT_MS` | `10000` | Node's header timeout. |
 | `HTTP_REQUEST_TIMEOUT_MS` | `310000` | Complete request timeout — slightly above the default tool-call timeout. Your reverse proxy must allow at least as long, and raising `MCP_CALL_TIMEOUT_MS` means raising this and the proxy with it. |
 
+## Elicitation
+
+What the hub will carry when a server asks the person at the far end a
+question. Full behaviour: [Elicitation](/guide/elicitation).
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `MCP_ELICITATION` | `true` | The whole feature. `false` is the emergency brake for every server at once; per server, use `"passthrough": "off"` in `mcp.json`. |
+| `MCP_ELICITATION_MAX_ROUNDS` | `8` | How often one tool call may come back for more input. The hub keeps nothing between requests, so the count travels inside the sealed state. Each round is a fresh call the caller pays for. |
+| `MCP_ELICITATION_STATE_TTL_MS` | `900000` | How long a half-finished call stays resumable. |
+| `MCP_ELICITATION_MAX_MESSAGE_BYTES` | `4096` | One prompt, measured in bytes. It is read by a person; anything longer is not a prompt. Oversized text is truncated, not refused. |
+| `MCP_ELICITATION_MAX_PAYLOAD_BYTES` | `131072` | The whole question including its schemas. Over this the call is refused rather than trimmed — there is no way to shorten a schema safely. |
+
+These five are read by the request path, so an unusable value logs and keeps
+the default.
+
 An invalid value for any of the integer variables read at startup aborts with a
 clear message rather than silently falling back. The two call-timeout variables
 are the exception: they are read by the request path itself, so an unusable

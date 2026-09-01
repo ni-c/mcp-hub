@@ -34,6 +34,27 @@ below say which one that is where it matters.
 | **ChatGPT connectors** | Both paths work (developer mode → custom connector), but the OAuth endpoints have to be filled in by hand. CIMD with `private_key_jwt` is its preferred path and is supported since 0.10.0 — the per-connector document URL is random, so allowlist the origin `https://chatgpt.com`, never an exact URL. On the DCR path the hub plays along with its quirks: public clients get a non-expiring `client_secret` in the response. An approved registration is kept as long as it is used; see the [lifecycle rules](/guide/client-registration#registrations-do-not-accumulate). [Step by step](/guide/clients#chatgpt). |
 | **Copilot Studio / M365 Copilot** | "Dynamic discovery" mode should work since the hub now issues client secrets on registration. Untested — reports welcome. |
 
+### Which MCP revision a client speaks
+
+Nothing on this page depends on it. The hub answers `2026-07-28` and
+`2025-11-25` on every endpoint, the client picks during its opening exchange,
+and it cannot tell from the answers which one it got — that is the whole point
+of the [capability
+matrix](/reference/standards#what-is-carried-per-revision).
+
+One feature does depend on it: [elicitation](/guide/elicitation), where a
+server asks the person at the far end a question. Over HTTP that needs a client
+on `2026-07-28`.
+
+| Client | Revision | How we know |
+|---|---|---|
+| **Claude Code** | `2026-07-28`, fully | Measured in the shipped binary: the multi-round-trip driver, `server/discover`, the per-request capability envelope and both typed error codes are all present. |
+| everything else here | unmeasured | Assume `2025-11-25` until it is checked. Nothing breaks either way; a question from a server simply does not reach you, and the server falls back on its own. |
+
+This table stays honest by being short. A client is listed as speaking the 2026
+revision when somebody has watched it do so, not when its release notes say it
+should.
+
 Clients that omit the RFC 8707 `resource` parameter entirely are refused by
 default (`invalid_target`). If you need to serve such a client, set
 [`DEFAULT_RESOURCE`](/reference/environment) — tokens are then bound to that

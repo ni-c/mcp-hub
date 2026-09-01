@@ -9,8 +9,13 @@
 [![docs](https://img.shields.io/badge/docs-mcp--hub.ni--c.de-informational)](https://mcp-hub.ni-c.de)
 [![sponsor](https://img.shields.io/badge/sponsor-ni--c-ea4aaa?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/ni-c)
 
-A [Model Context Protocol](https://modelcontextprotocol.io) (MCP) gateway: it serves
-many stdio MCP servers from **one container**, published over HTTPS.
+A dual-era [Model Context Protocol](https://modelcontextprotocol.io) (MCP) gateway: it
+serves many stdio MCP servers from **one container**, published over HTTPS, and speaks
+**both MCP revisions on every endpoint** — `2026-07-28` and `2025-11-25`. The client
+picks, and cannot tell which one it is on from the answers. On the 2026 revision that
+includes **elicitation**: a child server's question reaches the person at the far end
+instead of dying at the gateway
+([how](https://mcp-hub.ni-c.de/guide/elicitation)).
 
 Lets MCP clients that cannot spawn a local process — ChatGPT connectors, Claude on
 the Web and in Code, Mistral Le Chat, Cursor, LibreChat and any other
@@ -83,6 +88,16 @@ replaces N containers with one process:
   servers.
 - **Stateless Streamable HTTP**: no session state, so claude.ai's
   reconnect-without-DELETE behaviour cannot leak processes or memory.
+- **Dual-era**: every endpoint — `/hub`, `/<name>/mcp` and `--stdio` — answers
+  MCP `2026-07-28` and `2025-11-25` alike; the client picks and cannot tell
+  from the answers which it got. On the 2026 revision that includes
+  **elicitation**: a server asking the user something returns the question
+  rather than pushing it, so it reaches the person at the far end instead of
+  dying at the gateway. The hub attributes it to the server that asked, strips
+  what could lie about that, drops embedded sampling and roots requests, and
+  seals the resumption state against the call it belongs to. `passthrough:
+  "off"` withdraws one server's right to ask;
+  [details](https://mcp-hub.ni-c.de/guide/elicitation).
 - **Lightweight by design**: one Node process, no database (state is one JSON
   file plus a signing key under `/data`), six runtime dependencies, and
   multi-arch images — a stated project goal is to run comfortably on a
@@ -366,10 +381,11 @@ immediately. Per-client recipes:
 
 ## Notes & limitations
 
-- Stateless transport: server-initiated notifications (`listChanged`,
-  subscriptions, sampling) are not delivered to clients. Tool/resource/prompt
+- Stateless transport: push notifications (`listChanged`, subscriptions) are not
+  delivered to clients on either MCP revision. Tool/resource/prompt
   request-response works fully; the hub's tool cache does follow
-  `tools/list_changed` internally.
+  `tools/list_changed` internally. Elicitation is not in this list — on
+  `2026-07-28` it is a result rather than a push and travels end to end.
 - Access tokens are opaque and last 15 minutes. Revoking a client takes effect
   on its next request rather than when the token expires — the token is a
   reference to a stored record, so withdrawing it is a deletion. Refresh tokens

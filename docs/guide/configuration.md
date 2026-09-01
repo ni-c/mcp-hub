@@ -323,6 +323,24 @@ time through `/hub` only duplicates them.
 Claude Code ignores unknown fields, so a file carrying `hub` still works as a
 Claude Code config.
 
+## Letting a server ask the user: `passthrough`
+
+```json
+"imap": { "command": "npx", "args": ["-y", "@ni-c/imap-mcp"], "passthrough": "off" }
+```
+
+On MCP `2026-07-28` a server can ask the person at the far end a question
+before it does something irreversible — and the hub
+[carries it through](/guide/elicitation). `"auto"`, the default, allows that.
+
+`"off"` withdraws this one server's right to put words in front of the user. It
+is a phishing judgement, not an availability one: the server keeps working and
+falls back to whatever it does for a client that cannot be asked. Use it for an
+upstream you route to but do not fully trust with the user's attention.
+
+`MCP_ELICITATION=false` switches the whole feature off for every server at
+once. Like the other fields here, Claude Code ignores `passthrough`.
+
 ## Lifecycle: `keepAlive` and `idleMinutes`
 
 Stdio and docker servers run [on demand](/guide/on-demand) by default: started

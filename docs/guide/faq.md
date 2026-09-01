@@ -147,10 +147,16 @@ is picked up within a few seconds. If nothing happens, check two things:
 
 ### Notifications from a server never arrive
 
-The transport is stateless, so server-initiated messages — `listChanged`,
-resource subscriptions, sampling — are not delivered to clients. This is a
-deliberate trade for not leaking session state on every client reconnect. Tool,
-resource and prompt request/response traffic is unaffected.
+Push traffic — `listChanged`, resource subscriptions — is not delivered to
+clients on either MCP revision. This is a deliberate trade for not leaking
+session state on every client reconnect. Tool, resource and prompt
+request/response traffic is unaffected.
+
+A question from a server is *not* in that category, despite looking like it.
+On `2026-07-28` an elicitation is a result rather than a push, so it does
+travel — see [Elicitation](/guide/elicitation). If one is not reaching you,
+check that your client negotiated that revision, that the server did too, and
+that `passthrough` is not `"off"` for it.
 
 ### A sandboxed server is refused with `403 … does not match the configuration`
 

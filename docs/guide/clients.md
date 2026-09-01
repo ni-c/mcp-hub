@@ -334,10 +334,16 @@ Use the offline admin command; it is covered on the
 
 ## Notification support
 
-The transport is stateless, which means server-initiated messages are not
-delivered to clients: `listChanged` notifications, resource subscriptions and
-sampling requests do not travel outward. Tool, resource and prompt
-request/response traffic works in full.
+Push traffic is not delivered to clients on either MCP revision: `listChanged`
+notifications and resource subscriptions do not travel outward. Tool, resource
+and prompt request/response traffic works in full.
 
 Internally the hub does follow `tools/list_changed` from its children, so the
 `/hub` tool cache stays current even though clients are not notified.
+
+**Elicitation is the exception, and it is not a notification.** On
+`2026-07-28` a server that needs to ask the user something returns the question
+instead of pushing it, so it reaches you through both `/hub` and
+`/<name>/mcp` — see [Elicitation](/guide/elicitation). A client on
+`2025-11-25` is not offered it over HTTP, because there the question would be a
+push and would be dropped.
