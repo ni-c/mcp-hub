@@ -1,9 +1,9 @@
 import { McpServer } from '@modelcontextprotocol/server';
-import type { CallToolResult } from '@modelcontextprotocol/server';
+import type { CallToolResult, InputRequiredResult } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { ManagedServer, Supervisor } from './supervisor.js';
 import { VERSION } from './version.js';
-import { ABSOLUTE_CALL_OPTIONS, assertForwardedResultSize } from './mcp-limits.js';
+import { forwardToolCall } from './forward.js';
 import { loggableToolName, toolAllowed } from './tool-filter.js';
 
 function text(value: unknown): CallToolResult {
@@ -40,7 +40,7 @@ const requireAllowedTool = (managed: ManagedServer, tool: string, server: string
   return toolError(`Unknown tool "${tool}" on server "${server}". Use list_tools to see available tools.`);
 };
 
-export function buildHubServer(supervisor: Supervisor): McpServer {
+export function buildHubServer(supervisor: Supervisor, secret: string): McpServer {
   const hub = new McpServer({ name: 'mcp-hub', version: VERSION });
 
   const findServer = (name: string) => supervisor.get(name);
@@ -157,7 +157,7 @@ export function buildHubServer(supervisor: Supervisor): McpServer {
         arguments: z.record(z.string(), z.unknown()).optional().describe('Tool arguments matching its input schema')
       })
     },
-    async ({ server, tool, arguments: args }) => {
+    async ({ server, tool, arguments: args }, ctx): Promise<CallToolResult | InputRequiredResult> => {
       const managed = findServer(server);
       if (!managed) return toolError(`Unknown server "${server}". Use list_servers to see available servers.`);
       const hidden = requireExposed(managed);
@@ -167,6 +167,10 @@ export function buildHubServer(supervisor: Supervisor): McpServer {
       // start a sleeping server.
       const filtered = requireAllowedTool(managed, tool, server);
       if (filtered) return filtered;
+      // The wake stays here rather than being left to the forward, which would
+      // do it too: this endpoint answers with tool results, and "failed to
+      // start" is a different thing for a caller to read than "tool call
+      // failed". Once it is up the forward's own wake is a no-op.
       if (managed.onDemand && (managed.state !== 'up' || !managed.client)) {
         try {
           await managed.wake();
@@ -175,14 +179,24 @@ export function buildHubServer(supervisor: Supervisor): McpServer {
         }
       }
       if (managed.state !== 'up' || !managed.client) return toolError(`Server "${server}" is ${managed.state}, try again later.`);
-      managed.markUsed();
       try {
-        const result = await managed.client.callTool(
-          { name: tool, arguments: (args ?? {}) as Record<string, unknown> },
-          ABSOLUTE_CALL_OPTIONS
-        );
-        return assertForwardedResultSize(result) as CallToolResult;
+        // Same forwarding rules as the per-server path, from the same code: a
+        // child that asks something reaches the person through this door too.
+        // `via: 'hub'` binds the sealed request state to this endpoint — the
+        // same tool is reachable both ways, and resuming one call through the
+        // other door is not something a caller should be able to do.
+        return await forwardToolCall({
+          managed,
+          tool,
+          params: { name: tool, arguments: (args ?? {}) as Record<string, unknown> },
+          ctx,
+          secret,
+          via: 'hub'
+        });
       } catch (error) {
+        // Aggregate semantics: every failure here is a tool result, never a
+        // protocol error, because six meta-tools stand in for every server and
+        // one unreachable child must not look like a broken hub.
         return toolError(`Tool call failed: ${(error as Error).message}`);
       }
     }

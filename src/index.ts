@@ -267,7 +267,7 @@ export async function createHub(options: HubOptions) {
 
   const dispatch = (name: string) => async (req: Request, res: Response, next: NextFunction) => {
     if (name === 'hub') {
-      await handleMcpRequest(() => buildHubServer(supervisor).server, req, res);
+      await handleMcpRequest(() => buildHubServer(supervisor, store.cookieSecret).server, req, res);
       return;
     }
     const managed = supervisor.get(name);

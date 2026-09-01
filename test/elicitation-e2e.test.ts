@@ -30,7 +30,7 @@ let baseUrl: string;
 let token: string;
 
 /** A modern client that can answer questions, like Claude Code. */
-async function connectAsking(): Promise<Client> {
+async function connectAsking(pathname = '/elicit/mcp'): Promise<Client> {
   const client = new Client(
     { name: 'asking-client', version: '0.0.0' },
     {
@@ -41,12 +41,17 @@ async function connectAsking(): Promise<Client> {
     }
   );
   await client.connect(
-    new StreamableHTTPClientTransport(new URL(`${baseUrl}/elicit/mcp`), {
+    new StreamableHTTPClientTransport(new URL(`${baseUrl}${pathname}`), {
       requestInit: { headers: { Authorization: `Bearer ${token}` } }
     })
   );
   expect(client.getProtocolEra()).toBe('modern');
   return client;
+}
+
+/** The same call, dressed as the /hub aggregate wants it. */
+function through(server: string, tool: string, args: Record<string, unknown> = {}) {
+  return { arguments: { server, tool, arguments: args } };
 }
 
 /** One `tools/call` leg, with whatever the previous leg asked for. */
@@ -73,7 +78,10 @@ beforeAll(async () => {
         // A second server that may also ask, so the state binding is actually
         // reached — against the switched-off one the hub never looks at it.
         elsewhere: { command: process.execPath, args: [FIXTURE] },
-        quiet: { command: process.execPath, args: [FIXTURE], passthrough: 'off' }
+        quiet: { command: process.execPath, args: [FIXTURE], passthrough: 'off' },
+        // Reachable through /hub, but with the asking tool denied — a filtered
+        // name must be refused before anything is forwarded.
+        filtered: { command: process.execPath, args: [FIXTURE], denyTools: ['confirm_thing'] }
       }
     })
   );
@@ -267,5 +275,92 @@ describe('a question reaching the far end', () => {
     expect(JSON.stringify(result)).not.toContain('input_required');
     expect(JSON.stringify(result)).toContain('cannot ask about x');
     await legacy.close();
+  }, 30_000);
+});
+
+describe('the same question through the /hub aggregate', () => {
+  // /hub is the other door to the same children. Six meta-tools stand in for
+  // every server, so a child's question arrives wrapped in a call_tool — and
+  // used to end there as an opaque "Tool call failed".
+
+  it('carries the question out and the answer back', async () => {
+    const client = await connectAsking('/hub');
+
+    const asked = asInputRequired(await call(client, 'call_tool', through('elicit', 'confirm_thing', { what: 'delete it' })));
+    expect(asked.resultType).toBe('input_required');
+    expect(asked.inputRequests?.confirm?.params.message).toContain('Really delete it?');
+
+    const answered = await call(client, 'call_tool', {
+      ...through('elicit', 'confirm_thing', { what: 'delete it' }),
+      inputResponses: { confirm: { action: 'accept', content: { confirm: true } } },
+      requestState: asked.requestState
+    });
+    expect(JSON.stringify(answered)).toContain('did delete it');
+
+    await client.close();
+  }, 30_000);
+
+  it('names the child, not the hub, as the one asking', async () => {
+    // Through this door every question would otherwise look like it came from
+    // "mcp-hub" — the aggregate is what the client is talking to.
+    const client = await connectAsking('/hub');
+    const asked = asInputRequired(await call(client, 'call_tool', through('elicit', 'confirm_thing', { what: 'x' })));
+    expect(asked.inputRequests?.confirm?.params.message.startsWith('Server "elicit" asks:')).toBe(true);
+    await client.close();
+  }, 30_000);
+
+  it('survives more than one round', async () => {
+    const client = await connectAsking('/hub');
+    const first = asInputRequired(await call(client, 'call_tool', through('elicit', 'confirm_twice')));
+    expect(first.inputRequests?.confirm?.params.message).toContain('First question?');
+
+    const second = asInputRequired(
+      await call(client, 'call_tool', {
+        ...through('elicit', 'confirm_twice'),
+        inputResponses: { confirm: { action: 'accept', content: { confirm: true } } },
+        requestState: first.requestState
+      })
+    );
+    expect(second.inputRequests?.confirm?.params.message).toContain('Second question?');
+
+    const done = await call(client, 'call_tool', {
+      ...through('elicit', 'confirm_twice'),
+      inputResponses: { confirm: { action: 'accept', content: { confirm: true } } },
+      requestState: second.requestState
+    });
+    expect(JSON.stringify(done)).toContain('asked twice');
+    await client.close();
+  }, 30_000);
+
+  it('refuses a state minted at the other door', async () => {
+    // Same server, same tool, same client — only the endpoint differs. The two
+    // are different calls to everyone involved (different downstream tool name,
+    // different resource on the token), so one may not resume the other.
+    const viaHub = await connectAsking('/hub');
+    const asked = asInputRequired(await call(viaHub, 'call_tool', through('elicit', 'confirm_thing', { what: 'x' })));
+    expect(asked.requestState).toBeTruthy();
+
+    const direct = await connectAsking();
+    await expect(
+      call(direct, 'confirm_thing', {
+        arguments: { what: 'x' },
+        inputResponses: { confirm: { action: 'accept', content: { confirm: true } } },
+        requestState: asked.requestState
+      })
+    ).rejects.toThrow();
+
+    await direct.close();
+    await viaHub.close();
+  }, 30_000);
+
+  it('asks nothing for a tool the filter removed', async () => {
+    // The refusal has to stay the neutral one, and it has to come before the
+    // forward — a denied name must not reach the child at all, let alone get a
+    // question out of it.
+    const client = await connectAsking('/hub');
+    const result = await call(client, 'call_tool', through('filtered', 'confirm_thing', { what: 'x' }));
+    expect(JSON.stringify(result)).toContain('Unknown tool');
+    expect(asInputRequired(result).resultType).not.toBe('input_required');
+    await client.close();
   }, 30_000);
 });

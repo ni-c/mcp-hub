@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomBytes } from 'node:crypto';
 import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
 import { loadConfig, parseConfig, ConfigWatcher, warnMutableDockerImages, type HubConfig } from './config.js';
 import { Supervisor, UpstreamAuthRegistry } from './supervisor.js';
@@ -137,7 +138,14 @@ export function createStdioHub(options: StdioHubOptions) {
     console.warn(`mcp-hub: ${path.dirname(options.configPath)} does not exist — config hot reload is off`);
   }
 
-  return { server: buildHubServer(supervisor), supervisor, watcher };
+  // The seal on a half-finished tool call, which in this mode only ever has to
+  // survive between two legs of the same connection. There is no /data here and
+  // nothing to persist: the process IS the session, so a key drawn once at
+  // start is not a shortcut but the right lifetime. When the process ends there
+  // is no question left to resume.
+  const requestStateSecret = randomBytes(32).toString('base64url');
+
+  return { server: buildHubServer(supervisor, requestStateSecret), supervisor, watcher };
 }
 
 export async function runStdio(options: StdioHubOptions): Promise<void> {
