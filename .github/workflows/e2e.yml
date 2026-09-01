@@ -1,0 +1,159 @@
+name: E2E
+
+# The end-to-end suite: a hub in another process, and in a container, driven by
+# real clients over real HTTP. It is deliberately NOT part of ci.yml.
+#
+# Two reasons, both structural. It takes minutes rather than seconds, and
+# `npm test` being fast is a promise CONTRIBUTING.md makes to contributors. And
+# ci.yml's job names are the required status checks on main — adding a job there
+# means every pull request waits for it, while adding a *workflow* here means
+# the checks on main are untouched and a failure is loud but advisory.
+#
+# The tag-gated half of the gate lives in ci.yml as a job called `e2e`, which
+# `publish` depends on. Adding a job name is safe; renaming or removing one is
+# what breaks branch protection.
+
+on:
+  schedule:
+    # Not on the hour: everything else in the world runs then, and a nightly
+    # that competes for runners is a nightly that times out.
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+  pull_request:
+    # The most valuable four lines in this file. Without them the suite is never
+    # exercised on the pull request that changes it, and whoever breaks it finds
+    # out from a scheduled run nobody is watching. With them it runs only where
+    # it is relevant, so it never becomes a de-facto gate on unrelated work.
+    paths:
+      - 'e2e/**'
+      - 'vitest.e2e.config.ts'
+      - 'tsconfig.e2e.json'
+      - 'demo/**'
+      - 'src/timings.ts'
+      - '.github/workflows/e2e.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    # No `needs: test`. When the fast suite is broken is exactly when the extra
+    # signal is worth having.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The tier is a matrix dimension so that a tier which stops running
+        # shows up as a *missing job* rather than as a passing one.
+        tier: [inproc, process, docker]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          # One version, not the test matrix: the axis with signal here is the
+          # protocol era, and doubling by Node doubles the nightly for nothing.
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+      - run: npm run typecheck:e2e
+
+      # linux/amd64 only. arm64 is covered by container-scan under QEMU, and a
+      # QEMU-emulated compose stack running Node, Docker and a dozen children is
+      # far too slow and far too flaky to be worth the coverage.
+      - name: Build the image under test
+        if: matrix.tier == 'docker'
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          load: true
+          platforms: linux/amd64
+          tags: mcp-hub:e2e
+          cache-from: type=gha,scope=e2e
+          cache-to: type=gha,mode=max,scope=e2e
+
+      - run: npm run test:e2e -- --reporter=default --reporter=junit --outputFile=junit-${{ matrix.tier }}.xml
+        env:
+          # Required, with no default in CI: a workflow that lost this line
+          # would otherwise keep reporting green while running a third of what
+          # it claims to.
+          MCPHUB_E2E_TIERS: ${{ matrix.tier }}
+          # Only here, and never in ci.yml: this turns a missing daemon into a
+          # failed job instead of a silent skip. Setting it in the required
+          # checks would make them depend on the runner having Docker.
+          MCPHUB_EXPECT_DOCKER: ${{ matrix.tier == 'docker' && '1' || '' }}
+          MCPHUB_E2E_IMAGE: mcp-hub:e2e
+
+      - name: Refuse a green run that tested nothing
+        if: always()
+        run: |
+          # A suite that ran zero tests renders exactly like one that ran them
+          # all. The floor is deliberately low: it catches "nothing ran", not
+          # "not enough ran" — a real coverage claim belongs in the tests.
+          file="junit-${{ matrix.tier }}.xml"
+          test -f "$file" || { echo "no JUnit output: the suite did not get as far as reporting"; exit 1; }
+          if grep -q 'tests="0"' "$file"; then
+            echo "a suite reported tests=\"0\" — see $file"; exit 1
+          fi
+
+      - name: Refuse a run that quietly rewrote a golden
+        if: always()
+        run: |
+          # A transcript is an assertion somebody made on purpose. Re-recording
+          # one is allowed and has to be visible: if a run rewrote a file, the
+          # change belongs in the diff of a pull request that says so, not in
+          # the working tree of a job nobody reads.
+          if [ -n "$(git status --porcelain e2e/transcripts/)" ]; then
+            echo "the run modified e2e/transcripts/:"
+            git status --porcelain e2e/transcripts/
+            exit 1
+          fi
+
+      - name: Show the container logs when the docker tier fails
+        if: failure() && matrix.tier == 'docker'
+        run: docker ps -a && docker compose -f demo/compose.yml logs --tail=200 || true
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: e2e-junit-${{ matrix.tier }}
+          path: junit-${{ matrix.tier }}.xml
+
+  # A nightly that nobody watches is a nightly that is red by default within a
+  # month. One issue, reopened and updated rather than duplicated, is the only
+  # artefact that survives not reading email.
+  report:
+    needs: e2e
+    if: always() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        with:
+          script: |
+            const failed = ${{ needs.e2e.result != 'success' }};
+            const title = 'E2E nightly failing';
+            const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const { data: open } = await github.rest.issues.listForRepo({
+              ...context.repo, state: 'open', labels: 'e2e-nightly'
+            });
+            const existing = open.find(issue => issue.title === title);
+            if (failed) {
+              const body = `The nightly end-to-end run failed.\n\n${run}`;
+              if (existing) {
+                await github.rest.issues.createComment({ ...context.repo, issue_number: existing.number, body });
+              } else {
+                await github.rest.issues.create({ ...context.repo, title, body, labels: ['e2e-nightly'] });
+              }
+            } else if (existing) {
+              await github.rest.issues.createComment({
+                ...context.repo, issue_number: existing.number, body: `Green again.\n\n${run}`
+              });
+              await github.rest.issues.update({ ...context.repo, issue_number: existing.number, state: 'closed' });
+            }
