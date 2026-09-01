@@ -587,6 +587,71 @@ describe('OAuth', () => {
       .send(oversized)
       .expect(413);
   });
+
+  /**
+   * `/token` cannot ask who is calling before it reads the body — the
+   * credentials are in it — so the ceiling is the only thing bounding what an
+   * anonymous caller can make the hub hold. The hub reads this one stream
+   * itself, ahead of the authorization server, so the library's own limit does
+   * not apply and it has to bring its own.
+   */
+  it('refuses an oversized token request instead of buffering it', async () => {
+    const oversized = new URLSearchParams({ grant_type: 'authorization_code', pad: 'x'.repeat(200_000) }).toString();
+    const res = await request(hub.app).post('/token').set('Content-Type', 'application/x-www-form-urlencoded').send(oversized);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('invalid_request');
+
+    // A request under the ceiling still reaches the authorization server, which
+    // answers on the merits rather than on the size.
+    const ordinary = await request(hub.app)
+      .post('/token')
+      .type('form')
+      .send({ grant_type: 'authorization_code', code: 'nope', client_id: 'nobody', redirect_uri: REDIRECT_URI });
+    expect(ordinary.status).toBe(401);
+    expect(ordinary.body.error).toBe('invalid_client');
+  });
+
+  /**
+   * RFC 7591 makes `client_secret_basic` the default when a client omits
+   * `token_endpoint_auth_method`, which is what Claude and ChatGPT both do — so
+   * the authorization server mints a secret before the hub's `clientDefaults`
+   * get to say the client is public. Two things must be true afterwards: the
+   * record holds no credential, and the client can still redeem a code while
+   * echoing the secret its registration response carried.
+   */
+  it('keeps a public client that omitted its auth method free of a stored secret', async () => {
+    const registration = await request(hub.app)
+      .post('/register')
+      .send({ redirect_uris: [REDIRECT_URI], client_name: 'omits-auth-method' })
+      .expect(201);
+    const clientId = registration.body.client_id as string;
+
+    // The response still carries one: ChatGPT refuses a registration without it.
+    expect(registration.body.client_secret).toBeTypeOf('string');
+    expect(registration.body.token_endpoint_auth_method).toBe('none');
+    expect(hub.store.getClient(clientId)?.client_secret).toBeUndefined();
+
+    const { code, verifier } = await authorizeInBrowser(hub.app, clientId, {
+      password: PASSWORD,
+      redirectUri: REDIRECT_URI
+    });
+    const tokens = await request(hub.app)
+      .post('/token')
+      .type('form')
+      .send({
+        grant_type: 'authorization_code',
+        code,
+        code_verifier: verifier,
+        client_id: clientId,
+        // The accommodation quirk 2 exists for. Without the record being clean
+        // this is 401 invalid_client, because a presented secret selects
+        // client_secret_post against a client registered as `none`.
+        client_secret: registration.body.client_secret,
+        redirect_uri: REDIRECT_URI
+      })
+      .expect(200);
+    expect(tokens.body.access_token).toBeTypeOf('string');
+  });
 });
 
 describe('per-server proxy', () => {

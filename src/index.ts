@@ -175,6 +175,37 @@ export async function createHub(options: HubOptions) {
   app.set('trust proxy', options.trustedProxies ?? false);
   app.disable('x-powered-by');
 
+  /**
+   * A TRUSTED_PROXIES list that never matches is worse than an empty one,
+   * because the empty one is announced above and this is silent.
+   *
+   * The list is compared against the address the connection actually came from,
+   * and the easiest way to get that wrong is also the least visible: a proxy
+   * configured as `proxy_pass http://localhost:…` on a dual-stack host connects
+   * over `::1`, which `127.0.0.1` does not cover. Every forwarded header is
+   * then ignored, `req.ip` becomes the proxy for every request, per-caller rate
+   * limiting collapses into one global counter and every fail2ban line names
+   * the proxy — the exact failure the warning above exists for, with nothing
+   * said about it.
+   *
+   * Diagnosed rather than assumed: a forwarded header arrived and was not
+   * believed, which is the observable half of the mistake. Said once.
+   */
+  if (options.trustedProxies?.length) {
+    let warnedAboutProxy = false;
+    app.use((req: Request, _res: Response, next: NextFunction) => {
+      if (!warnedAboutProxy && req.headers['x-forwarded-for'] !== undefined && req.ip === req.socket.remoteAddress) {
+        warnedAboutProxy = true;
+        console.warn(
+          `mcp-hub: a request from ${req.socket.remoteAddress} carried X-Forwarded-For but that address is not in TRUSTED_PROXIES ` +
+            `(${options.trustedProxies?.join(', ')}), so the header was ignored — check for the 127.0.0.1 vs ::1 mismatch. ` +
+            'Until it matches, per-caller rate limiting and the fail2ban log lines see only the proxy.'
+        );
+      }
+      next();
+    });
+  }
+
   // A liveness check intentionally carries no topology. Detailed child state
   // lives behind OAuth at /health.
   app.get('/livez', (_req, res) => res.status(200).json({ status: 'ok' }));

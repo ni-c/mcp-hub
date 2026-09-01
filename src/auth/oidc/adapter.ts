@@ -3,6 +3,7 @@ import type { Adapter, AdapterFactory, AdapterPayload } from 'oidc-provider';
 
 import { type CimdResolver, isClientIdMetadataUrl } from '../cimd.js';
 import type { AuthStore } from '../store.js';
+import { withoutPhantomSecret } from './quirks.js';
 
 /**
  * oidc-provider's ten models, all backed by the one `AuthStore` the hub already
@@ -39,7 +40,8 @@ export function createOidcAdapter(store: AuthStore, cimd?: CimdResolver): Adapte
 function clientAdapter(store: AuthStore, cimd?: CimdResolver): Adapter {
   return {
     async upsert(id: string, payload: AdapterPayload): Promise<void> {
-      const record = { ...(payload as Record<string, unknown>), client_id: id } as never;
+      // A public client's record must not carry a secret; see withoutPhantomSecret.
+      const record = { ...withoutPhantomSecret(payload as Record<string, unknown>), client_id: id } as never;
       // A NEW client goes through addClient, which is what enforces the ceiling
       // on unapproved registrations and creates the lifecycle entry the
       // activity stamps and `mcp-hub-admin clients prune` are built on. Writing

@@ -241,6 +241,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   vendored packages still overwritten in place, verified against the built
   image.
 
+### Security
+
+Five findings from an internal review of the authorization surface, which is the
+half that was rewritten onto oidc-provider in this cycle and had not been looked
+at adversarially since.
+
+- **`/token` bounds the body it reads.** It is the one provider path whose
+  request stream the hub takes away from the library — `stripPhantomSecret` has
+  to read it to strip a presented secret — and it read it without a ceiling.
+  `/token` cannot ask who is calling before it reads, because the credentials
+  are in the body, so an anonymous 300 MB request took the process from 157 MB
+  resident to 1.4 GB, and the per-path budget still allows fifty of them per
+  caller per window. The ceiling is oidc-provider's own 56 KiB, so nothing a
+  legitimate client sends changes, and an oversized body now gets the same
+  answer the library would have given it.
+
+- **A public client's record no longer carries a secret.** RFC 7591 makes
+  `client_secret_basic` the default when `token_endpoint_auth_method` is
+  omitted — which is what Claude and ChatGPT both do — so the authorization
+  server minted and persisted a real secret before `clientDefaults` rewrote the
+  method to `none`. Two consequences, neither visible from outside:
+  `state.json` gained a value someone could present, which is the one thing it
+  is careful never to hold; and `stripPhantomSecret` gates on the stored client
+  having no secret, so it stopped firing for exactly the clients it exists for.
+  A connector that echoed the secret from its registration response got
+  `401 invalid_client` — the failure quirk 2 was written to prevent. The
+  response still carries a secret, because ChatGPT insists on one; only the
+  record is cleaned.
+
+- **A hundred wrong passwords no longer lock the operator out.** The global
+  failure ceiling refused every address once it was reached, so an attacker
+  could close the only administrative way in — from one host, in under a second,
+  renewable every fifteen minutes — and the operator holding the correct
+  password got `429` from an address that had never touched the form. The
+  ceiling now refuses the callers that are guessing, and refuses them on their
+  first failure rather than their tenth once the hub is under a distributed
+  attempt, so the total number of guesses still collapses. What it no longer
+  does is let them spend somebody else's budget.
+
+- **Every per-caller budget counts an IPv6 /64, not an address.** A /64 is the
+  smallest block one subscriber is handed, and a /56 or /48 is what a
+  residential line usually gets, so a limiter keyed on the full address counted
+  one host as billions of callers: twenty-five registrations from twenty-five
+  addresses in one network spent twenty-five budgets of twenty. IPv4 keeps its
+  own address, and an IPv4-mapped form is folded back onto it so the same caller
+  is not counted twice for arriving over a dual-stack listener. Log lines are
+  unchanged — fail2ban still gets the host that actually connected.
+
+- **A `TRUSTED_PROXIES` list that never matches is now said out loud.** It is
+  compared against the address the connection came from, and the easiest way to
+  get it wrong is the least visible: a proxy configured as
+  `proxy_pass http://localhost:…` on a dual-stack host arrives over `::1`,
+  which `127.0.0.1` does not cover. Every forwarded header is then ignored and
+  per-caller limiting collapses into one global counter — the exact failure the
+  startup warning covers for an *unset* list, with nothing said when the list is
+  merely wrong. The hub now says so once, when a forwarded header arrives from
+  an address it does not trust.
+
+Unchanged, and confirmed by the same review: the docker policy proxy refused
+every one of thirty-three attempts to reach the daemon past it — privileged
+containers, host mounts, `Mounts` instead of `Binds`, foreign images, prototype
+pollution in the create body, duplicate query parameters, encoded traversal in a
+container name, `exec`, `build`, `networks/create`; and the metadata-document
+fetcher refused literal private addresses, IPv4-mapped ones and public names
+that resolve inward.
+
 ## [0.10.0] - 2026-08-27
 
 ### Added
