@@ -4,6 +4,7 @@ import path from 'node:path';
 
 import type { ToolFilterConfig } from './tool-filter.js';
 import type { PassthroughConfig } from './elicitation.js';
+import type { SubscriptionsConfig } from './subscriptions.js';
 
 /**
  * One entry of the Claude-Code-style `mcpServers` map.
@@ -16,7 +17,7 @@ import type { PassthroughConfig } from './elicitation.js';
  * local server from on-demand lifecycling) and `idleMinutes` (per-server
  * override of the global idle timeout).
  */
-export interface StdioServerConfig extends ToolFilterConfig, PassthroughConfig {
+export interface StdioServerConfig extends ToolFilterConfig, PassthroughConfig, SubscriptionsConfig {
   kind: 'stdio';
   command: string;
   args: string[];
@@ -60,7 +61,7 @@ export const OAUTH_MODES = new Set(['static', 'dcr', 'cimd']);
 export const OAUTH_GRANTS = new Set(['authorization_code', 'client_credentials']);
 export const OAUTH_CLIENT_AUTH = new Set(['client_secret_basic', 'client_secret_post', 'private_key_jwt']);
 
-export interface RemoteServerConfig extends ToolFilterConfig, PassthroughConfig {
+export interface RemoteServerConfig extends ToolFilterConfig, PassthroughConfig, SubscriptionsConfig {
   kind: 'remote';
   transport: 'http' | 'sse';
   url: string;
@@ -83,7 +84,7 @@ export interface RemoteServerConfig extends ToolFilterConfig, PassthroughConfig 
  * (the hub supervises). A knob that can only weaken the sandbox is a knob the
  * policy would have to defend.
  */
-export interface DockerServerConfig extends ToolFilterConfig, PassthroughConfig {
+export interface DockerServerConfig extends ToolFilterConfig, PassthroughConfig, SubscriptionsConfig {
   kind: 'docker';
   image: string;
   /** `never` (default) fails when the image is absent; `missing` lets the hub pull it. */
@@ -124,7 +125,7 @@ export interface DockerServerConfig extends ToolFilterConfig, PassthroughConfig 
  * started by whoever owns the Compose file, and the hub needs no Docker access
  * at all. A Unix socket in a shared volume even works with `network_mode: none`.
  */
-export interface SocketServerConfig extends ToolFilterConfig, PassthroughConfig {
+export interface SocketServerConfig extends ToolFilterConfig, PassthroughConfig, SubscriptionsConfig {
   kind: 'socket';
   transport: 'unix' | 'tcp';
   socketPath?: string;
@@ -394,6 +395,27 @@ function parsePassthrough(name: string, entry: Record<string, unknown>): Passthr
   return { passthrough: entry.passthrough };
 }
 
+/**
+ * Parses `subscriptions`, the sibling of `passthrough`: whether this server may
+ * push change notifications to the clients that ask for them.
+ *
+ * A *partial* for the same reason the two above are — an entry without the
+ * field has to produce exactly the object it produced before.
+ *
+ * Separate from `passthrough` because the two are different judgements about
+ * different traffic. `passthrough` is about words shown to a person, and the
+ * risk is phishing. This one is about volume and timing on a stream nobody is
+ * reading synchronously, and the risk is noise. A server can easily warrant one
+ * answer and not the other.
+ */
+function parseSubscriptions(name: string, entry: Record<string, unknown>): SubscriptionsConfig {
+  if (entry.subscriptions === undefined) return {};
+  if (entry.subscriptions !== 'auto' && entry.subscriptions !== 'off') {
+    throw new ConfigError(`Server "${name}": "subscriptions" must be "auto" or "off"`);
+  }
+  return { subscriptions: entry.subscriptions };
+}
+
 function rejectLifecycle(name: string, entry: Record<string, unknown>, kind: string): void {
   for (const field of ['keepAlive', 'idleMinutes']) {
     if (entry[field] !== undefined) {
@@ -523,7 +545,7 @@ function parseSocketServer(name: string, entry: Record<string, unknown>, type: '
 function parseServer(name: string, entry: Record<string, unknown>, env: NodeJS.ProcessEnv, options?: ParseOptions): ServerConfig {
   const expand = expanderFor(env, options);
   const hub = entry.hub !== false;
-  const toolFilter = { ...parseToolFilter(name, entry), ...parsePassthrough(name, entry) };
+  const toolFilter = { ...parseToolFilter(name, entry), ...parsePassthrough(name, entry), ...parseSubscriptions(name, entry) };
   if (entry.hub !== undefined && typeof entry.hub !== 'boolean') {
     throw new ConfigError(`Server "${name}": "hub" must be a boolean`);
   }

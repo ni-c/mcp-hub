@@ -129,6 +129,14 @@ revision a child server's [question reaches the
 person](/guide/elicitation) at the far end, which is the one thing a gateway
 used to take away from servers like `smtp-mcp` and `imap-mcp`.
 
+**Changes reach the client that asked, whichever era the server speaks.** A
+client opens a [`subscriptions/listen`](/guide/subscriptions) stream and hears
+when a child's tools, prompts or resources change. Upstream the hub asks each
+child the way that child understands — `subscriptions/listen` to a 2026 server,
+`resources/subscribe` to a 2025 one — so the era gap is the gateway's problem
+rather than either end's. Most MCP servers in the wild are still on the older
+revision, which is exactly when this matters.
+
 **Light enough for a Raspberry Pi.** A stated project goal: one Node process,
 no database — state is one JSON file plus an Ed25519 key under `/data` — a
 six runtime dependencies, and multi-arch images (`amd64`/`arm64`). The
@@ -141,10 +149,12 @@ keeps the hub comfortable on a single-board computer.
   the same operating-system user as the hub and can read its mounted files and
   environment. Only run stdio packages you trust; put anything else in its own
   container and connect it as a remote server. See [Security](/guide/security).
-- **Not a notification bridge.** Request/response traffic is delivered in full
-  on both MCP revisions, and on `2026-07-28` that includes a child's
-  [question to the user](/guide/elicitation) — but push traffic
-  (`listChanged`, subscriptions) is not forwarded to clients on either.
+- **Not a notification bridge for `2025-11-25` clients.** Change notifications
+  are carried on `2026-07-28`, where the client opens the stream and the state
+  is the open response. The older revision delivers them unsolicited on a
+  channel the stateless transport does not keep, so the hub does not offer them
+  there — and says so in its capabilities rather than announcing something that
+  will not arrive.
 - **Not a multi-user system.** There is one password. Anyone who has it can
   approve a client and reach every server the hub exposes.
 

@@ -76,6 +76,7 @@ export default defineConfig({
             { text: 'Sandboxing servers', link: '/guide/sandboxing' },
             { text: 'On-demand servers', link: '/guide/on-demand' },
             { text: 'Elicitation', link: '/guide/elicitation' },
+            { text: 'Subscriptions', link: '/guide/subscriptions' },
             { text: 'Client registration', link: '/guide/client-registration' },
             { text: 'Security', link: '/guide/security' },
             { text: 'FAQ & troubleshooting', link: '/guide/faq' }

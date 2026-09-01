@@ -12,7 +12,7 @@ import type { CallToolResult } from '@modelcontextprotocol/server';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { authorizeInBrowser, registerPublicClient } from './auth-flow.js';
 import { createHub } from '../src/index.js';
-import { handleMcpRequest } from '../src/proxy.js';
+import { createRoute, handleMcpRequest } from '../src/proxy.js';
 import type { ManagedServer } from '../src/supervisor.js';
 
 const EVERYTHING = path.resolve('node_modules/@modelcontextprotocol/server-everything/dist/index.js');
@@ -86,12 +86,10 @@ let upstreamServer: ReturnType<express.Express['listen']>;
 function startRemoteUpstream(): Promise<number> {
   const app = express();
   app.use(express.json({ limit: '4mb' }));
-  app.all('/mcp', (req, res) => {
-    if (req.headers.authorization !== 'Bearer remote-secret') {
-      res.status(401).json({ error: 'missing upstream auth' });
-      return;
-    }
-    void handleMcpRequest(() => {
+  // One route for the fixture, as the hub itself keeps one per path: the
+  // handler owns any open subscription stream, so it cannot be per request.
+  const route = createRoute(
+    () => {
       const server = new McpServer({ name: 'remote-fixture', version: '1.0.0' });
       server.registerTool(
         'remote_echo',
@@ -99,7 +97,15 @@ function startRemoteUpstream(): Promise<number> {
         async ({ msg }) => ({ content: [{ type: 'text', text: `remote:${msg}` }] })
       );
       return server.server;
-    }, req, res);
+    },
+    { label: 'remote-fixture' }
+  );
+  app.all('/mcp', (req, res) => {
+    if (req.headers.authorization !== 'Bearer remote-secret') {
+      res.status(401).json({ error: 'missing upstream auth' });
+      return;
+    }
+    void handleMcpRequest(route, req, res);
   });
   return new Promise(resolve => {
     upstreamServer = app.listen(0, () => resolve((upstreamServer.address() as AddressInfo).port));

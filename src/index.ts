@@ -7,7 +7,7 @@ import { loadConfig, ConfigWatcher, warnMutableDockerImages } from './config.js'
 import { Supervisor, UpstreamAuthRegistry } from './supervisor.js';
 import { ToolCache } from './tool-cache.js';
 import { warnSingleFileMount } from './mount-check.js';
-import { serverRequestHandler, handleMcpRequest } from './proxy.js';
+import { serverRequestHandler, handleMcpRequest, createRoute } from './proxy.js';
 import { buildHubServer } from './hub.js';
 import { AuthStore, DEFAULT_CLIENT_LIMITS } from './auth/store.js';
 import { CimdResolver } from './auth/cimd.js';
@@ -129,6 +129,17 @@ export async function createHub(options: HubOptions) {
   // awaited: an unreachable Docker endpoint must not hold up the HTTP listener
   // or the stdio children. Children come up (or hydrate into `sleeping`) in
   // the background; paths answer 503 until then.
+  // One long-lived route for the aggregate, because the handler inside owns the
+  // open subscription streams. /hub carries tools and nothing else, so the only
+  // change worth relaying is a child's tool list moving; the supervisor
+  // publishes those here.
+  const hubRoute = createRoute(() => buildHubServer(supervisor, store.cookieSecret).server, {
+    label: '/hub',
+    // Every child, because the aggregate's tool list spans all of them.
+    onDemandChange: () => supervisor.reconcileAll()
+  });
+  supervisor.hubSubscriptions = hubRoute.registry;
+
   supervisor.start();
   void supervisor
     .reapOrphans()
@@ -214,7 +225,12 @@ export async function createHub(options: HubOptions) {
   sweepClients();
   const pruneTimer = setInterval(sweepClients, CLIENT_PRUNE_INTERVAL_MS);
   pruneTimer.unref(); // never a reason to keep the process alive
-  const stopMaintenance = () => clearInterval(pruneTimer);
+  const stopMaintenance = () => {
+    clearInterval(pruneTimer);
+    // The aggregate's handler holds whatever listen streams are open on /hub;
+    // nothing else closes it, because it is not owned by a ManagedServer.
+    void hubRoute.close().catch(() => {});
+  };
 
   // Bearer auth for the MCP endpoints, advertising the path-scoped RFC 9728
   // metadata document in WWW-Authenticate so clients discover the AS.
@@ -267,7 +283,7 @@ export async function createHub(options: HubOptions) {
 
   const dispatch = (name: string) => async (req: Request, res: Response, next: NextFunction) => {
     if (name === 'hub') {
-      await handleMcpRequest(() => buildHubServer(supervisor, store.cookieSecret).server, req, res);
+      await handleMcpRequest(hubRoute, req, res);
       return;
     }
     const managed = supervisor.get(name);
@@ -279,7 +295,11 @@ export async function createHub(options: HubOptions) {
   };
 
   for (const route of ['/:name', '/:name/mcp']) {
-    app.all(route, bearer, gate.middleware, requireRouteResource, parseMcpJson, (req: Request, res: Response, next: NextFunction) =>
+    // parseMcpJson ahead of the gate, which is a change of order: the gate has
+    // to tell a `subscriptions/listen` POST from an ordinary one, and that only
+    // shows in the parsed body. Authorization still runs first, so the parse is
+    // bounded by mcpBodyLimit and only ever done for a caller allowed to be here.
+    app.all(route, bearer, requireRouteResource, parseMcpJson, gate.middleware, (req: Request, res: Response, next: NextFunction) =>
       void dispatch(String(req.params.name))(req, res, next).catch(next)
     );
   }

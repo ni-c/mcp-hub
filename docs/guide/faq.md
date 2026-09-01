@@ -147,10 +147,23 @@ is picked up within a few seconds. If nothing happens, check two things:
 
 ### Notifications from a server never arrive
 
-Push traffic — `listChanged`, resource subscriptions — is not delivered to
-clients on either MCP revision. This is a deliberate trade for not leaking
-session state on every client reconnect. Tool, resource and prompt
-request/response traffic is unaffected.
+Check the revision first. On **`2026-07-28`** notifications do arrive, but only
+on a stream you opened: send `subscriptions/listen` naming the types you want —
+nothing is pushed at a client that did not ask. See
+[Subscriptions](/guide/subscriptions).
+
+On **`2025-11-25`** they are not delivered at all, and the hub does not
+advertise them either — that revision needs a channel the stateless transport
+does not keep.
+
+Three more things worth checking on the newer revision:
+
+- **The child has to declare it.** A type the child never advertised is left out
+  of the acknowledgment; compare what you asked for against what came back.
+- **A sleeping server watches nothing.** An [on-demand](/guide/on-demand) child
+  holds no connection. The subscription is re-established when something wakes
+  it, and you are then told to re-read — but the change itself is not reported.
+- **`subscriptions: "off"`** on that server withdraws its right to push.
 
 A question from a server is *not* in that category, despite looking like it.
 On `2026-07-28` an elicitation is a result rather than a push, so it does

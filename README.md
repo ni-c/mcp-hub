@@ -13,9 +13,13 @@ A dual-era [Model Context Protocol](https://modelcontextprotocol.io) (MCP) gatew
 serves many stdio MCP servers from **one container**, published over HTTPS, and speaks
 **both MCP revisions on every endpoint** — `2026-07-28` and `2025-11-25`. The client
 picks, and cannot tell which one it is on from the answers. On the 2026 revision that
-includes **elicitation**: a child server's question reaches the person at the far end
+includes **elicitation** — a child server's question reaches the person at the far end
 instead of dying at the gateway
-([how](https://mcp-hub.ni-c.de/guide/elicitation)).
+([how](https://mcp-hub.ni-c.de/guide/elicitation)) — and **subscriptions**: the hub
+serves `subscriptions/listen` to its clients and subscribes to its children on
+whichever revision *they* speak, so a server that has never heard of it still reaches
+a client that speaks nothing else
+([how](https://mcp-hub.ni-c.de/guide/subscriptions)).
 
 Lets MCP clients that cannot spawn a local process — ChatGPT connectors, Claude on
 the Web and in Code, Mistral Le Chat, Cursor, LibreChat and any other
@@ -98,6 +102,15 @@ replaces N containers with one process:
   seals the resumption state against the call it belongs to. `passthrough:
   "off"` withdraws one server's right to ask;
   [details](https://mcp-hub.ni-c.de/guide/elicitation).
+- **Change notifications, in both eras**: a client opens a
+  `subscriptions/listen` stream and hears when a child's tools, prompts or
+  resources change. The hub subscribes to each child the way that child
+  understands — `subscriptions/listen` to a 2026 server, `resources/subscribe`
+  to a 2025 one — so the era gap is the gateway's problem rather than either
+  end's. The state is the open response, not a session table, so this costs the
+  stateless design nothing. A sleeping server watches nothing and is told to
+  re-read on waking; `subscriptions: "off"` withdraws one server's right to
+  push; [details](https://mcp-hub.ni-c.de/guide/subscriptions).
 - **Lightweight by design**: one Node process, no database (state is one JSON
   file plus a signing key under `/data`), six runtime dependencies, and
   multi-arch images — a stated project goal is to run comfortably on a
@@ -381,11 +394,15 @@ immediately. Per-client recipes:
 
 ## Notes & limitations
 
-- Stateless transport: push notifications (`listChanged`, subscriptions) are not
-  delivered to clients on either MCP revision. Tool/resource/prompt
-  request-response works fully; the hub's tool cache does follow
-  `tools/list_changed` internally. Elicitation is not in this list — on
-  `2026-07-28` it is a result rather than a push and travels end to end.
+- Change notifications (`listChanged`, resource updates) are carried on
+  `2026-07-28` via `subscriptions/listen`, whose state is the open response
+  rather than a session table. A `2025-11-25` client is offered neither, because
+  that revision needs a channel the stateless transport does not keep — so the
+  capability is withheld instead of announced and dropped. An on-demand server
+  watches nothing while it sleeps; the subscription is re-established on the
+  next wake and the client is told to re-read.
+- Elicitation travels end to end on `2026-07-28`: it is a result rather than a
+  push. Sampling and log messages are not forwarded.
 - Access tokens are opaque and last 15 minutes. Revoking a client takes effect
   on its next request rather than when the token expires — the token is a
   reference to a stored record, so withdrawing it is a deletion. Refresh tokens

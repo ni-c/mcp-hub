@@ -2,11 +2,31 @@ import type { Request, Response } from 'express';
 import { CompleteResultSchema, GetPromptResultSchema, ListPromptsResultSchema, ListResourcesResultSchema, ListResourceTemplatesResultSchema, ListToolsResultSchema, ReadResourceResultSchema } from '@modelcontextprotocol/core';
 import { NodeStreamableHTTPServerTransport, toNodeHandler, toWebRequest } from '@modelcontextprotocol/node';
 import { Server, ProtocolError, ProtocolErrorCode, createMcpHandler, isLegacyRequest } from '@modelcontextprotocol/server';
-import type { ListToolsResult, ServerCapabilities, StandardSchemaV1 } from '@modelcontextprotocol/server';
+import type { ListToolsResult, McpHttpHandler, ServerCapabilities, StandardSchemaV1 } from '@modelcontextprotocol/server';
 import type { ManagedServer } from './supervisor.js';
 import { ABSOLUTE_CALL_OPTIONS, assertForwardedResultSize } from './mcp-limits.js';
 import { filterTools, loggableToolName, toolAllowed } from './tool-filter.js';
 import { forwardToolCall } from './forward.js';
+import type { RouteChannel } from './subscriptions.js';
+import {
+  KEEPALIVE_MS,
+  MAX_STREAM_MS,
+  MAX_SUBSCRIPTIONS,
+  MAX_SUBSCRIPTION_URIS,
+  SubscriptionRegistry,
+  isListenRequest,
+  parseListenFilter,
+  subscriptionsAllowed
+} from './subscriptions.js';
+
+/**
+ * Which protocol revision a request arrived on.
+ *
+ * Not threaded through from `isLegacyRequest`: the two eras are served by two
+ * different objects — the long-lived modern handler and the per-request legacy
+ * transport — so each construction site already knows its own answer.
+ */
+export type Era = 'modern' | 'legacy';
 
 /** What `Client.request` accepts as its second argument. Named so the two
  *  forwarding helpers below can be generic over it without repeating the
@@ -19,21 +39,48 @@ type ForwardOptions = Partial<Parameters<NonNullable<ManagedServer['client']>['r
 /**
  * The child's capabilities minus what this proxy does not actually serve.
  *
- * resources.subscribe is dropped: there is no Subscribe handler below, so a
- * client that believed the advertisement got -32601 at call time. Announcing
- * only what we answer is the difference between a missing feature and a lie.
+ * The rule is one sentence: announce only what we answer. Three claims are
+ * decided here, and each used to be decided the other way.
  *
- * listChanged deliberately stays. Forwarding server-initiated messages needs
- * per-client session state, which the stateless transport exists to avoid, so
- * the notification never arrives — but a client waiting for one that never
- * comes is no worse off than a client that was never told. It is listed under
- * the known gaps in the documentation instead.
+ * `listChanged` and `resources.subscribe` now survive — but only on the era
+ * that carries them. A 2026-07-28 client opens a `subscriptions/listen` stream
+ * and the hub delivers on it; a 2025 client would need `resources/subscribe`
+ * and an unsolicited server-to-client channel, and gets neither, so it is told
+ * neither. The 2025 side is the behaviour that shipped before, now stated
+ * rather than assumed.
+ *
+ * `logging` goes on both eras. `logging/setLevel` has no handler and never
+ * had one, so a client that believed the advertisement got a -32601 at call
+ * time — the exact shape of the bug `resources.subscribe` used to have. On
+ * 2026-07-28 the level is per-request `_meta` and there is no RPC to implement;
+ * carrying `notifications/message` is a separate piece of work, and until it
+ * exists the honest answer is silence.
+ *
+ * A server whose operator set `subscriptions: "off"` is treated exactly like a
+ * 2025 connection here. Withdrawing the delivery without withdrawing the claim
+ * would just recreate the lie one config key lower down.
  */
-function advertisedCapabilities(capabilities: ServerCapabilities | undefined): ServerCapabilities {
+function advertisedCapabilities(capabilities: ServerCapabilities | undefined, era: Era, allowed: boolean): ServerCapabilities {
   const caps: ServerCapabilities = { ...capabilities };
+  delete caps.logging;
+  const pushes = era === 'modern' && allowed;
+  // `listChanged: false` and an absent key mean the same thing to a client, and
+  // the absent one is what the specification shows, so drop rather than negate.
+  if (caps.tools) {
+    const { listChanged, ...rest } = caps.tools;
+    caps.tools = pushes && listChanged ? { ...rest, listChanged } : rest;
+  }
+  if (caps.prompts) {
+    const { listChanged, ...rest } = caps.prompts;
+    caps.prompts = pushes && listChanged ? { ...rest, listChanged } : rest;
+  }
   if (caps.resources) {
-    const { subscribe: _subscribe, ...resources } = caps.resources;
-    caps.resources = resources;
+    const { listChanged, subscribe, ...rest } = caps.resources;
+    caps.resources = {
+      ...rest,
+      ...(pushes && listChanged ? { listChanged } : {}),
+      ...(pushes && subscribe ? { subscribe } : {})
+    };
   }
   return caps;
 }
@@ -44,10 +91,10 @@ function advertisedCapabilities(capabilities: ServerCapabilities | undefined): S
  * transport means no server-side session state at all — claude.ai reconnects
  * every few minutes without ever closing sessions, so anything stateful leaks.
  */
-function buildProxyServer(managed: ManagedServer, secret: string): Server {
+function buildProxyServer(managed: ManagedServer, secret: string, era: Era): Server {
   const server = new Server(
     { name: managed.serverInfo?.name ?? managed.name, version: managed.serverInfo?.version ?? '0.0.0' },
-    { capabilities: advertisedCapabilities(managed.capabilities) }
+    { capabilities: advertisedCapabilities(managed.capabilities, era, subscriptionsAllowed(managed.config)) }
   );
   /**
    * Forwards one request and hands back exactly what the schema describes.
@@ -160,34 +207,149 @@ async function handleLegacyRequest(buildServer: () => Server, req: Request, res:
 }
 
 /**
+ * One route's long-lived half.
+ *
+ * The modern handler used to be built per request and closed when the response
+ * closed. That is exactly the lifetime a `subscriptions/listen` stream cannot
+ * have: it outlives the exchange that opened it, and the handler owns it. So
+ * the handler is hoisted here, one per route, and the `res.on('close')` that
+ * used to close it is gone — with a shared handler that line would have let the
+ * first finished tool call tear down every other client's subscriptions.
+ *
+ * The legacy leg is untouched and stays per request, because a stateless
+ * transport holds nothing worth keeping.
+ */
+export interface McpRoute extends RouteChannel {
+  handler: McpHttpHandler;
+  allowSubscriptions: () => boolean;
+  buildLegacyServer: () => Server;
+}
+
+export interface RouteOptions {
+  /** Called when the merged demand of this route's leases may have changed. */
+  onDemandChange?: () => void;
+  /**
+   * Whether this route may take subscription leases at all. A thunk rather than
+   * a boolean because a config reload can flip it under a live route.
+   */
+  allowSubscriptions?: () => boolean;
+  /** Names this route in the log line for a failed modern-era request. */
+  label: string;
+}
+
+export function createRoute(buildServer: (era: Era) => Server, options: RouteOptions): McpRoute {
+  const allowSubscriptions = options.allowSubscriptions ?? (() => true);
+  const handler = createMcpHandler(() => buildServer('modern'), {
+    // Strict: the legacy era is served below, by the transport that has always
+    // served it. A second, differently-behaving legacy path underneath this one
+    // would be unreachable and misleading.
+    legacy: 'reject',
+    // Set rather than inherited. These bound what one route may hold open on
+    // the hub's behalf, and a limit nobody wrote down is a limit nobody can
+    // raise when a deployment needs it.
+    maxSubscriptions: MAX_SUBSCRIPTIONS,
+    keepAliveMs: KEEPALIVE_MS,
+    onerror: error => console.error(`mcp-hub: modern-era request failed on ${options.label}: ${error.message}`)
+  });
+  const registry = new SubscriptionRegistry(handler.notify, { onDemandChange: options.onDemandChange });
+  return {
+    handler,
+    registry,
+    allowSubscriptions,
+    buildLegacyServer: () => buildServer('legacy'),
+    close: async () => {
+      registry.close();
+      await handler.close();
+    }
+  };
+}
+
+/**
+ * Take a lease for a `subscriptions/listen` stream, or answer it outright.
+ *
+ * The filter has to be read here rather than left to the SDK: the event bus is
+ * publish-only and never reports which URIs a stream asked for, so this is the
+ * hub's only chance to learn what to hold upstream. The SDK still parses the
+ * request properly a moment later and owns every error answer — the one refusal
+ * made here is the URI cap, which is the hub's limit and nobody else's.
+ *
+ * Returns false when the request has already been answered.
+ */
+function beginListen(route: McpRoute, req: Request, res: Response): boolean {
+  const filter = parseListenFilter(req.body);
+  if (filter.resourceSubscriptions.length > MAX_SUBSCRIPTION_URIS) {
+    res.status(400).json({
+      jsonrpc: '2.0',
+      error: { code: -32602, message: `A subscription may name at most ${MAX_SUBSCRIPTION_URIS} resource URIs` },
+      id: null
+    });
+    return false;
+  }
+  // Node's server-wide requestTimeout (310s by default) would otherwise cut
+  // every listen stream a few minutes in, which looks exactly like a flaky
+  // upstream and is not. A listening stream is idle by design; its lifetime is
+  // bounded by MAX_STREAM_MS below instead.
+  req.setTimeout(0);
+  const reaper =
+    MAX_STREAM_MS > 0
+      ? setTimeout(() => {
+          // Ends the stream without the specification's graceful completion
+          // result — the SDK owns the stream and offers no hook for one. The
+          // client sees the same unexpected disconnect an HTTP timeout would
+          // produce, which the specification names as a way a subscription
+          // ends, and re-listens.
+          res.end();
+        }, MAX_STREAM_MS)
+      : undefined;
+  reaper?.unref();
+  // A server whose operator switched subscriptions off advertises nothing and
+  // is asked for nothing, so the stream stays open and silent rather than
+  // taking a lease that would make the hub subscribe upstream on its behalf.
+  const lease = route.allowSubscriptions() ? route.registry.acquire(filter) : undefined;
+  let done = false;
+  const release = () => {
+    if (done) return;
+    done = true;
+    clearTimeout(reaper);
+    lease?.release();
+  };
+  res.once('close', release);
+  res.once('finish', release);
+  return true;
+}
+
+/**
  * Handle one MCP request in whichever protocol era it arrives in.
  *
  * `isLegacyRequest` decides, and its contract is one-way: everything it calls
  * false — including a malformed envelope or a header/body mismatch — belongs to
  * the modern handler, which owns those error answers. Only what it calls true
  * may reach the legacy path.
- *
- * The modern handler is built per request. It is documented as long-lived and
- * has `close()`, which matters once `subscriptions/listen` is forwarded to
- * children; until then it holds nothing between requests, and a fresh one per
- * request is the same lifecycle the legacy path has always had.
  */
-export async function handleMcpRequest(buildServer: () => Server, req: Request, res: Response): Promise<void> {
+export async function handleMcpRequest(route: McpRoute, req: Request, res: Response): Promise<void> {
   const probe = await toWebRequest(req, req.body);
   if (await isLegacyRequest(probe)) {
-    await handleLegacyRequest(buildServer, req, res);
+    await handleLegacyRequest(route.buildLegacyServer, req, res);
     return;
   }
+  if (isListenRequest(req.body) && !beginListen(route, req, res)) return;
+  await toNodeHandler(route.handler)(req, res, req.body);
+}
 
-  const handler = createMcpHandler(() => buildServer(), {
-    // Strict: the legacy era is served above, by the transport that has always
-    // served it. A second, differently-behaving legacy path underneath this one
-    // would be unreachable and misleading.
-    legacy: 'reject',
-    onerror: error => console.error(`mcp-hub: modern-era request failed: ${error.message}`)
-  });
-  res.on('close', () => void handler.close());
-  await toNodeHandler(handler)(req, res, req.body);
+/**
+ * The route behind each server path, created on first use and closed with the
+ * server. Held here rather than constructed per request because the handler
+ * inside owns open subscription streams.
+ */
+function routeFor(managed: ManagedServer, secret: string): McpRoute {
+  if (!managed.channel) {
+    managed.channel = createRoute(era => buildProxyServer(managed, secret, era), {
+      label: `/${managed.name}`,
+      onDemandChange: () => managed.reconcileSubscriptions(),
+      allowSubscriptions: () => subscriptionsAllowed(managed.config)
+    });
+  }
+  return managed.channel as McpRoute;
 }
 
 /** Express handler for /<name> and /<name>/mcp. */
@@ -213,6 +375,11 @@ export function serverRequestHandler(managed: ManagedServer, secret: string) {
       // With a snapshot the proxy server is built from cached identity and
       // capabilities; its handlers wake the child only for real usage.
     }
-    await handleMcpRequest(() => buildProxyServer(managed, secret), req, res);
+    // Deliberately not `use()`: opening a listen stream is not usage. A client
+    // that subscribes to a sleeping child gets an honest acknowledgment built
+    // from the cached capabilities — they survive the nap — and delivery
+    // resumes when something actually wakes it. Waking on subscribe would undo
+    // on-demand for every server anyone ever watched.
+    await handleMcpRequest(routeFor(managed, secret), req, res);
   };
 }

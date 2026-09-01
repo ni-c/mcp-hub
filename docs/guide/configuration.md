@@ -341,6 +341,29 @@ upstream you route to but do not fully trust with the user's attention.
 `MCP_ELICITATION=false` switches the whole feature off for every server at
 once. Like the other fields here, Claude Code ignores `passthrough`.
 
+## Letting a server push: `subscriptions`
+
+```json
+"chatty": { "command": "npx", "args": ["-y", "some-server"], "subscriptions": "off" }
+```
+
+On MCP `2026-07-28` a client can open a
+[`subscriptions/listen`](/guide/subscriptions) stream and hear when this
+server's tools, prompts or resources change. `"auto"`, the default, allows that.
+
+`"off"` withdraws this one server's right to push. It is a separate judgement
+from `passthrough`, and deliberately so: that one is about words shown to a
+person, where the risk is phishing; this one is about volume on a stream nobody
+reads synchronously, where the risk is noise. A server can easily warrant one
+answer and not the other.
+
+A switched-off server is treated like a 2025 connection throughout — the
+capability is withheld as well as the delivery, so nothing is announced that
+will not arrive.
+
+`MCP_SUBSCRIPTIONS=false` switches the feature off hub-wide; the other limits
+are listed on the [Subscriptions](/guide/subscriptions#limits) page.
+
 ## Lifecycle: `keepAlive` and `idleMinutes`
 
 Stdio and docker servers run [on demand](/guide/on-demand) by default: started

@@ -34,20 +34,29 @@ cannot be hashed like the hub's own refresh tokens. `state.json` is mode 0600
 and was already a secret, but with upstream OAuth in use it holds credentials to
 a third party — treat the volume accordingly.
 
-**Server-initiated messages are not delivered.** `listChanged`, resource
-subscriptions and sampling stop at the hub. Forwarding them needs per-client
-session state, which is exactly what the
-[stateless transport](/guide/architecture#stateless-transport) avoids so that
-clients reconnecting without closing their sessions cannot leak resources.
-Changing this means solving that leak first.
+**A `2025-11-25` client receives no change notifications.** `listChanged` and
+resource subscriptions are carried on `2026-07-28` through
+[`subscriptions/listen`](/guide/subscriptions), where the state is the open
+response rather than a session table. The older revision delivers them
+unsolicited on a channel the
+[stateless transport](/guide/architecture#stateless-transport) does not keep,
+and `resources/subscribe` would require the hub to remember who asked for what.
+Both are therefore not advertised to a 2025 client at all, rather than announced
+and dropped — which is what the hub used to do.
 
-One consequence is visible on the wire: the hub still announces `listChanged`
-for tools, prompts and resources, because a proxied server passes its child's
-capabilities on and `/hub` gets the flag from the SDK as soon as a tool is
-registered. A client that acts on it simply waits for a notification that never
-arrives. Resource subscriptions used to be announced the same way, which was
-worse — there is no handler, so the call failed — and since 0.6.3 they are no
-longer advertised.
+**A change made while a child is asleep is not reported as such.** An on-demand
+server holds no connection, so nothing is watched while it naps. The
+subscription survives as intent and is re-established on the next wake, followed
+by a re-read signal for everything the client was watching. What the client
+cannot learn is *what* changed in between — only that it should look again.
+
+**Sampling is not forwarded.** A child asking the hub to run a completion has
+nowhere to send that request; it is dropped and named in the log.
+
+**Log messages are not carried.** `logging/setLevel` never had a handler, and is
+no longer advertised on either era. On `2026-07-28` the level is per-request
+`_meta` and there is no RPC to implement, but `notifications/message` is not
+relayed either.
 
 **One password, no users.** There are no accounts, roles or audit trails, and
 none are planned — that is a different product. See

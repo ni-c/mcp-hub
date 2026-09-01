@@ -9,6 +9,7 @@ import { AuthStore } from './auth/store.js';
 import { ToolCache } from './tool-cache.js';
 import { buildHubServer } from './hub.js';
 import { isMainModule } from './main-module.js';
+import { SubscriptionRegistry } from './subscriptions.js';
 
 export interface StdioHubOptions {
   /** Path to the mcp.json. A missing file starts an empty hub instead of failing. */
@@ -170,15 +171,51 @@ export async function runStdio(options: StdioHubOptions): Promise<void> {
   // "exactly as a hand-wired stdio server serves it today" — so nothing changes
   // for a client that speaks the old era. What is new is only that a modern
   // opening is now accepted instead of being answered in the old one.
-  const handle = serveStdio(() => build(), {
-    legacy: 'serve',
-    onerror: error => console.error(`mcp-hub: stdio connection error: ${error.message}`)
-  });
+  // The aggregate's tool list moves whenever a child's does, and over stdio the
+  // hub cannot see the client's listen filter: `serveStdio` owns the request and
+  // offers no hook for one. So it holds a standing lease instead — one client,
+  // one connection, one thing worth watching.
+  //
+  // That is not a way of pushing at someone who did not ask.
+  // `sendToolListChanged()` reaches only the subscriptions actually open, so a
+  // client that never sent `subscriptions/listen` receives nothing; the lease
+  // only decides whether the hub bothers to watch the children upstream.
+  let registry: SubscriptionRegistry | undefined;
+  const handle = serveStdio(
+    () => {
+      const hub = build();
+      registry?.close();
+      registry = new SubscriptionRegistry(
+        {
+          toolsChanged: () => hub.sendToolListChanged(),
+          // /hub aggregates tools and nothing else, so the other three describe
+          // nothing a client of this endpoint could read.
+          promptsChanged: () => {},
+          resourcesChanged: () => {},
+          resourceUpdated: () => {}
+        },
+        { onDemandChange: () => supervisor.reconcileAll() }
+      );
+      registry.acquire({
+        toolsListChanged: true,
+        promptsListChanged: false,
+        resourcesListChanged: false,
+        resourceSubscriptions: []
+      });
+      supervisor.hubSubscriptions = registry;
+      return hub;
+    },
+    {
+      legacy: 'serve',
+      onerror: error => console.error(`mcp-hub: stdio connection error: ${error.message}`)
+    }
+  );
   console.error(`mcp-hub: serving the hub aggregate over stdio (config ${options.configPath})`);
 
   const shutdown = async (signal: string) => {
     console.error(`mcp-hub: received ${signal}, shutting down`);
     watcher.stop();
+    registry?.close();
     await handle.close();
     await supervisor.stop();
     process.exit(0);

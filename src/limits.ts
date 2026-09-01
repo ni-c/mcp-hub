@@ -1,5 +1,7 @@
 import type { NextFunction, Request, Response } from 'express';
 
+import { isListenRequest } from './subscriptions.js';
+
 interface ClientWindow {
   startedAt: number;
   requests: number;
@@ -33,8 +35,19 @@ export class ClientRequestGate {
   /**
    * For MCP routes, where a GET is the standing SSE listening channel by
    * definition — the spec has no other use for it.
+   *
+   * On 2026-07-28 there is no such GET: `subscriptions/listen` is a POST whose
+   * response stays open for the life of the subscription. Counted as a request
+   * it would hold an in-flight slot the whole time, and the default budget is
+   * four — so a handful of subscribed clients would lock every tool call on the
+   * hub out with a 429 while nothing was actually running. It is the same
+   * channel by another name, and it belongs in the same budget.
+   *
+   * This is why the gate runs after the JSON body parser: the method is in the
+   * body, and there is no way to tell the two shapes of POST apart before it
+   * has been read.
    */
-  middleware = this.gate(req => req.method === 'GET');
+  middleware = this.gate(req => req.method === 'GET' || isListenRequest(req.body));
 
   /** For routes that only ever answer one request, such as `/health`. */
   requestMiddleware = this.gate(() => false);

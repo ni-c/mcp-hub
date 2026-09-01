@@ -119,9 +119,32 @@ admit.
 | `completion/complete` | carried | carried |
 | **Elicitation** — a child asking the person a question | **carried both ways** | not offered |
 | Embedded `sampling/createMessage` or `roots/list` in a child's question | dropped, and named in the log | — |
-| `listChanged` notifications | not delivered | not delivered |
-| `resources/subscribe` | not advertised, refused | not advertised, refused |
-| `subscriptions/listen` to a child | not forwarded | — |
+| **`subscriptions/listen`** — a child's changes reaching a client | **carried** | not offered |
+| `listChanged` notifications (tools, prompts, resources) | delivered on a subscription | not advertised, not delivered |
+| `notifications/resources/updated` | delivered on a subscription | not advertised, not delivered |
+| `resources/subscribe` | removed from the revision | not advertised, refused |
+| `logging/setLevel`, `notifications/message` | not advertised, no handler | not advertised, no handler |
+
+**Subscriptions are the second row worth reading twice**, for the same reason
+as the first. `subscriptions/listen` is a long-lived stream, which sounds like
+the one thing a stateless gateway cannot hold — but the state is the open HTTP
+response, not a session table. When the socket goes, so does the subscription,
+and nothing is left behind to leak. That is why this could be built without
+giving up the property the rest of the design rests on. See
+[Subscriptions](/guide/subscriptions).
+
+To a `2025-11-25` client the hub offers none of it. That revision delivers
+changes unsolicited on a channel the stateless transport does not keep, and
+`resources/subscribe` needs the hub to remember who asked for what — so rather
+than announce a `listChanged` whose notification would never arrive, the hub
+stays quiet. The hub announced exactly that for a long time and it was a lie;
+the row above is what it says now.
+
+`logging` is the third. `logging/setLevel` never had a handler on either era, so
+a client that believed the advertisement got a `-32601` at call time. On
+`2026-07-28` the level is per-request `_meta` and there is no RPC left to
+implement; carrying `notifications/message` is separate work. Until it exists
+the capability is not offered.
 
 **Elicitation is the row worth reading twice.** It is what
 [`smtp-mcp`](/guide/elicitation) and `imap-mcp` use to put a question in front
@@ -144,6 +167,7 @@ registration — which the hub still serves, because most clients still need it.
 
 ## Next
 
+- [Subscriptions](/guide/subscriptions) — what a client can watch, and what a nap costs
 - [How clients register](/guide/client-registration) — the inbound side in detail
 - [Upstreams that speak OAuth](/guide/configuration#upstreams-that-speak-oauth) — the outbound side
 - [Security](/guide/security) — the trust model around both

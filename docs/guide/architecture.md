@@ -120,6 +120,11 @@ Each MCP request gets a fresh `Server` and a `StreamableHTTPServerTransport`
 with `sessionIdGenerator: undefined` — no session ID, no server-side session
 table. When the HTTP response closes, both are closed and forgotten.
 
+One object outlives the request: the handler serving `2026-07-28`, because it
+owns any open [`subscriptions/listen`](/guide/subscriptions) stream. That is not
+a session table — it holds no record of who you are, only the sockets currently
+open — and when a socket closes its subscription goes with it.
+
 The reason is concrete: claude.ai reconnects roughly every five minutes and
 does **not** send a session `DELETE` first. Any per-session state would
 accumulate one entry per reconnect, forever, and take processes or memory with
@@ -128,10 +133,10 @@ it. Statelessness makes that impossible by construction.
 The cost lands on one era only, and it is worth being precise about which.
 
 On **`2025-11-25`** server-initiated messages have nowhere to go. `listChanged`
-notifications, resource subscriptions and sampling are not delivered to
-clients. Request/response traffic — tools, resources, prompts, completions — is
-forwarded in full, and the proxy advertises only the capabilities its child
-actually declared.
+notifications, resource subscriptions and sampling are not delivered — and,
+since they cannot be, they are not advertised either. Request/response traffic —
+tools, resources, prompts, completions — is forwarded in full, and the proxy
+advertises only the capabilities its child actually declared.
 
 On **`2026-07-28`** the same statelessness is the reason a thing works rather
 than the reason it does not. That revision removed the server→client request

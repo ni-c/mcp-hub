@@ -53,6 +53,14 @@ features:
     link: /guide/elicitation
     linkText: How elicitation travels
   - icon:
+      src: /icons/stateless.svg
+      width: 26
+      height: 26
+    title: Change notifications, in both eras
+    details: 'A child''s tool list moves, a watched resource changes — and the client hears about it. The hub serves subscriptions/listen to its clients and subscribes to its children on whichever revision they speak, so a server that has never heard of it still reaches a client that speaks nothing else. The state is the open response, not a session table.'
+    link: /guide/subscriptions
+    linkText: What a client can watch
+  - icon:
       src: /icons/oauth.svg
       width: 26
       height: 26
@@ -190,6 +198,24 @@ mcp-hub-admin upstream login some-saas
 
 [Every standard, named and linked →](/reference/standards)
 
+## Two revisions, one gateway
+
+The same trick, applied to the protocol itself. Every endpoint answers MCP
+`2026-07-28` and `2025-11-25` alike, and the client cannot tell from the answers
+which one it got. Where the two revisions genuinely differ, the hub absorbs the
+difference rather than passing it on:
+
+| | Towards a client | Towards a child server |
+|---|---|---|
+| **Elicitation** — a server asking a person something | returned as a result on `2026-07-28`, so it reaches the person instead of dying at the gateway | forwarded to the child that asked, with the answer carried back |
+| **Subscriptions** — a server announcing that something changed | served as a `subscriptions/listen` stream | `subscriptions/listen` to a 2026 child, `resources/subscribe` to a 2025 one |
+
+That second row is the useful one in practice: most MCP servers in the wild are
+still on the older revision, and their notifications now reach clients that only
+speak the newer one.
+
+[How elicitation travels →](/guide/elicitation) · [What a client can watch →](/guide/subscriptions)
+
 ## Try it in two minutes
 
 ```sh
@@ -223,6 +249,7 @@ password.
 | know how clients get a `client_id` | [Client registration](/guide/client-registration) |
 | reach an upstream that needs OAuth | [Upstreams that speak OAuth](/guide/configuration#upstreams-that-speak-oauth) |
 | check which standard is implemented | [Standards](/reference/standards) |
+| watch a server for changes | [Subscriptions](/guide/subscriptions) |
 | run servers only when they are used | [On-demand servers](/guide/on-demand) |
 | isolate a server you do not trust | [Sandboxing](/guide/sandboxing) |
 | run it safely on the public internet | [Security](/guide/security) |

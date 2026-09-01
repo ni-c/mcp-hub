@@ -47,6 +47,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rather than the 405 the modern handler's own fallback would give. claude.ai
   opens that stream on every reconnect.
 
+- **Change notifications travel, on both sides.** A `2026-07-28` client opens a
+  `subscriptions/listen` stream and names what it wants — tool, prompt and
+  resource list changes, or specific resource URIs — and the hub delivers.
+  Upstream it subscribes to each child the way that child understands:
+  `subscriptions/listen` to a 2026 server, `resources/subscribe` to a 2025 one.
+  So a server that has never heard of the newer mechanism still reaches a client
+  that speaks nothing else, which is the common case in practice.
+  [Details](https://mcp-hub.ni-c.de/guide/subscriptions).
+
+  This is the second thing the 2026 revision made possible for a stateless
+  gateway, and for the same reason as the first: the state is the open HTTP
+  response rather than a session table, so a client reconnecting without closing
+  anything leaves nothing behind. One handler per route now outlives the
+  request, because it owns those streams — it holds the sockets currently open
+  and no record of who opened them.
+
+  The bookkeeping is a lease per stream rather than a reference count per URI.
+  A count cannot tell "nobody wants this any more" from "the one leaving wanted
+  it too", and gets it wrong in the direction that silently stops delivering to
+  the client that stayed.
+
+  A sleeping [on-demand](https://mcp-hub.ni-c.de/guide/on-demand) server watches
+  nothing: subscribing does not wake it — the acknowledgment comes from the
+  cached capabilities — and the subscription is re-established when something
+  else does, followed by a re-read signal for everything that client was
+  watching. What changed during the nap is not reported, only that there is
+  reason to look. `subscriptions: "off"` withdraws one server's right to push.
+
+### Fixed
+
+- **Three capabilities the hub announced but did not serve.** `listChanged` for
+  tools, prompts and resources is now advertised only on the revision that
+  carries it, and is true there; `resources.subscribe` likewise, having been
+  stripped outright since 0.6.3. `logging` is no longer advertised at all —
+  `logging/setLevel` never had a handler, so a client that believed it got a
+  `-32601` at call time, and on `2026-07-28` the level is per-request `_meta`
+  with no RPC left to implement.
+
+  A 2025 client is now told none of the three. That is a visible change, and the
+  honest one: it was never going to receive any of them.
+
+- **A `subscriptions/listen` POST no longer occupies an in-flight slot.** It is
+  a POST whose response stays open for the life of the subscription, so counted
+  as work in progress it held one of `MCP_MAX_CONCURRENT_REQUESTS` (default
+  four) the entire time — a handful of subscribed clients would have locked
+  every tool call on the hub out with a 429 while nothing was running. It is the
+  standing channel by another name and is charged to
+  `MCP_MAX_CONCURRENT_STREAMS`, where the 2025 era's `GET` already went.
+
 - **Elicitation travels end to end.** A child server that needs to ask the
   person at the far end something — `smtp-mcp` before it sends, `imap-mcp`
   before it expunges a mailbox — now reaches them through the hub instead of

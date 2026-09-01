@@ -69,12 +69,12 @@ The proxy image (`ghcr.io/ni-c/mcp-hub-docker-proxy`) reads its own set:
 | `MCP_BODY_LIMIT` | `1mb` | Maximum JSON body for authenticated MCP requests. Any Express/`bytes` size string. |
 | `MCP_REQUESTS_PER_MINUTE` | `120` | MCP requests per minute **per OAuth client**. Positive integer. |
 | `MCP_MAX_CONCURRENT_REQUESTS` | `4` | In-flight MCP requests per OAuth client — `POST`s carrying JSON-RPC, so this is the work a child server is doing at once. Positive integer. |
-| `MCP_MAX_CONCURRENT_STREAMS` | `32` | Open SSE listening streams (`GET`) per OAuth client. One per connected session, so this bounds how many sessions one client may hold open, not how much work it may cause. Positive integer. |
+| `MCP_MAX_CONCURRENT_STREAMS` | `32` | Open listening streams per OAuth client: a 2025-era `GET`, or a `2026-07-28` [`subscriptions/listen`](/guide/subscriptions) `POST` whose response stays open. Both are the standing channel rather than work in progress, so neither is charged to the budget above. Bounds how many sessions one client may hold open, not how much work it may cause. Positive integer. |
 | `MCP_CALL_TIMEOUT_MS` | `300000` | Deadline for one forwarded tool call or request. Raise it only for a deployment that genuinely runs long tools; a stuck call holds one of the concurrency slots above. |
 | `MCP_RESET_TIMEOUT_ON_PROGRESS` | `false` | Whether a progress notification restarts that deadline. `true` is convenient for long tools and gives up the absolute bound: a child that emits progress forever keeps the call open forever. |
 | `IDLE_TIMEOUT_MINUTES` | `60` | Minutes of inactivity before an [on-demand server](/guide/on-demand) is put to sleep. `0` disables on-demand lifecycling entirely — every server starts at boot and keeps running, the pre-0.9 behaviour. Per-server `idleMinutes` overrides it. |
 | `HTTP_HEADERS_TIMEOUT_MS` | `10000` | Node's header timeout. |
-| `HTTP_REQUEST_TIMEOUT_MS` | `310000` | Complete request timeout — slightly above the default tool-call timeout. Your reverse proxy must allow at least as long, and raising `MCP_CALL_TIMEOUT_MS` means raising this and the proxy with it. |
+| `HTTP_REQUEST_TIMEOUT_MS` | `310000` | Complete request timeout — slightly above the default tool-call timeout. Your reverse proxy must allow at least as long, and raising `MCP_CALL_TIMEOUT_MS` means raising this and the proxy with it. A `subscriptions/listen` stream is exempt: it is idle by design and would otherwise be cut every few minutes, which looks exactly like a flaky upstream and is not. Its lifetime is bounded by `MCP_SUBSCRIPTION_MAX_MS` instead — and your reverse proxy needs a matching read timeout. |
 
 ## Elicitation
 
@@ -91,6 +91,24 @@ question. Full behaviour: [Elicitation](/guide/elicitation).
 
 These five are read by the request path, so an unusable value logs and keeps
 the default.
+
+## Subscriptions
+
+What a client may watch, and how much of it the hub will hold open. See
+[Subscriptions](/guide/subscriptions).
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `MCP_SUBSCRIPTIONS` | `true` | The whole feature. `false` is the emergency brake for every server at once; per server, use `"subscriptions": "off"` in `mcp.json`. |
+| `MCP_MAX_SUBSCRIPTIONS` | `1024` | Open `subscriptions/listen` streams one route will serve before refusing the next. |
+| `MCP_SUBSCRIPTION_MAX_URIS` | `64` | Resource URIs one filter may name. Every URI is an upstream subscription the hub holds and reconciles, so an unbounded list is a way to make it do unbounded work on one request. Over this the call is refused with `-32602`. |
+| `MCP_SUBSCRIPTION_KEEPALIVE_MS` | `15000` | SSE keepalive on a listen stream; `0` disables it. |
+| `MCP_SUBSCRIPTION_DEBOUNCE_MS` | `250` | Coalescing window. Within it, repeats of the same event collapse to one — which is what the notification means anyway: read it again, not here is what changed. `0` delivers each event as it arrives. |
+| `MCP_SUBSCRIPTION_MAX_MS` | `1800000` | How long one stream may stay open before the hub closes it; `0` means as long as the socket lives. A reaper for clients that go away without closing anything. |
+
+These six are read by the request path as well, with the same fallback
+behaviour. A listen stream is charged to `MCP_MAX_CONCURRENT_STREAMS`, not
+`MCP_MAX_CONCURRENT_REQUESTS`.
 
 An invalid value for any of the integer variables read at startup aborts with a
 clear message rather than silently falling back. The two call-timeout variables

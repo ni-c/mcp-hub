@@ -156,6 +156,28 @@ describe('ClientRequestGate', () => {
     expect(passed).toBe(5);
   });
 
+  it('keeps a subscriptions/listen POST out of the in-flight budget too', () => {
+    // The same regression as the GET above, in the shape 2026-07-28 gave it:
+    // there is no standing GET any more, and `subscriptions/listen` is a POST
+    // whose response stays open for the life of the subscription. Counted as
+    // in-flight work it would hold a slot the whole time, and with the default
+    // of four a handful of subscribed clients would lock every tool call on the
+    // hub out with a 429 while nothing was actually running.
+    const gate = new ClientRequestGate(100, 1, 10);
+    const { response } = stubResponse();
+    const clientId = 'client-1';
+    let passed = 0;
+    const next = (() => passed++) as NextFunction;
+    const listen = { method: 'POST', body: { jsonrpc: '2.0', id: 1, method: 'subscriptions/listen' }, auth: { clientId } } as Request;
+
+    for (let i = 0; i < 4; i++) gate.middleware(listen, response, next);
+    expect(passed).toBe(4);
+
+    // The one in-flight slot is still free for real work.
+    gate.middleware({ method: 'POST', body: { method: 'tools/call' }, auth: { clientId } } as Request, response, next);
+    expect(passed).toBe(5);
+  });
+
   it('charges a plain GET route such as /health to the request budget', () => {
     const gate = new ClientRequestGate(100, 1, 10);
     const { response, body } = stubResponse();

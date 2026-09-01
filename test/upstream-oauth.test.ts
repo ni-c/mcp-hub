@@ -11,7 +11,7 @@ import { McpServer } from '@modelcontextprotocol/server';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createSessionCookie } from '../src/auth/session.js';
 import { createHub } from '../src/index.js';
-import { handleMcpRequest } from '../src/proxy.js';
+import { createRoute, handleMcpRequest } from '../src/proxy.js';
 import { AuthStore } from '../src/auth/store.js';
 import { signPayload } from '../src/auth/signed-token.js';
 import { UpstreamAuth } from '../src/upstream/auth.js';
@@ -156,6 +156,16 @@ async function startFakeUpstream(): Promise<FakeUpstream> {
     res.status(200).end();
   });
 
+  const route = createRoute(
+    () => {
+      const mcp = new McpServer({ name: 'upstream-fixture', version: '1.0.0' });
+      mcp.registerTool('upstream_echo', { description: 'echo', inputSchema: z.object({ msg: z.string() }) }, async ({ msg }) => ({
+        content: [{ type: 'text', text: `upstream:${msg}` }]
+      }));
+      return mcp.server;
+    },
+    { label: 'upstream-fixture' }
+  );
   app.all('/mcp', (req, res) => {
     record(req);
     if (req.headers.authorization !== `Bearer ${accessToken}`) {
@@ -163,13 +173,7 @@ async function startFakeUpstream(): Promise<FakeUpstream> {
       res.status(401).json({ error: 'invalid_token' });
       return;
     }
-    void handleMcpRequest(() => {
-      const mcp = new McpServer({ name: 'upstream-fixture', version: '1.0.0' });
-      mcp.registerTool('upstream_echo', { description: 'echo', inputSchema: z.object({ msg: z.string() }) }, async ({ msg }) => ({
-        content: [{ type: 'text', text: `upstream:${msg}` }]
-      }));
-      return mcp.server;
-    }, req, res);
+    void handleMcpRequest(route, req, res);
   });
 
   await new Promise<void>(resolve => {

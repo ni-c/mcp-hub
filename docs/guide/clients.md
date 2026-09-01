@@ -334,12 +334,18 @@ Use the offline admin command; it is covered on the
 
 ## Notification support
 
-Push traffic is not delivered to clients on either MCP revision: `listChanged`
-notifications and resource subscriptions do not travel outward. Tool, resource
-and prompt request/response traffic works in full.
+On **`2026-07-28`** push traffic travels: open a
+[`subscriptions/listen`](/guide/subscriptions) stream and name what you want —
+tool, prompt and resource list changes, or specific resource URIs. The hub
+subscribes to each child the way that child understands, so a server still on
+the older revision reaches you all the same.
 
-Internally the hub does follow `tools/list_changed` from its children, so the
-`/hub` tool cache stays current even though clients are not notified.
+On **`2025-11-25`** none of it is delivered, and none of it is advertised: that
+revision needs a channel the stateless transport does not keep. Tool, resource
+and prompt request/response traffic works in full on both.
+
+Internally the hub follows `tools/list_changed` from its children regardless, so
+the `/hub` tool cache stays current even for a client that is not listening.
 
 **Elicitation is the exception, and it is not a notification.** On
 `2026-07-28` a server that needs to ask the user something returns the question
