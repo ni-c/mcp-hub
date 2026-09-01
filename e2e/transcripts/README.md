@@ -44,10 +44,12 @@ than patch it. It was capturing a client version that no longer exists.
 docker compose -f demo/compose.yml up -d
 
 # 2. the recorder in front of it
-npm run e2e:record -- --client chatgpt --upstream http://127.0.0.1:7690 \
+npm run e2e:record -- --client chatgpt --upstream-port 7690 \
   --port 7691 --out e2e/transcripts/chatgpt/connector-add.jsonl
 
 # 3. point the real client at http://127.0.0.1:7691, do the thing once, Ctrl-C
+#    (the upstream is a port, not a URL: the recorder only ever proxies to
+#     127.0.0.1, which is the rule anyway and is one fewer thing to get wrong)
 
 # 4. fill in meta.did, then make it deterministic
 npm run e2e:curate -- --file e2e/transcripts/chatgpt/connector-add.jsonl

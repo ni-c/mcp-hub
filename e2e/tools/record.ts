@@ -3,12 +3,10 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 
-import { assertLoopback } from '../harness/loopback.js';
-
 /**
  * A recording reverse proxy, for capturing what a real client puts on the wire.
  *
- *   npm run e2e:record -- --upstream http://127.0.0.1:7690 --port 7691 \
+ *   npm run e2e:record -- --upstream-port 7690 --port 7691 \
  *     --out e2e/transcripts/chatgpt/connector-add.jsonl
  *
  * Point a real client at the proxy, do the thing once by hand, stop it. This is
@@ -27,11 +25,30 @@ import { assertLoopback } from '../harness/loopback.js';
  */
 
 interface Options {
-  upstream: string;
+  /** Where the hub is listening, on this machine. */
+  upstreamPort: number;
+  /** Where the recorder listens, and what the client is pointed at. */
   port: number;
   out: string;
   client: string;
 }
+
+/**
+ * The upstream is a port, not a URL, and that is deliberate.
+ *
+ * A URL from the command line, forwarded to verbatim, is a reverse proxy's
+ * whole job and is also — read literally, and CodeQL reads literally — a
+ * server-side request forgery. A runtime loopback check answers the objection
+ * for a person and not for a scanner, which leaves an alert somebody has to
+ * keep dismissing.
+ *
+ * Taking a port removes the argument instead of guarding it: the host is the
+ * literal below and nothing a caller writes can move it. Nothing is lost,
+ * because the only upstream this tool was ever allowed to have is a throwaway
+ * hub on this machine — a capture aimed at a deployed one would put its real
+ * tokens through redact() and one missed pattern from a file in git.
+ */
+const UPSTREAM_HOST = '127.0.0.1';
 
 function parseArgs(argv: string[]): Options {
   const flag = (name: string, fallback?: string): string => {
@@ -43,9 +60,17 @@ function parseArgs(argv: string[]): Options {
     }
     return value;
   };
+  const port = (name: string, fallback: string): number => {
+    const value = Number(flag(name, fallback));
+    if (!Number.isSafeInteger(value) || value < 1 || value > 65_535) {
+      console.error(`record: --${name} must be a port number`);
+      process.exit(2);
+    }
+    return value;
+  };
   return {
-    upstream: flag('upstream', 'http://127.0.0.1:7690'),
-    port: Number(flag('port', '7691')),
+    upstreamPort: port('upstream-port', '7690'),
+    port: port('port', '7691'),
     out: flag('out'),
     client: flag('client', 'unknown')
   };
@@ -71,14 +96,8 @@ const SECRET_SHAPES = [/-----BEGIN [A-Z ]*PRIVATE KEY-----/, /\beyJ[A-Za-z0-9_-]
 
 function main(): void {
   const options = parseArgs(process.argv.slice(2));
-  // The upstream comes from the command line and is forwarded to verbatim,
-  // which is a reverse proxy's whole job and is also, read literally, an SSRF.
-  // The same rule the rest of the suite lives by settles it: this may only ever
-  // point at a throwaway hub on this machine. A capture aimed at a deployed hub
-  // would put its real tokens through redact() and one missed pattern from a
-  // file in git.
-  assertLoopback(options.upstream);
-  const externalUrl = `http://127.0.0.1:${options.port}`;
+  const upstream = `http://${UPSTREAM_HOST}:${options.upstreamPort}`;
+  const externalUrl = `http://${UPSTREAM_HOST}:${options.port}`;
   // Overwriting an existing golden is the thing that turns a collection of
   // assertions into a collection of snapshots: a file breaks, somebody
   // re-records it, and within six months none of them assert anything anybody
@@ -104,10 +123,14 @@ function main(): void {
     req.on('data', chunk => chunks.push(chunk as Buffer));
     req.on('end', () => {
       const body = Buffer.concat(chunks).toString('utf8');
-      const target = new URL(req.url ?? '/', options.upstream);
       const proxied = http.request(
-        target,
-        { method: req.method, headers: { ...req.headers, host: new URL(options.upstream).host } },
+        {
+          host: UPSTREAM_HOST,
+          port: options.upstreamPort,
+          path: req.url ?? '/',
+          method: req.method,
+          headers: { ...req.headers, host: `${UPSTREAM_HOST}:${options.upstreamPort}` }
+        },
         upstreamRes => {
           const out: Buffer[] = [];
           upstreamRes.on('data', chunk => out.push(chunk as Buffer));
@@ -124,7 +147,7 @@ function main(): void {
                   req: { method: req.method, path: req.url, headers: clientHeaders(req.headers), ...(body ? { body: safeJson(body) } : {}) },
                   res: { status: upstreamRes.statusCode, headers: Object.fromEntries(Object.entries(upstreamRes.headers)), body: safeJson(responseBody) }
                 }),
-                options.upstream,
+                upstream,
                 externalUrl
               )
             );
@@ -157,7 +180,7 @@ function main(): void {
   process.on('SIGINT', finish);
   process.on('SIGTERM', finish);
   server.listen(options.port, '127.0.0.1', () => {
-    console.error(`record: proxying ${externalUrl} -> ${options.upstream}`);
+    console.error(`record: proxying ${externalUrl} -> ${upstream}`);
     console.error('record: point the client at the first URL, do the thing once, then Ctrl-C.');
   });
 }
