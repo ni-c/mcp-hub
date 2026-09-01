@@ -10,6 +10,7 @@ import { ToolCache } from './tool-cache.js';
 import { buildHubServer } from './hub.js';
 import { isMainModule } from './main-module.js';
 import { SubscriptionRegistry } from './subscriptions.js';
+import { IDLE_TIMEOUT_MS } from './timings.js';
 
 export interface StdioHubOptions {
   /** Path to the mcp.json. A missing file starts an empty hub instead of failing. */
@@ -109,8 +110,10 @@ export function createStdioHub(options: StdioHubOptions) {
   // exactly the cost this feature exists to avoid. The snapshot lives next to
   // the config rather than in a DATA_PATH — there is no state directory in
   // this mode, and no other state to put in one.
+  // IDLE_TIMEOUT_MS is the sub-minute sibling of the documented knob; see timings.ts.
+  const idleTimeoutMs = IDLE_TIMEOUT_MS || idleTimeoutMinutes * 60_000;
   const cache = new ToolCache(options.toolCachePath ?? path.join(path.dirname(options.configPath), '.mcp-hub', 'tool-cache.json'));
-  if (idleTimeoutMinutes > 0) {
+  if (idleTimeoutMs > 0) {
     cache.load();
     if (!cache.probeWritable()) {
       console.warn(`mcp-hub: tool cache ${cache.filePath} is not writable — on-demand servers warm-start at every launch instead of sleeping through it`);
@@ -118,7 +121,7 @@ export function createStdioHub(options: StdioHubOptions) {
   }
 
   const upstreamAuth = buildUpstreamAuth(config, options.dataPath);
-  const supervisor = new Supervisor(config, { idleTimeoutMinutes, cache, upstreamAuth });
+  const supervisor = new Supervisor(config, { idleTimeoutMinutes, idleTimeoutMs, cache, upstreamAuth });
   supervisor.start(); // children come up (or hydrate into `sleeping`) in the background
   void supervisor
     .reapOrphans()

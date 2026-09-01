@@ -5,6 +5,16 @@ import type { ServerEvent } from '@modelcontextprotocol/server';
 import { ListToolsResultSchema } from '@modelcontextprotocol/core';
 import { VERSION } from './version.js';
 import { MAX_TOOL_LIST_PAGES, MAX_TOOLS, MAX_TOOL_METADATA_BYTES, jsonSize } from './mcp-limits.js';
+import {
+  BACKOFF_INITIAL_MS,
+  BACKOFF_MAX_MS,
+  BACKOFF_RESET_AFTER_MS,
+  IDLE_SWEEP_INTERVAL_MS,
+  MAX_UNUSED_RESTARTS,
+  PING_INTERVAL_MS,
+  PING_TIMEOUT_MS,
+  WAKE_TIMEOUT_MS
+} from './timings.js';
 import type { HubConfig, ServerConfig, RemoteServerConfig, ConfigDiff } from './config.js';
 import { SocketTransport } from './transports/socket.js';
 import { DockerTransport } from './transports/docker.js';
@@ -78,14 +88,6 @@ export function setDockerClient(client: DockerClient | undefined): void {
   sharedDockerClient = client;
 }
 
-const BACKOFF_INITIAL_MS = 1_000;
-const BACKOFF_MAX_MS = 5 * 60_000;
-const BACKOFF_RESET_AFTER_MS = 5 * 60_000;
-const PING_INTERVAL_MS = 60_000;
-const PING_TIMEOUT_MS = 30_000;
-const WAKE_TIMEOUT_MS = 120_000;
-const MAX_UNUSED_RESTARTS = 5;
-const IDLE_SWEEP_INTERVAL_MS = 60_000;
 
 /** How an on-demand server behaves; an empty object means "always running" (today's behaviour). */
 export interface ManagedServerOptions {
@@ -747,6 +749,13 @@ export class ManagedServer {
 export interface SupervisorOptions {
   /** Global idle timeout for on-demand servers; 0 (the default) disables on-demand lifecycling entirely. */
   idleTimeoutMinutes?: number;
+  /**
+   * The same timeout in milliseconds, for callers who need it finer than a
+   * minute. Wins over `idleTimeoutMinutes` when set; `0`/absent leaves the
+   * minute value in charge, so it cannot also express "never sleep" — that is
+   * `idleTimeoutMinutes: 0`, which already means it.
+   */
+  idleTimeoutMs?: number;
   cache?: ToolCache;
   sweepIntervalMs?: number;
   wakeTimeoutMs?: number;
@@ -805,6 +814,11 @@ export class Supervisor {
     return this.options.idleTimeoutMinutes ?? 0;
   }
 
+  /** The global idle timeout as one number, whichever unit the caller gave it in. */
+  private get idleTimeoutMs(): number {
+    return this.options.idleTimeoutMs || this.idleTimeoutMinutes * 60_000;
+  }
+
   /**
    * What the clients on the /hub route are listening for.
    *
@@ -847,13 +861,13 @@ export class Supervisor {
   private buildManaged(name: string, cfg: ServerConfig): ManagedServer {
     const onUpstreamEvent = (event: ServerEvent) => this.onChildEvent(cfg, event);
     const aggregateWantsTools = () => this.aggregateWantsTools(cfg);
-    if ((cfg.kind !== 'stdio' && cfg.kind !== 'docker') || cfg.keepAlive || this.idleTimeoutMinutes <= 0) {
+    if ((cfg.kind !== 'stdio' && cfg.kind !== 'docker') || cfg.keepAlive || this.idleTimeoutMs <= 0) {
       const auth = cfg.kind === 'remote' ? this.options.upstreamAuth?.for(name, cfg) : undefined;
       return new ManagedServer(name, cfg, { onUpstreamEvent, aggregateWantsTools, ...(auth ? { auth } : {}) });
     }
     return new ManagedServer(name, cfg, {
       onDemand: true,
-      idleMs: (cfg.idleMinutes ?? this.idleTimeoutMinutes) * 60_000,
+      idleMs: cfg.idleMinutes !== undefined ? cfg.idleMinutes * 60_000 : this.idleTimeoutMs,
       wakeTimeoutMs: this.options.wakeTimeoutMs,
       persist: server => this.persist(server),
       onUpstreamEvent,
@@ -899,7 +913,7 @@ export class Supervisor {
   }
 
   private startIdleSweep(): void {
-    if (this.idleTimeoutMinutes <= 0 || this.sweepTimer) return;
+    if (this.idleTimeoutMs <= 0 || this.sweepTimer) return;
     this.sweepTimer = setInterval(() => this.sweepIdle(), this.options.sweepIntervalMs ?? IDLE_SWEEP_INTERVAL_MS);
     this.sweepTimer.unref();
   }

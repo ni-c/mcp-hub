@@ -5,6 +5,7 @@ import path from 'node:path';
 import type { ToolFilterConfig } from './tool-filter.js';
 import type { PassthroughConfig } from './elicitation.js';
 import type { SubscriptionsConfig } from './subscriptions.js';
+import { CONFIG_POLL_INTERVAL_MS } from './timings.js';
 
 /**
  * One entry of the Claude-Code-style `mcpServers` map.
@@ -684,7 +685,7 @@ export class ConfigWatcher extends EventEmitter {
     private readonly filePath: string,
     public current: HubConfig,
     private readonly env: NodeJS.ProcessEnv = process.env,
-    private readonly pollIntervalMs = 3_000,
+    private readonly pollIntervalMs = CONFIG_POLL_INTERVAL_MS,
     private readonly parseOptions?: ParseOptions,
     private readonly validate?: (config: HubConfig) => void
   ) {

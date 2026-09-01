@@ -25,6 +25,7 @@ import { canonicalResourceUrl, resourceUrlForRoute } from './auth/resource.js';
 import { ClientRequestGate } from './limits.js';
 import { runStdio } from './stdio.js';
 import { isMainModule } from './main-module.js';
+import { IDLE_TIMEOUT_MS } from './timings.js';
 
 export interface HubOptions {
   externalUrl: string;
@@ -98,8 +99,10 @@ export async function createHub(options: HubOptions) {
   }
   const idleTimeoutMinutes = options.idleTimeoutMinutes ?? 60;
   if (!Number.isSafeInteger(idleTimeoutMinutes) || idleTimeoutMinutes < 0) throw new Error('idleTimeoutMinutes must be a non-negative integer');
+  // IDLE_TIMEOUT_MS is the sub-minute sibling of the documented knob; see timings.ts.
+  const idleTimeoutMs = IDLE_TIMEOUT_MS || idleTimeoutMinutes * 60_000;
   const cache = new ToolCache(options.toolCachePath ?? path.join(options.dataPath, 'tool-cache.json'));
-  if (idleTimeoutMinutes > 0) {
+  if (idleTimeoutMs > 0) {
     cache.load();
     if (!cache.probeWritable()) {
       console.warn(`mcp-hub: tool cache ${cache.filePath} is not writable — on-demand servers warm-start at every boot instead of sleeping through it`);
@@ -123,7 +126,7 @@ export async function createHub(options: HubOptions) {
     }
   }
   const upstreamAuth = new UpstreamAuthRegistry(store, externalUrl);
-  const supervisor = new Supervisor(config, { idleTimeoutMinutes, cache, upstreamAuth });
+  const supervisor = new Supervisor(config, { idleTimeoutMinutes, idleTimeoutMs, cache, upstreamAuth });
   // start() before reapOrphans(): reaping spares the container of any server
   // that is not asleep, so it must see the boot states. Deliberately not
   // awaited: an unreachable Docker endpoint must not hold up the HTTP listener
