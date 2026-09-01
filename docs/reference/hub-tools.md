@@ -15,6 +15,14 @@ on-demand server.
 The [stdio mode](/guide/clients#local-clients-over-stdio) serves the same six
 tools with the same behaviour — everything on this page applies there too.
 
+The six carry MCP annotations of their own. `list_servers`, `list_tools` and
+`get_tool_schema` are `readOnlyHint: true`; `wake_server` and `sleep_server` are
+writes that destroy nothing and are idempotent. `call_tool` is
+`destructiveHint: true` and `openWorldHint: true`, because whatever the named
+tool does, `call_tool` does — the hub cannot know in advance, and forwarding is
+not the same as vouching. Read the child's own annotations from `list_tools` for
+what a particular call would do.
+
 A server's `allowTools` / `denyTools` filter applies to every meta-tool below:
 `list_tools` and `list_servers`' `toolCount` show only what survives it, and
 `get_tool_schema` and `call_tool` refuse a filtered name with the same
@@ -70,10 +78,41 @@ cheap:
 
 ```json
 [
-  { "name": "search_documents", "description": "Full-text search across all documents" },
-  { "name": "get_document",     "description": "Fetch one document by ID" }
+  {
+    "name": "search_documents",
+    "description": "Full-text search across all documents",
+    "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false }
+  },
+  {
+    "name": "delete_document",
+    "description": "Delete one document",
+    "annotations": { "readOnlyHint": false, "destructiveHint": true, "idempotentHint": true, "openWorldHint": false }
+  }
 ]
 ```
+
+Each tool's [MCP annotations](https://modelcontextprotocol.io/specification/2025-11-25/server/tools#tool-annotations)
+come along, **exactly as the child declared them**. Over `/hub` a client never
+sees the child's own `tools/list`, so this is the only place it can learn that
+one of two similarly named tools deletes and the other does not.
+
+A tool whose child declared no annotations has no `annotations` key here. An
+empty object would read as all four defaults — which, since `destructiveHint`
+and `openWorldHint` both default to `true`, is a claim the child did not make.
+
+::: warning Whose word this is
+These are the **child's** claims, passed on. The hub does not check them, cannot,
+and does not summarise them into a marker of its own — that would be the hub's
+statement about somebody else's server. The specification is blunt about what
+they are worth:
+
+> clients **MUST** consider tool annotations to be untrusted unless they come
+> from trusted servers
+
+An annotation is a hint. The thing a well-built child enforces instead is a
+confirmation dialog, and the hub
+[passes elicitation through](/guide/elicitation) so that still reaches you.
+:::
 
 Errors: an unknown server, or an always-running server that is not `up`,
 returns a tool error naming the state. A `sleeping` server answers from its
@@ -96,9 +135,13 @@ Returns the untruncated description and the tool's JSON Schema:
 {
   "name": "search_documents",
   "description": "Full-text search across all documents…",
-  "inputSchema": { "type": "object", "properties": { "query": { "type": "string" } }, "required": ["query"] }
+  "inputSchema": { "type": "object", "properties": { "query": { "type": "string" } }, "required": ["query"] },
+  "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false }
 }
 ```
+
+`annotations` is the child's, verbatim, and absent when the child declared none —
+see the note under [`list_tools`](#list-tools).
 
 This is the step that keeps context small: full schemas are pulled in one at a
 time, only for tools actually being used.

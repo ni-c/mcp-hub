@@ -124,8 +124,29 @@ Never the question and never the answer. Both are text a person read or typed;
 what the log gets is the server name, the tool and the fact that something was
 dropped.
 
+## What this is worth, next to an annotation
+
+A child's [tool annotations](/reference/hub-tools#list-tools) travel through the
+hub unchanged, and they are a **hint a client may ignore** — the specification
+says so in as many words. Elicitation is not: the child raises the question, and
+until an answer comes back it does nothing.
+
+That is why passing it through matters more than it looks. A server whose
+`delete_*` tool asks a person keeps asking behind the hub; one that is only
+annotated `destructiveHint: true` is relying on a client to notice. The servers
+in [this family](https://github.com/ni-c) do the former — see, for instance,
+[imap-mcp's approval guide](https://imap-mcp.ni-c.de/guide/approval) — and each
+of them can be switched onto its two-call token fallback with `ELICITATION=false`
+if a dialog is the wrong shape for a deployment.
+
+Note the two names are deliberately different. `MCP_ELICITATION` here switches
+off the hub's **carrying** of the question; `ELICITATION` in a child switches off
+that child's **asking** of it. Two layers, two switches — and neither of them
+turns a guarded call into an unguarded one.
+
 ## Next
 
+- [Hub meta-tools](/reference/hub-tools#list-tools) — what a child's annotations look like coming out of `list_tools`
 - [Standards](/reference/standards#transport-and-protocol) — the full capability matrix, per revision
 - [Architecture](/guide/architecture#stateless-transport) — why the stateless transport helps here and hurts elsewhere
 - [Configuration](/guide/configuration) — where `passthrough` goes

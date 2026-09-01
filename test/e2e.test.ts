@@ -16,6 +16,8 @@ import { handleMcpRequest } from '../src/proxy.js';
 import type { ManagedServer } from '../src/supervisor.js';
 
 const EVERYTHING = path.resolve('node_modules/@modelcontextprotocol/server-everything/dist/index.js');
+/** A child whose tools declare annotations, which server-everything's do not. */
+const ANNOTATED = path.resolve('test/fixtures/annotated-server.mjs');
 const PASSWORD = 'test-password';
 const REDIRECT_URI = 'http://localhost:33418/callback';
 
@@ -124,6 +126,7 @@ beforeAll(async () => {
           allowTools: ['echo', 'get-*'],
           denyTools: ['get-env']
         },
+        annotated: { command: process.execPath, args: [ANNOTATED] },
         broken: { command: '/bin/false' },
         remote: {
           type: 'http',
@@ -742,6 +745,114 @@ describe('/hub aggregate', () => {
     const health = await request(hub.app).get('/health').set('Authorization', `Bearer ${accessToken}`);
     expect(health.body.servers.filtered.toolFilter).toMatchObject({ hidden: expect.any(Number) });
     expect(health.body.servers.everything.toolFilter).toBeUndefined();
+  });
+
+  it('hands a child\u2019s annotations on unchanged, through both meta-tools', async () => {
+    // Not cosmetic. Over /hub a client cannot see the child's own tool list, so
+    // these two answers are the only place it can learn that delete_thing
+    // deletes and read_thing does not. Dropping them left every tool looking
+    // identical at exactly the moment a model decides which to call.
+    //
+    // Verbatim, not summarised: the specification says a client "MUST consider
+    // tool annotations to be untrusted unless they come from trusted servers",
+    // and the hub is in no position to vouch for a child it forwards to. A
+    // derived kind/asks marker would be the hub's claim about the child's.
+    const client = await mcpClient('/hub', accessToken);
+
+    const listed = (await client.callTool({ name: 'list_tools', arguments: { server: 'annotated' } })) as CallToolResult;
+    const tools = JSON.parse((listed.content[0] as { text: string }).text) as Array<{
+      name: string;
+      description: string;
+      annotations?: Record<string, boolean>;
+    }>;
+    const byName = new Map(tools.map(tool => [tool.name, tool]));
+    expect(byName.get('read_thing')?.annotations).toEqual({
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false
+    });
+    // Different in all four, so a fixed block or one derived from the name
+    // would match one tool and fail the other.
+    expect(byName.get('delete_thing')?.annotations).toEqual({
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: true
+    });
+    // A child that says nothing arrives as nothing. An empty object would read
+    // as all four defaults, which is a claim it did not make.
+    expect(byName.get('silent_thing')).not.toHaveProperty('annotations');
+    // The one-line summary still applies — this adds a field, it does not turn
+    // list_tools into get_tool_schema.
+    expect(byName.get('read_thing')?.description).toBe('Reads a thing.');
+
+    const schema = (await client.callTool({
+      name: 'get_tool_schema',
+      arguments: { server: 'annotated', tool: 'delete_thing' }
+    })) as CallToolResult;
+    const detail = JSON.parse((schema.content[0] as { text: string }).text) as {
+      annotations?: Record<string, boolean>;
+      inputSchema?: unknown;
+    };
+    expect(detail.annotations).toEqual({
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: true
+    });
+    expect(detail.inputSchema).toBeDefined();
+
+    await client.close();
+  });
+
+  it('keeps a child\u2019s annotations on its own endpoint too', async () => {
+    // The proxy path was already right — the snapshot holds the full Tool
+    // objects — but "already right" is a property that stops being true
+    // silently. The two paths are answered by different code.
+    const client = await mcpClient('/annotated/mcp', accessToken);
+    const { tools } = await client.listTools();
+    const remove = tools.find(tool => tool.name === 'delete_thing');
+    expect(remove?.annotations).toEqual({
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: true
+    });
+    await client.close();
+  });
+
+  it('annotates its own six meta-tools, rather than inheriting the defaults', async () => {
+    // The specification gives destructiveHint and openWorldHint a default of
+    // true, so silence declared list_servers a destructive tool in an open
+    // world. call_tool is the one where that really is the answer: whatever the
+    // named tool does, call_tool does, and forwarding is not vouching.
+    const client = await mcpClient('/hub', accessToken);
+    const { tools } = await client.listTools();
+    const byName = new Map(tools.map(tool => [tool.name, tool.annotations]));
+    for (const name of ['list_servers', 'list_tools', 'get_tool_schema']) {
+      expect(byName.get(name), name).toEqual({
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false
+      });
+    }
+    for (const name of ['wake_server', 'sleep_server']) {
+      expect(byName.get(name), name).toEqual({
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false
+      });
+    }
+    expect(byName.get('call_tool')).toEqual({
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: true
+    });
+    await client.close();
   });
 
   it('walks the list_servers -> list_tools -> get_tool_schema -> call_tool flow', async () => {

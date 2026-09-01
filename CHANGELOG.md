@@ -11,6 +11,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`list_tools` and `get_tool_schema` carry a child's tool annotations
+  through.** Over `/hub` a client never sees the child's own `tools/list`, so
+  those two answers are the only place it can learn that one of two similarly
+  named tools deletes and the other does not. They came back as name plus
+  description, which left every tool looking identical at exactly the moment a
+  model decides which to call. The proxy endpoint `/<name>/mcp` was already
+  correct; there is a test for it now too, because "already correct" is a
+  property that stops being true silently.
+
+  Verbatim, not summarised into a marker of the hub's own. The specification
+  says a client "MUST consider tool annotations to be untrusted unless they come
+  from trusted servers", and the hub is in no position to vouch for a child it
+  merely forwards to — a derived `kind` would have been the hub's claim about
+  somebody else's server. A child that declared nothing arrives with no
+  `annotations` key at all; an empty object would read as all four defaults,
+  which is a claim it did not make.
+
+- **The six meta-tools annotate themselves**, which they never did. The
+  specification gives `destructiveHint` and `openWorldHint` a default of `true`,
+  so silence declared `list_servers` a destructive tool in an open world.
+  `call_tool` is the one where that really is the answer: whatever the named
+  tool does, `call_tool` does.
+
 - **The hub speaks both MCP revisions on every endpoint.** `2026-07-28` and
   `2025-11-25`, on `/hub`, on `/<name>/mcp` and over `--stdio`; the client
   picks during its opening exchange and cannot tell from the answers which one

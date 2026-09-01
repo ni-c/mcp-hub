@@ -21,6 +21,42 @@ function firstLine(description: string | undefined): string {
 }
 
 /**
+ * The four hints the three reading meta-tools carry.
+ *
+ * Written out rather than left to the defaults, because the defaults are not
+ * neutral: the specification gives `destructiveHint` and `openWorldHint` a
+ * default of **true**, so a tool that says nothing announces itself as a
+ * destructive tool in an open world. `list_servers`, `list_tools` and
+ * `get_tool_schema` only read the hub's own snapshot, and they said nothing.
+ *
+ * `openWorldHint: false` is right even though the *children* reach all sorts of
+ * places: these three do not call them. `call_tool` does, and says so.
+ */
+const READS = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } as const;
+
+/**
+ * A lifecycle switch: it changes nothing a person put there, and doing it twice
+ * leaves the same world.
+ */
+const LIFECYCLE = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false } as const;
+
+/**
+ * The child's own annotations, passed on verbatim.
+ *
+ * Verbatim, and not condensed into a kind/asks pair, because a summary would be
+ * a statement *by the hub* about the child's claim. The specification is blunt
+ * about what these are worth — "clients MUST consider tool annotations to be
+ * untrusted unless they come from trusted servers" — and the hub is in no
+ * position to vouch for a child it merely forwards to. It says what it was
+ * told, and hub-tools.md says whose word it is.
+ *
+ * Omitted entirely when the child declared none. An empty object here would
+ * read as "all four defaults", which is a claim the child did not make.
+ */
+const passThrough = (tool: { annotations?: unknown }): { annotations?: unknown } =>
+  tool.annotations === undefined ? {} : { annotations: tool.annotations };
+
+/**
  * The /hub aggregate: one connector exposing every hub-enabled server through
  * six meta-tools, so a client's context holds 6 tool schemas instead of 9×N.
  */
@@ -85,7 +121,8 @@ export function buildHubServer(supervisor: Supervisor, secret: string): McpServe
       description:
         'List all MCP servers available through this hub, with their status. Call this first to see what is available. ' +
         'Servers marked "hidden" serve their tools only via their own endpoint, but wake_server/sleep_server still manage them.',
-      inputSchema: z.object({})
+      inputSchema: z.object({}),
+      annotations: READS
     },
     async () =>
       text(
@@ -104,7 +141,8 @@ export function buildHubServer(supervisor: Supervisor, secret: string): McpServe
     {
       title: 'List tools of a server',
       description: 'List the tools of one MCP server with one-line descriptions. Use get_tool_schema before calling a tool for the first time.',
-      inputSchema: z.object({ server: z.string().describe('Server name from list_servers') })
+      inputSchema: z.object({ server: z.string().describe('Server name from list_servers') }),
+      annotations: READS
     },
     async ({ server }) => {
       const managed = findServer(server);
@@ -114,7 +152,9 @@ export function buildHubServer(supervisor: Supervisor, secret: string): McpServe
       if (!managed.onDemand && managed.state !== 'up') return toolError(`Server "${server}" is ${managed.state}.`);
       const failed = await prepare(managed);
       if (failed) return failed;
-      return text(managed.tools.map(t => ({ name: t.name, description: firstLine(t.description) })));
+      return text(
+        managed.tools.map(t => ({ name: t.name, description: firstLine(t.description), ...passThrough(t) }))
+      );
     }
   );
 
@@ -126,7 +166,8 @@ export function buildHubServer(supervisor: Supervisor, secret: string): McpServe
       inputSchema: z.object({
         server: z.string().describe('Server name from list_servers'),
         tool: z.string().describe('Tool name from list_tools')
-      })
+      }),
+      annotations: READS
     },
     async ({ server, tool }) => {
       const managed = findServer(server);
@@ -142,7 +183,12 @@ export function buildHubServer(supervisor: Supervisor, secret: string): McpServe
       if (failed) return failed;
       const found = managed.tools.find(t => t.name === tool);
       if (!found) return toolError(`Unknown tool "${tool}" on server "${server}". Use list_tools to see available tools.`);
-      return text({ name: found.name, description: found.description ?? '', inputSchema: found.inputSchema });
+      return text({
+        name: found.name,
+        description: found.description ?? '',
+        inputSchema: found.inputSchema,
+        ...passThrough(found)
+      });
     }
   );
 
@@ -155,7 +201,13 @@ export function buildHubServer(supervisor: Supervisor, secret: string): McpServe
         server: z.string().describe('Server name from list_servers'),
         tool: z.string().describe('Tool name from list_tools'),
         arguments: z.record(z.string(), z.unknown()).optional().describe('Tool arguments matching its input schema')
-      })
+      }),
+      // The one place the hub cannot know the answer, so it gives the strongest
+      // one. Whatever the named tool does, call_tool does — it may delete, it
+      // may reach the whole internet, and forwarding is not the same as
+      // vouching. Read the child's own annotations from list_tools for what a
+      // particular call would do.
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true }
     },
     async ({ server, tool, arguments: args }, ctx): Promise<CallToolResult | InputRequiredResult> => {
       const managed = findServer(server);
@@ -207,7 +259,8 @@ export function buildHubServer(supervisor: Supervisor, secret: string): McpServe
     {
       title: 'Wake a sleeping server',
       description: 'Start an on-demand server now so its first tool call is fast. No-op if it is already running.',
-      inputSchema: z.object({ server: z.string().describe('Server name from list_servers') })
+      inputSchema: z.object({ server: z.string().describe('Server name from list_servers') }),
+      annotations: LIFECYCLE
     },
     async ({ server }) => {
       const managed = findServer(server);
@@ -228,7 +281,8 @@ export function buildHubServer(supervisor: Supervisor, secret: string): McpServe
     {
       title: 'Put a server to sleep',
       description: 'Stop an on-demand server immediately instead of waiting for its idle timeout. It restarts automatically on the next tool call.',
-      inputSchema: z.object({ server: z.string().describe('Server name from list_servers') })
+      inputSchema: z.object({ server: z.string().describe('Server name from list_servers') }),
+      annotations: LIFECYCLE
     },
     async ({ server }) => {
       const managed = findServer(server);
