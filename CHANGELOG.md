@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- #region changelog -->
 
-## [Unreleased]
+## [0.11.0] - 2026-09-01
 
 ### Added
 
@@ -75,6 +75,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   watching. What changed during the nap is not reported, only that there is
   reason to look. `subscriptions: "off"` withdraws one server's right to push.
 
+- **An end-to-end suite that runs the hub the way it ships.** Three tiers: in
+  this process, as `node dist/index.js`, and as the published image through
+  `demo/compose.yml`. It is not part of `npm test`, which stays fast and stays
+  the pull-request gate; this one runs nightly, on any pull request that touches
+  it, and as a gate on release tags. [What it is
+  for](https://github.com/ni-c/mcp-hub/blob/main/e2e/README.md).
+
+  The tiers exist because a class of question cannot be asked from inside the
+  process being tested. `src/index.ts`'s startup block — environment parsing,
+  the listener, signal handlers — is entered only when the file is the program.
+  `mcp-hub-admin` is a *separate program* sharing `/data` with a running hub,
+  and a test that called the same `AuthStore` instance proves the hub can read
+  its own memory; that mistake shipped once, as a revocation that reported
+  success and did nothing. An `uncaughtException` in-process takes the test
+  runner down rather than the hub. And uid 1000, a read-only root filesystem,
+  the healthcheck and tini cannot be wrong in a bare process at all.
+
+  The consumer is a scripted agent rather than a model. It discovers through the
+  six meta-tools and then builds its arguments *from the schema the hub
+  published*, which is the whole point: a schema damaged in transit — truncated,
+  budget-clipped, missing a property it declares required — stops working there
+  and nowhere else. A model handed a broken schema improvises around it, and
+  improvisation is not an assertion.
+
+  Alongside it: thirteen fixture servers that each misbehave in one specific way
+  no off-the-shelf server does, a four-cell client-era × child-era matrix built
+  on one catalogue registered twice so a difference can only be the hub's, raw
+  `fetch` conformance checks that assert an HTTP status and a JSON-RPC code
+  together, and a recorder for what real clients put on the wire.
+
+- **`src/timings.ts`.** The supervisor's ping interval, wake timeout, idle
+  sweep and backoff curve read the environment, the same way `mcp-limits.ts`
+  already did for the call deadline. `IDLE_TIMEOUT_MS` is the sub-minute sibling
+  of `IDLE_TIMEOUT_MINUTES`.
+
+  Defaults are unchanged, so no deployment behaves differently. What changes is
+  that the behaviour becomes observable: at the shipped numbers, watching a
+  server fall asleep costs a minute and the five-minute backoff ceiling cannot
+  be reached at all. Four minutes of a test suite spent asleep is four minutes
+  somebody eventually deletes.
+
 ### Fixed
 
 - **Three capabilities the hub announced but did not serve.** `listChanged` for
@@ -124,8 +165,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   brake. Four further `MCP_ELICITATION_*` variables bound rounds, lifetime,
   message size and payload size. See
   [Elicitation](https://mcp-hub.ni-c.de/guide/elicitation).
-
-### Fixed
 
 - **A question from a server that had gone to sleep was lost.** The hub decided
   whether a child could be asked by reading the protocol era off its client,
