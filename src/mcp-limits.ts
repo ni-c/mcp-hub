@@ -36,7 +36,7 @@ export const ABSOLUTE_CALL_OPTIONS = {
  * path and by the tests, and index.ts is the only place allowed to end the
  * process over a bad environment.
  */
-function positiveIntegerEnv(name: string, fallback: number): number {
+export function positiveIntegerEnv(name: string, fallback: number): number {
   const raw = process.env[name];
   if (raw === undefined || raw === '') return fallback;
   const value = Number(raw);
@@ -47,7 +47,7 @@ function positiveIntegerEnv(name: string, fallback: number): number {
   return value;
 }
 
-function booleanEnv(name: string, fallback: boolean): boolean {
+export function booleanEnv(name: string, fallback: boolean): boolean {
   const raw = process.env[name]?.trim().toLowerCase();
   if (raw === undefined || raw === '') return fallback;
   if (raw === 'true' || raw === '1') return true;
