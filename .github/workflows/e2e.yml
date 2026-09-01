@@ -62,26 +62,26 @@ jobs:
       - run: npm run build
       - run: npm run typecheck:e2e
 
-      # linux/amd64 only. arm64 is covered by container-scan under QEMU, and a
-      # QEMU-emulated compose stack running Node, Docker and a dozen children is
-      # far too slow and far too flaky to be worth the coverage.
-      # The gha cache backend needs a buildx builder; the default docker driver
-      # cannot export to it, and the failure reads only as "buildx failed".
-      # container-scan in ci.yml sets one up for the same reason.
-      - name: Set up buildx
-        if: matrix.tier == 'docker'
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
-
+      # A plain build, on the engine's own builder, and that is the point.
+      #
+      # setup-buildx makes a docker-container builder the default. `load: true`
+      # still puts the image in the engine store, so Trivy in container-scan
+      # finds it — but `docker compose build` then runs through that same
+      # container builder, and it resolves `FROM mcp-hub:e2e` against a registry
+      # rather than the engine store. The failure reads as "pull access denied
+      # ... docker.io/library/mcp-hub:e2e", which points at Docker Hub and not
+      # at the builder that went looking there.
+      #
+      # So: no buildx, no gha cache, and demo/compose.yml sees the image the
+      # engine has. A cold build costs a couple of minutes, which a nightly can
+      # afford far more easily than a cross-driver trap nobody remembers.
+      #
+      # linux/amd64 only, implicitly: arm64 is covered by container-scan under
+      # QEMU, and a QEMU-emulated compose stack running Node and a dozen
+      # children is too slow and too flaky to be worth the coverage.
       - name: Build the image under test
         if: matrix.tier == 'docker'
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
-        with:
-          context: .
-          load: true
-          platforms: linux/amd64
-          tags: mcp-hub:e2e
-          cache-from: type=gha,scope=e2e
-          cache-to: type=gha,mode=max,scope=e2e
+        run: docker build -t mcp-hub:e2e .
 
       - run: npm run test:e2e -- --reporter=default --reporter=junit --outputFile=junit-${{ matrix.tier }}.xml
         env:
@@ -122,7 +122,15 @@ jobs:
 
       - name: Show the container logs when the docker tier fails
         if: failure() && matrix.tier == 'docker'
-        run: docker ps -a && docker compose -f demo/compose.yml logs --tail=200 || true
+        # Every stack is its own compose project (`mcphub-e2e-<port>`), so
+        # pointing at demo/compose.yml alone finds nothing. Ask the daemon what
+        # is actually there, and read the logs off the containers themselves.
+        run: |
+          docker ps -a
+          for container in $(docker ps -aq --filter "name=mcphub-e2e-"); do
+            echo "===== $(docker inspect --format '{{.Name}}' "$container") ====="
+            docker logs --tail=200 "$container" 2>&1 || true
+          done
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
