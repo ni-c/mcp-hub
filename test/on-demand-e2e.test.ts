@@ -204,7 +204,7 @@ describe('on-demand boot', () => {
 
   it('shows the sleeping state in list_servers', async () => {
     const result = await hubTool('list_servers', {});
-    const servers = JSON.parse((result.content[0] as { text: string }).text) as { name: string; status: string }[];
+    const { servers } = result.structuredContent as { servers: { name: string; status: string }[] };
     expect(servers.find(s => s.name === 'everything')?.status).toBe('sleeping');
     expect(servers.find(s => s.name === 'pinned')?.status).toBe('up');
   });
@@ -225,21 +225,21 @@ describe('waking', () => {
 
   it('sleep_server puts it back to sleep immediately', async () => {
     const result = await hubTool('sleep_server', { server: 'everything' });
-    expect(JSON.parse((result.content[0] as { text: string }).text)).toMatchObject({ status: 'sleeping' });
+    expect(result.structuredContent).toMatchObject({ status: 'sleeping' });
     expect(hub.supervisor.get('everything')!.state).toBe('sleeping');
   });
 
   it('list_tools answers from the snapshot and pre-warms the server in the background', async () => {
     const result = await hubTool('list_tools', { server: 'everything' });
     expect(result.isError).toBeFalsy();
-    const names = (JSON.parse((result.content[0] as { text: string }).text) as { name: string }[]).map(t => t.name);
+    const names = (result.structuredContent as { tools: { name: string }[] }).tools.map(t => t.name);
     expect(names).toContain('echo'); // refreshed live before it went to sleep
     await until(() => hub.supervisor.get('everything')!.state === 'up');
   });
 
   it('wake_server reports the running state and refuses for always-running servers', async () => {
     const woken = await hubTool('wake_server', { server: 'everything' });
-    expect(JSON.parse((woken.content[0] as { text: string }).text)).toMatchObject({ status: 'up' });
+    expect(woken.structuredContent).toMatchObject({ status: 'up' });
 
     for (const tool of ['wake_server', 'sleep_server']) {
       const refused = await hubTool(tool, { server: 'pinned' });
@@ -261,7 +261,9 @@ describe('waking', () => {
 describe('hidden (hub: false) servers', () => {
   it('appear in list_servers with a hidden marker', async () => {
     const result = await hubTool('list_servers', {});
-    const servers = JSON.parse((result.content[0] as { text: string }).text) as { name: string; status: string; hidden?: boolean }[];
+    const { servers } = result.structuredContent as {
+      servers: { name: string; status: string; hidden?: boolean }[];
+    };
     const secret = servers.find(s => s.name === 'secret');
     expect(secret?.hidden).toBe(true);
     expect(servers.find(s => s.name === 'everything')?.hidden).toBeUndefined();
@@ -282,11 +284,11 @@ describe('hidden (hub: false) servers', () => {
 
   it('are still managed by sleep_server and wake_server', async () => {
     const slept = await hubTool('sleep_server', { server: 'secret' });
-    expect(JSON.parse((slept.content[0] as { text: string }).text)).toMatchObject({ status: 'sleeping' });
+    expect(slept.structuredContent).toMatchObject({ status: 'sleeping' });
     expect(hub.supervisor.get('secret')!.state).toBe('sleeping');
 
     const woken = await hubTool('wake_server', { server: 'secret' });
-    expect(JSON.parse((woken.content[0] as { text: string }).text)).toMatchObject({ status: 'up' });
+    expect(woken.structuredContent).toMatchObject({ status: 'up' });
     expect(hub.supervisor.get('secret')!.state).toBe('up');
   });
 });

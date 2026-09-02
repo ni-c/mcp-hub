@@ -11,6 +11,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The meta-tools answer in both channels.** Five of the six now declare an
+  `outputSchema` and return the same object as `structuredContent` as well as
+  the JSON text block they always returned. A client that wants to *use* the
+  answer no longer has to parse a string and hope; one that wants to read it
+  still gets the text, because the SDK does not synthesize a text block for an
+  object-shaped value and dropping it would have left older clients with
+  nothing.
+
+  `list_servers` and `list_tools` therefore answer with `{"servers": […]}` and
+  `{"tools": […]}` rather than a bare array. That is the breaking part of this
+  change, and it is not cosmetic: the 2025 wire cannot carry a non-object
+  `structuredContent`, so the SDK wraps one in `{"result": …}` — and an
+  array-rooted answer would let a client tell from the payload which protocol
+  revision it had been given. The hub's promise is that it cannot. There is a
+  test comparing both eras field for field.
+
+  `call_tool` is the one without a schema. It returns the child's own result,
+  and a schema of the hub's would only be honest if the hub wrapped somebody
+  else's payload — which would break the passthrough the era matrix pins across
+  all four client/child combinations.
+
+- **`get_tool_schema` hands on the child's `outputSchema`.** This is the gap the
+  rest of the work uncovered. `call_tool` has always returned a child's
+  `structuredContent` verbatim, but the schema to validate it against was
+  dropped on the way out of `/hub`, so an aggregate client received structured
+  data it had no way to check — while `hub-tools.md` claimed structured content
+  "passes through". Half of it did.
+
+  `list_tools` marks such a tool with `hasOutputSchema: true` rather than
+  inlining the schema, so a large server's list stays a list. Both follow the
+  rule `annotations` already followed: the child's own document, verbatim, and
+  the key absent when it declared none.
+
 - **`list_tools` and `get_tool_schema` carry a child's tool annotations
   through.** Over `/hub` a client never sees the child's own `tools/list`, so
   those two answers are the only place it can learn that one of two similarly
@@ -117,6 +150,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   somebody eventually deletes.
 
 ### Fixed
+
+- **A non-object output schema now reaches a 2025 client with its value wrapped
+  to match.** The per-server endpoint writes its own `tools/call` handler, and
+  such a handler has to run the result through the wire codec itself. It did
+  not. The schema half was already being rewritten to `{"result": …}` on the
+  way out, so a child whose `outputSchema` describes an array handed a 2025
+  client a bare array to validate against a schema saying "object" — correct
+  data that looks broken. Both halves are projected now, and a fixture with an
+  array-rooted schema pins it on every era pair.
+
+  The e2e agent, which checks that a result carries everything its schema
+  requires, was silently doing nothing on the `/hub` door for the same reason:
+  the schema it read from `get_tool_schema` was always `undefined`. It bites
+  there now, and it also asserts that the text block and `structuredContent`
+  agree.
 
 - **Three capabilities the hub announced but did not serve.** `listChanged` for
   tools, prompts and resources is now advertised only on the revision that

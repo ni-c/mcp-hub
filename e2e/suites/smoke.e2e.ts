@@ -104,7 +104,7 @@ describe.each(tiers)('a hub at the %s tier', (tier: Tier) => {
     ]);
 
     const servers = (await client.callTool({ name: 'list_servers', arguments: {} })) as CallToolResult;
-    const listed = JSON.parse((servers.content[0] as { text: string }).text) as Array<{ name: string; status: string }>;
+    const { servers: listed } = servers.structuredContent as { servers: Array<{ name: string; status: string }> };
     expect(listed.map(server => server.name).sort()).toEqual(['everything', 'weather']);
     expect(listed.every(server => server.status === 'up')).toBe(true);
   });

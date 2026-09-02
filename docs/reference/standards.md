@@ -117,6 +117,7 @@ admit.
 | `resources/list`, `resources/templates/list`, `resources/read` | carried | carried |
 | `prompts/list`, `prompts/get` | carried | carried |
 | `completion/complete` | carried | carried |
+| A tool's `outputSchema` and a result's `structuredContent` | carried | carried, with the SEP-2106 wrap |
 | **Elicitation** — a child asking the person a question | **carried both ways** | not offered |
 | Embedded `sampling/createMessage` or `roots/list` in a child's question | dropped, and named in the log | — |
 | **`subscriptions/listen`** — a child's changes reaching a client | **carried** | not offered |
@@ -145,6 +146,19 @@ a client that believed the advertisement got a `-32601` at call time. On
 `2026-07-28` the level is per-request `_meta` and there is no RPC left to
 implement; carrying `notifications/message` is separate work. Until it exists
 the capability is not offered.
+
+**The structured-output row has a footnote.** `2026-07-28` lets a tool's
+`outputSchema` describe any JSON value (SEP-2106); `2025-11-25` allows only an
+object, so a child whose schema describes an array or a number reaches a 2025
+client with both the schema and the value wrapped in `{"result": …}`. The hub
+does that wrapping where it is the one talking to the older client, and leaves
+it alone where the *child* already did it — a gateway that unwrapped somebody
+else's answer to make it look modern would be inventing a shape nobody sent.
+Object-rooted schemas, which is nearly all of them, are identical on both.
+
+The hub's own six meta-tools all use an object root for exactly this reason:
+with an array root a client could tell from the payload which revision it had
+been given, and the promise above is that it cannot.
 
 **Elicitation is the row worth reading twice.** It is what
 [`smtp-mcp`](/guide/elicitation) and `imap-mcp` use to put a question in front

@@ -15,6 +15,14 @@ on-demand server.
 The [stdio mode](/guide/clients#local-clients-over-stdio) serves the same six
 tools with the same behaviour — everything on this page applies there too.
 
+**Every answer below arrives twice.** Five of the six declare an `outputSchema`
+and return the same object as `structuredContent` *and* as JSON in a text block:
+the first for a program that wants to use the answer, the second for a model or
+a person reading it. The JSON shown per tool below is that one object. The
+exception is `call_tool`, which hands back the child's own result and therefore
+cannot promise a shape of its own — the schema a caller needs there is the
+child's, and `get_tool_schema` returns it.
+
 The six carry MCP annotations of their own. `list_servers`, `list_tools` and
 `get_tool_schema` are `readOnlyHint: true`; `wake_server` and `sleep_server` are
 writes that destroy nothing and are idempotent. `call_tool` is
@@ -49,14 +57,16 @@ No input.
 Returns one entry per hub-enabled server:
 
 ```json
-[
-  { "name": "paperless", "description": "Paperless-ngx", "status": "up",       "toolCount": 14 },
-  { "name": "calendar",  "description": "CalDAV",        "status": "sleeping", "toolCount": 6, "hidden": true }
-]
+{
+  "servers": [
+    { "name": "paperless", "description": "Paperless-ngx", "status": "up",       "toolCount": 14 },
+    { "name": "calendar",  "description": "CalDAV",        "status": "sleeping", "toolCount": 6, "hidden": true }
+  ]
+}
 ```
 
 `description` is the child's advertised title, falling back to its server name.
-`status` is `starting`, `up`, `down`, `sleeping` or `unauthorized`. Listing
+`status` is `starting`, `up`, `down`, `stopped`, `sleeping` or `unauthorized`. Listing
 never wakes anything — `sleeping` entries still show their cached `toolCount`,
 and `unauthorized` means a remote server whose
 [upstream OAuth](/guide/configuration#upstreams-that-speak-oauth) needs a login. `hidden`
@@ -77,19 +87,26 @@ description, truncated at 120 characters — so listing a large server stays
 cheap:
 
 ```json
-[
-  {
-    "name": "search_documents",
-    "description": "Full-text search across all documents",
-    "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false }
-  },
-  {
-    "name": "delete_document",
-    "description": "Delete one document",
-    "annotations": { "readOnlyHint": false, "destructiveHint": true, "idempotentHint": true, "openWorldHint": false }
-  }
-]
+{
+  "server": "paperless",
+  "tools": [
+    {
+      "name": "search_documents",
+      "description": "Full-text search across all documents",
+      "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false },
+      "hasOutputSchema": true
+    },
+    {
+      "name": "delete_document",
+      "description": "Delete one document",
+      "annotations": { "readOnlyHint": false, "destructiveHint": true, "idempotentHint": true, "openWorldHint": false }
+    }
+  ]
+}
 ```
+
+`hasOutputSchema` marks a tool that declares one; the schema itself comes from
+`get_tool_schema`, so a large server's list stays a list.
 
 Each tool's [MCP annotations](https://modelcontextprotocol.io/specification/2025-11-25/server/tools#tool-annotations)
 come along, **exactly as the child declared them**. Over `/hub` a client never
@@ -129,19 +146,26 @@ asking for its tools is the strongest hint a call follows.
 | `server` | string, required | server name from `list_servers` |
 | `tool` | string, required | tool name from `list_tools` |
 
-Returns the untruncated description and the tool's JSON Schema:
+Returns the untruncated description and the tool's JSON Schemas:
 
 ```json
 {
+  "server": "paperless",
   "name": "search_documents",
   "description": "Full-text search across all documents…",
   "inputSchema": { "type": "object", "properties": { "query": { "type": "string" } }, "required": ["query"] },
+  "outputSchema": { "type": "object", "properties": { "hits": { "type": "array" } } },
   "annotations": { "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false }
 }
 ```
 
 `annotations` is the child's, verbatim, and absent when the child declared none —
 see the note under [`list_tools`](#list-tools).
+
+`outputSchema` is the child's too, and absent for a tool that declares none. It
+is what makes the `structuredContent` from `call_tool` usable: over `/hub` a
+client never sees the child's own `tools/list`, so without this it would be
+handed structured data with no way to learn its shape.
 
 This is the step that keeps context small: full schemas are pulled in one at a
 time, only for tools actually being used.
@@ -157,8 +181,11 @@ time, only for tools actually being used.
 | `tool` | string, required | tool name from `list_tools` |
 | `arguments` | object, optional | arguments matching the tool's input schema |
 
-The child's result is returned unchanged — content blocks, images, structured
-content and `isError` all pass through.
+The child's result is returned unchanged — content blocks, images,
+`structuredContent`, `_meta` and `isError` all pass through. This is the one
+meta-tool with no `outputSchema` of its own: what comes back is shaped by the
+child, not by the hub, and the schema to validate it against is the
+`outputSchema` from [`get_tool_schema`](#get-tool-schema).
 
 Timeout: 5 minutes, reset whenever the child sends a progress notification. A
 failure comes back as a tool error (`Tool call failed: …`) rather than an HTTP

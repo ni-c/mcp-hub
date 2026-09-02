@@ -64,6 +64,31 @@ export function registerCatalogue(server) {
     }
   );
 
+  /**
+   * An output schema whose ROOT is not an object — the case SEP-2106 opened up
+   * and the one where the two eras genuinely differ.
+   *
+   * A 2025 client cannot be handed a bare array as `structuredContent`, so the
+   * SDK rewrites the schema to `{type:'object', properties:{result: …}}` and
+   * wraps the value to match. Both halves or neither: a gateway that did only
+   * the schema half would hand a client an array to validate against a schema
+   * that says "object", and the data would look broken while being perfectly
+   * correct.
+   */
+  server.registerTool(
+    'tally',
+    {
+      title: 'Tally',
+      description: 'Counts to three, as a bare array.',
+      inputSchema: z.object({}),
+      outputSchema: z.array(z.number())
+    },
+    () => {
+      const structuredContent = [1, 2, 3];
+      return { content: [{ type: 'text', text: JSON.stringify(structuredContent) }], structuredContent };
+    }
+  );
+
   // Several content types in one result, because the hub's size accounting
   // walks the whole structure and a text-only fixture never exercises it.
   server.registerTool(
@@ -170,7 +195,7 @@ export function registerCatalogue(server) {
  * `resources/templates/list`.
  */
 export const CATALOGUE = {
-  tools: ['always_fails', 'echo', 'measure', 'mixed_content', 'with_meta'],
+  tools: ['always_fails', 'echo', 'measure', 'mixed_content', 'tally', 'with_meta'],
   resources: [
     ...Object.keys(DOCUMENTS)
       .map(name => `catalogue://documents/${name}`)

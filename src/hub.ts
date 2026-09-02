@@ -1,14 +1,106 @@
 import { McpServer } from '@modelcontextprotocol/server';
 import type { CallToolResult, InputRequiredResult } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import type { ManagedServer, Supervisor } from './supervisor.js';
+import type { ManagedServer, ServerState, Supervisor } from './supervisor.js';
 import { VERSION } from './version.js';
 import { forwardToolCall } from './forward.js';
 import { loggableToolName, toolAllowed } from './tool-filter.js';
 
-function text(value: unknown): CallToolResult {
-  return { content: [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value, null, 2) }] };
+/**
+ * A meta-tool answer, in both channels at once.
+ *
+ * `structuredContent` is the machine-readable half and the reason the tools
+ * declare an `outputSchema` at all; the text block stays because the SDK does
+ * NOT synthesize one for an object-shaped value, and a client that only reads
+ * `content` would otherwise get an empty answer. Both carry the same object —
+ * the specification's rule is that the two are the same information in two
+ * presentations, and the cheapest way to keep that true is to serialise the one
+ * value twice rather than to build two.
+ */
+function structured(value: Record<string, unknown>): CallToolResult {
+  return {
+    content: [{ type: 'text', text: JSON.stringify(value, null, 2) }],
+    structuredContent: value
+  };
 }
+
+/**
+ * Every value `ServerState` has, as a schema.
+ *
+ * Written as a `Record` keyed by the type rather than as a bare list on
+ * purpose: a state added to the supervisor and forgotten here would make this
+ * schema refuse a perfectly correct answer, and the SDK turns a refused answer
+ * into an error result. Keyed this way the omission is a compile error instead.
+ */
+const SERVER_STATES: Record<ServerState, true> = {
+  starting: true,
+  up: true,
+  down: true,
+  stopped: true,
+  sleeping: true,
+  unauthorized: true
+};
+
+const serverStatus = z
+  .enum(Object.keys(SERVER_STATES) as [ServerState, ...ServerState[]])
+  .describe('What the hub is currently doing with this server.');
+
+/**
+ * A JSON Schema, or a child's annotations: an object whose contents are not
+ * ours to describe.
+ *
+ * `looseObject` and not a stricter shape, because both are somebody else's
+ * document. Note that this stays right even under SEP-2106, which lets an
+ * `outputSchema` describe a non-object *instance*: the schema itself is still
+ * a JSON object — `{"type": "array", …}` — so it is the instance root that got
+ * freer, not the document.
+ */
+const foreignDocument = z.looseObject({});
+
+const listServersOutput = z.object({
+  servers: z.array(
+    z.object({
+      name: z.string().describe('Name to pass to the other tools.'),
+      description: z.string().describe("The child's own title, empty if it has never connected."),
+      status: serverStatus,
+      toolCount: z.number().int().describe('Tools this server offers through the hub, after its filter.'),
+      hidden: z
+        .literal(true)
+        .optional()
+        .describe('Present only for a server whose tools are served by its own endpoint alone.')
+    })
+  )
+});
+
+const listToolsOutput = z.object({
+  server: z.string(),
+  tools: z.array(
+    z.object({
+      name: z.string(),
+      description: z.string().describe('First line only, capped at 120 characters.'),
+      annotations: foreignDocument.optional().describe("The child's own annotations, verbatim; absent if it declared none."),
+      hasOutputSchema: z
+        .literal(true)
+        .optional()
+        .describe('Present when the tool declares an output schema, which get_tool_schema returns.')
+    })
+  )
+});
+
+const getToolSchemaOutput = z.object({
+  server: z.string(),
+  name: z.string(),
+  description: z.string().describe('The full description, untruncated.'),
+  inputSchema: foreignDocument.describe('JSON Schema for the arguments of call_tool.'),
+  outputSchema: foreignDocument
+    .optional()
+    .describe('JSON Schema the structuredContent of a call conforms to; absent if the tool declares none.'),
+  annotations: foreignDocument.optional()
+});
+
+const wakeServerOutput = z.object({ name: z.string(), status: serverStatus, toolCount: z.number().int() });
+
+const sleepServerOutput = z.object({ name: z.string(), status: serverStatus });
 
 function toolError(message: string): CallToolResult {
   return { content: [{ type: 'text', text: message }], isError: true };
@@ -122,18 +214,19 @@ export function buildHubServer(supervisor: Supervisor, secret: string): McpServe
         'List all MCP servers available through this hub, with their status. Call this first to see what is available. ' +
         'Servers marked "hidden" serve their tools only via their own endpoint, but wake_server/sleep_server still manage them.',
       inputSchema: z.object({}),
+      outputSchema: listServersOutput,
       annotations: READS
     },
     async () =>
-      text(
-        [...supervisor.servers.values()].map(s => ({
+      structured({
+        servers: [...supervisor.servers.values()].map(s => ({
           name: s.name,
           description: (s.serverInfo as { title?: string } | undefined)?.title ?? s.serverInfo?.name ?? '',
           status: s.state,
           toolCount: s.tools.length,
-          ...(s.config.hub ? {} : { hidden: true })
+          ...(s.config.hub ? {} : { hidden: true as const })
         }))
-      )
+      })
   );
 
   hub.registerTool(
@@ -142,6 +235,7 @@ export function buildHubServer(supervisor: Supervisor, secret: string): McpServe
       title: 'List tools of a server',
       description: 'List the tools of one MCP server with one-line descriptions. Use get_tool_schema before calling a tool for the first time.',
       inputSchema: z.object({ server: z.string().describe('Server name from list_servers') }),
+      outputSchema: listToolsOutput,
       annotations: READS
     },
     async ({ server }) => {
@@ -152,9 +246,18 @@ export function buildHubServer(supervisor: Supervisor, secret: string): McpServe
       if (!managed.onDemand && managed.state !== 'up') return toolError(`Server "${server}" is ${managed.state}.`);
       const failed = await prepare(managed);
       if (failed) return failed;
-      return text(
-        managed.tools.map(t => ({ name: t.name, description: firstLine(t.description), ...passThrough(t) }))
-      );
+      return structured({
+        server: managed.name,
+        tools: managed.tools.map(t => ({
+          name: t.name,
+          description: firstLine(t.description),
+          ...passThrough(t),
+          // A marker, not the schema itself: this list exists to stay small,
+          // and a page of JSON Schema per tool is what get_tool_schema is for.
+          // Omitted rather than false, for passThrough's reason.
+          ...(t.outputSchema === undefined ? {} : { hasOutputSchema: true as const })
+        }))
+      });
     }
   );
 
@@ -167,6 +270,7 @@ export function buildHubServer(supervisor: Supervisor, secret: string): McpServe
         server: z.string().describe('Server name from list_servers'),
         tool: z.string().describe('Tool name from list_tools')
       }),
+      outputSchema: getToolSchemaOutput,
       annotations: READS
     },
     async ({ server, tool }) => {
@@ -183,10 +287,16 @@ export function buildHubServer(supervisor: Supervisor, secret: string): McpServe
       if (failed) return failed;
       const found = managed.tools.find(t => t.name === tool);
       if (!found) return toolError(`Unknown tool "${tool}" on server "${server}". Use list_tools to see available tools.`);
-      return text({
+      return structured({
+        server: managed.name,
         name: found.name,
         description: found.description ?? '',
         inputSchema: found.inputSchema,
+        // The reason this tool exists twice over: call_tool hands back the
+        // child's structuredContent, and until this line the caller had no way
+        // to learn what shape it was promised. Verbatim and omitted-when-absent,
+        // exactly as annotations are.
+        ...(found.outputSchema === undefined ? {} : { outputSchema: found.outputSchema }),
         ...passThrough(found)
       });
     }
@@ -260,6 +370,7 @@ export function buildHubServer(supervisor: Supervisor, secret: string): McpServe
       title: 'Wake a sleeping server',
       description: 'Start an on-demand server now so its first tool call is fast. No-op if it is already running.',
       inputSchema: z.object({ server: z.string().describe('Server name from list_servers') }),
+      outputSchema: wakeServerOutput,
       annotations: LIFECYCLE
     },
     async ({ server }) => {
@@ -272,7 +383,7 @@ export function buildHubServer(supervisor: Supervisor, secret: string): McpServe
         return toolError(`Server "${server}" failed to start: ${(error as Error).message}`);
       }
       managed.markUsed();
-      return text({ name: managed.name, status: managed.state, toolCount: managed.tools.length });
+      return structured({ name: managed.name, status: managed.state, toolCount: managed.tools.length });
     }
   );
 
@@ -282,6 +393,7 @@ export function buildHubServer(supervisor: Supervisor, secret: string): McpServe
       title: 'Put a server to sleep',
       description: 'Stop an on-demand server immediately instead of waiting for its idle timeout. It restarts automatically on the next tool call.',
       inputSchema: z.object({ server: z.string().describe('Server name from list_servers') }),
+      outputSchema: sleepServerOutput,
       annotations: LIFECYCLE
     },
     async ({ server }) => {
@@ -289,7 +401,7 @@ export function buildHubServer(supervisor: Supervisor, secret: string): McpServe
       if (!managed) return toolError(`Unknown server "${server}". Use list_servers to see available servers.`);
       if (!managed.onDemand) return toolError(`Server "${server}" is always running.`);
       await managed.sleep();
-      return text({ name: managed.name, status: managed.state });
+      return structured({ name: managed.name, status: managed.state });
     }
   );
 

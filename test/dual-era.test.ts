@@ -6,6 +6,7 @@ import type { AddressInfo } from 'node:net';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
+import type { CallToolResult } from '@modelcontextprotocol/server';
 
 import { authorizeInBrowser, registerPublicClient } from './auth-flow.js';
 import { createHub } from '../src/index.js';
@@ -118,6 +119,34 @@ describe('both protocol eras from one endpoint', () => {
 
     expect(legacyNames).toContain('list_servers');
     expect(modernNames).toEqual(legacyNames);
+
+    await legacy.close();
+    await modern.close();
+  }, 30_000);
+
+  it('gives both eras the same structuredContent from the meta-tools', async () => {
+    // The reason every meta-tool schema has an object root. The 2025 codec
+    // wraps a non-object `structuredContent` in `{result: …}` and the 2026 one
+    // does not, so an array-rooted answer would let a client tell from the
+    // payload which revision it had been given — and this hub's promise is
+    // that it cannot. Written as a test rather than as a comment, because the
+    // promise is only worth what checks it.
+    const legacy = await connect('/hub', 'legacy');
+    const modern = await connect('/hub', 'auto');
+
+    for (const call of [
+      { name: 'list_servers', arguments: {} },
+      { name: 'list_tools', arguments: { server: 'everything' } },
+      { name: 'get_tool_schema', arguments: { server: 'everything', tool: 'echo' } }
+    ]) {
+      const fromLegacy = (await legacy.callTool(call)) as CallToolResult;
+      const fromModern = (await modern.callTool(call)) as CallToolResult;
+      expect(fromLegacy.structuredContent).toBeDefined();
+      expect(fromLegacy.structuredContent).toEqual(fromModern.structuredContent);
+      // ...and the text block says the same thing, which is the specification's
+      // rule for carrying both: one information, two presentations.
+      expect(JSON.parse((fromModern.content[0] as { text: string }).text)).toEqual(fromModern.structuredContent);
+    }
 
     await legacy.close();
     await modern.close();

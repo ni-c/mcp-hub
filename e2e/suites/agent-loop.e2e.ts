@@ -103,7 +103,7 @@ describe.runIf(RUNS_HERE)('the agent loop', () => {
     // Both children, every tool of each. The coverage assertion inside
     // runAgent has already failed the test if anything was missed; this is the
     // readable form of the same claim.
-    expect(run.called.size).toBe(5);
+    expect(run.called.size).toBe(6);
     expect(run.steps.map(step => step.server)).toEqual(
       expect.arrayContaining(['legacy', 'modern'])
     );

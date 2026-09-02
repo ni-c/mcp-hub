@@ -148,7 +148,7 @@ describe('stdio mode', () => {
     const hub = startHub(path.join(dir, 'mcp.json'));
     const client = await connect(hub);
     const listed = (await client.callTool({ name: 'list_servers', arguments: {} })) as CallToolResult;
-    expect(listed.content[0].text).toBe('[]');
+    expect(listed.structuredContent).toEqual({ servers: [] });
     await client.close();
   });
 
@@ -163,7 +163,7 @@ describe('stdio mode', () => {
     const hub = startHub(path.join(os.tmpdir(), 'mcp-hub-stdio-absent', 'mcp.json'));
     const client = await connect(hub);
     const listed = (await client.callTool({ name: 'list_servers', arguments: {} })) as CallToolResult;
-    expect(listed.content[0].text).toBe('[]');
+    expect(listed.structuredContent).toEqual({ servers: [] });
     await client.close();
   });
 

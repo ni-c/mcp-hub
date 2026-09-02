@@ -50,4 +50,22 @@ server.registerTool(
   () => ({ content: [{ type: 'text', text: 'quiet' }] })
 );
 
+// The other half of the same question, for output schemas. A client reaching
+// this tool through /hub gets structuredContent back from call_tool; without
+// the schema arriving too it has nothing to validate that against.
+server.registerTool(
+  'measure_thing',
+  {
+    title: 'Measure a thing',
+    description: 'Measures a thing and says so in both channels.',
+    inputSchema: z.object({ what: z.string() }),
+    outputSchema: z.object({ what: z.string(), value: z.number(), unit: z.string() }),
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
+  },
+  ({ what }) => {
+    const structuredContent = { what, value: 42, unit: 'furlongs' };
+    return { content: [{ type: 'text', text: JSON.stringify(structuredContent) }], structuredContent };
+  }
+);
+
 await server.connect(new StdioServerTransport());

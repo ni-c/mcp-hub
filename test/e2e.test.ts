@@ -805,7 +805,7 @@ describe('/hub aggregate', () => {
   it('counts only the exposed tools in list_servers and /health', async () => {
     const client = await mcpClient('/hub', accessToken);
     const listed = (await client.callTool({ name: 'list_servers', arguments: {} })) as CallToolResult;
-    const servers = JSON.parse((listed.content[0] as { text: string }).text) as { name: string; toolCount: number }[];
+    const { servers } = listed.structuredContent as { servers: { name: string; toolCount: number }[] };
     expect(servers.find(s => s.name === 'filtered')!.toolCount).toBeLessThan(
       servers.find(s => s.name === 'everything')!.toolCount
     );
@@ -831,11 +831,9 @@ describe('/hub aggregate', () => {
     const client = await mcpClient('/hub', accessToken);
 
     const listed = (await client.callTool({ name: 'list_tools', arguments: { server: 'annotated' } })) as CallToolResult;
-    const tools = JSON.parse((listed.content[0] as { text: string }).text) as Array<{
-      name: string;
-      description: string;
-      annotations?: Record<string, boolean>;
-    }>;
+    const { tools } = listed.structuredContent as {
+      tools: Array<{ name: string; description: string; annotations?: Record<string, boolean> }>;
+    };
     const byName = new Map(tools.map(tool => [tool.name, tool]));
     expect(byName.get('read_thing')?.annotations).toEqual({
       readOnlyHint: true,
@@ -862,7 +860,7 @@ describe('/hub aggregate', () => {
       name: 'get_tool_schema',
       arguments: { server: 'annotated', tool: 'delete_thing' }
     })) as CallToolResult;
-    const detail = JSON.parse((schema.content[0] as { text: string }).text) as {
+    const detail = schema.structuredContent as {
       annotations?: Record<string, boolean>;
       inputSchema?: unknown;
     };
@@ -873,6 +871,43 @@ describe('/hub aggregate', () => {
       openWorldHint: true
     });
     expect(detail.inputSchema).toBeDefined();
+
+    await client.close();
+  });
+
+  it('hands a child\u2019s output schema on, so a /hub caller can validate what it gets', async () => {
+    // The gap this closes. call_tool returns the child's structuredContent
+    // verbatim — it always did — but get_tool_schema dropped the outputSchema,
+    // so the caller was handed data with no way to learn its shape. Both halves
+    // are asserted here, because either alone is useless.
+    const client = await mcpClient('/hub', accessToken);
+
+    const listed = (await client.callTool({ name: 'list_tools', arguments: { server: 'annotated' } })) as CallToolResult;
+    const { tools } = listed.structuredContent as { tools: { name: string; hasOutputSchema?: true }[] };
+    // A marker in the list, the schema itself only on request: this list exists
+    // to stay small.
+    expect(tools.find(t => t.name === 'measure_thing')?.hasOutputSchema).toBe(true);
+    expect(tools.find(t => t.name === 'read_thing')).not.toHaveProperty('hasOutputSchema');
+
+    const schema = (await client.callTool({
+      name: 'get_tool_schema',
+      arguments: { server: 'annotated', tool: 'measure_thing' }
+    })) as CallToolResult;
+    const detail = schema.structuredContent as { outputSchema?: { properties?: Record<string, unknown> } };
+    expect(detail.outputSchema?.properties).toHaveProperty('unit');
+
+    const called = (await client.callTool({
+      name: 'call_tool',
+      arguments: { server: 'annotated', tool: 'measure_thing', arguments: { what: 'a field' } }
+    })) as CallToolResult;
+    expect(called.structuredContent).toEqual({ what: 'a field', value: 42, unit: 'furlongs' });
+
+    // A tool that declares none says so by omission, exactly as annotations do.
+    const plain = (await client.callTool({
+      name: 'get_tool_schema',
+      arguments: { server: 'annotated', tool: 'read_thing' }
+    })) as CallToolResult;
+    expect(plain.structuredContent).not.toHaveProperty('outputSchema');
 
     await client.close();
   });
@@ -930,7 +965,9 @@ describe('/hub aggregate', () => {
     const client = await mcpClient('/hub', accessToken);
 
     const servers = (await client.callTool({ name: 'list_servers', arguments: {} })) as CallToolResult;
-    const serverList = JSON.parse((servers.content[0] as { text: string }).text) as Array<{ name: string; status: string; hidden?: boolean }>;
+    const { servers: serverList } = servers.structuredContent as {
+      servers: Array<{ name: string; status: string; hidden?: boolean }>;
+    };
     expect(serverList.map(s => s.name)).toContain('everything');
     expect(serverList.find(s => s.name === 'everything')?.hidden).toBeUndefined();
     // hub: false servers are listed (their lifecycle is manageable) but marked.
@@ -941,7 +978,7 @@ describe('/hub aggregate', () => {
     expect((tools.content[0] as { text: string }).text).toContain('echo');
 
     const schema = (await client.callTool({ name: 'get_tool_schema', arguments: { server: 'everything', tool: 'echo' } })) as CallToolResult;
-    const parsed = JSON.parse((schema.content[0] as { text: string }).text);
+    const parsed = schema.structuredContent as { inputSchema: { properties: Record<string, unknown> } };
     expect(parsed.inputSchema.properties.message).toBeDefined();
 
     const result = (await client.callTool({

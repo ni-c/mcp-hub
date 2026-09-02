@@ -160,17 +160,31 @@ function directDoor(client: Client, server: string): Door {
  * differently would make that comparison meaningless.
  */
 function hubDoor(client: Client): Door {
+  /**
+   * Reads the machine-readable half, and checks the other one agrees.
+   *
+   * A meta-tool carries the same object twice — `structuredContent` for
+   * programs, the text block for people and models — and the specification's
+   * rule is that they say the same thing. Taking one and asserting the other
+   * matches is how that stays true: a gateway could drift the two apart and
+   * every test that read only one of them would stay green.
+   */
   const json = async (name: string, args: Record<string, unknown>): Promise<unknown> => {
     const result = (await client.callTool({ name, arguments: args })) as CallToolResult;
     if (result.isError) throw new Error(`${name} failed: ${textOf(result)}`);
-    return JSON.parse(textOf(result));
+    if (result.structuredContent === undefined) throw new Error(`${name} returned no structuredContent`);
+    const asText: unknown = JSON.parse(textOf(result));
+    if (JSON.stringify(asText) !== JSON.stringify(result.structuredContent)) {
+      throw new Error(`${name}: the text block and structuredContent disagree`);
+    }
+    return result.structuredContent;
   };
   return {
     catalogue: async () => {
-      const servers = (await json('list_servers', {})) as Array<{ name: string; status: string }>;
+      const { servers } = (await json('list_servers', {})) as { servers: Array<{ name: string; status: string }> };
       const entries: Array<{ server: string; tool: Tool }> = [];
       for (const server of servers) {
-        const summaries = (await json('list_tools', { server: server.name })) as Array<{ name: string }>;
+        const { tools: summaries } = (await json('list_tools', { server: server.name })) as { tools: Array<{ name: string }> };
         for (const summary of summaries) {
           // The schema is fetched per tool, exactly as a client with a tool
           // budget would: `list_tools` gives one-line descriptions, and the

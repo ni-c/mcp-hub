@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
 import { CompleteResultSchema, GetPromptResultSchema, ListPromptsResultSchema, ListResourcesResultSchema, ListResourceTemplatesResultSchema, ListToolsResultSchema, ReadResourceResultSchema } from '@modelcontextprotocol/core';
 import { NodeStreamableHTTPServerTransport, toNodeHandler, toWebRequest } from '@modelcontextprotocol/node';
-import { Server, ProtocolError, ProtocolErrorCode, createMcpHandler, isLegacyRequest } from '@modelcontextprotocol/server';
+import { Server, ProtocolError, ProtocolErrorCode, createMcpHandler, isInputRequiredResult, isLegacyRequest } from '@modelcontextprotocol/server';
 import type { ListToolsResult, McpHttpHandler, ServerCapabilities, StandardSchemaV1 } from '@modelcontextprotocol/server';
 import type { ManagedServer } from './supervisor.js';
 import { ABSOLUTE_CALL_OPTIONS, assertForwardedResultSize } from './mcp-limits.js';
@@ -159,7 +159,28 @@ function buildProxyServer(managed: ManagedServer, secret: string, era: Era): Ser
       }
       // The caller's params go on unchanged: a gateway that rewrote them would
       // be inventing a contract the child never agreed to.
-      return forwardToolCall({ managed, tool: req.params.name, params: req.params, ctx, secret, via: 'server' });
+      const result = await forwardToolCall({ managed, tool: req.params.name, params: req.params, ctx, secret, via: 'server' });
+      // A question for the person is not a tool result and has no schema to be
+      // projected against.
+      if (isInputRequiredResult(result)) return result;
+      /**
+       * The projection `McpServer` does for its own tools, which a hand-written
+       * handler has to do for itself.
+       *
+       * It matters for one case, and only because this is a gateway: a child
+       * whose `outputSchema` describes a non-object — an array, a number — is
+       * advertised to a 2025-era client with that schema rewritten to
+       * `{result: …}`, because that revision has nowhere else to put it. The
+       * hub was already doing that half, for free, in `encodeResult`. Without
+       * this line the *value* went out unwrapped, so the client validated an
+       * array against a schema saying "object with a result key" and rejected
+       * data that was never wrong.
+       *
+       * The advertised schema is the child's own, before the rewrite: the
+       * codec decides from its root shape whether the wrap applies at all.
+       */
+      const advertised = managed.tools.find(t => t.name === req.params.name)?.outputSchema;
+      return server.projectCallToolResult(result, advertised);
     });
   }
   if (caps.resources) {

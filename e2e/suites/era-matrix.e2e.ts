@@ -67,6 +67,31 @@ describeEachEraPair('the catalogue', (clientEra, childEra) => {
     expect(result.structuredContent).toEqual({ what: 'a field', value: 42, unit: 'furlongs' });
   });
 
+  it('projects a non-object output schema the way the client\u2019s era expects', async () => {
+    // The one place the two eras really disagree, and therefore the one the
+    // gateway has to think about. 2026-07-28 lets `structuredContent` be any
+    // JSON value; 2025-11-25 does not, so the SDK wraps both the schema and the
+    // value in `{result: …}`. The hub gets the schema half for free from the
+    // codec — it is the value half a hand-written forwarding handler has to ask
+    // for, and forgetting it is invisible until a child ships an array.
+    const client = await clients.connect(routeFor(childEra), tokenFor(childEra), { era: clientEra });
+    const listed = (await client.listTools()) as ListToolsResult;
+    const tally = listed.tools.find(tool => tool.name === 'tally');
+    const result = (await client.callTool({ name: 'tally', arguments: {} })) as CallToolResult;
+
+    // Either end can force the wrap, and the gateway cannot undo one. A legacy
+    // CLIENT gets it from the hub; a legacy CHILD already applied it before the
+    // hub ever saw the tool, and unwrapping somebody else's answer to look
+    // modern would be the hub inventing a shape the child never sent.
+    if (clientEra === 'legacy' || childEra === 'legacy') {
+      expect(tally?.outputSchema).toMatchObject({ type: 'object', properties: { result: { type: 'array' } } });
+      expect(result.structuredContent).toEqual({ result: [1, 2, 3] });
+    } else {
+      expect(tally?.outputSchema).toMatchObject({ type: 'array' });
+      expect(result.structuredContent).toEqual([1, 2, 3]);
+    }
+  });
+
   it('carries _meta on a result without inventing or dropping it', async () => {
     const client = await clients.connect(routeFor(childEra), tokenFor(childEra), { era: clientEra });
     const result = (await client.callTool({ name: 'with_meta', arguments: {} })) as CallToolResult;
@@ -177,7 +202,7 @@ describe('the aggregate', () => {
     // says so, because the alternative is finding out from a client that broke.
     const client = await clients.connect('/hub', hubToken);
     const listed = (await client.callTool({ name: 'list_tools', arguments: { server: 'modern' } })) as CallToolResult;
-    const names = (JSON.parse((listed.content[0] as { text: string }).text) as Array<{ name: string }>).map(tool => tool.name);
+    const names = (listed.structuredContent as { tools: Array<{ name: string }> }).tools.map(tool => tool.name);
     expect(names).toContain('echo');
     expect(names.some(name => name.includes('modern'))).toBe(false);
   });
