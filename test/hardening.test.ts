@@ -65,6 +65,53 @@ describe('ManagedServer restart reporting', () => {
     await server.stop();
   });
 
+  it('does not ping a child on a revision that has no ping', async () => {
+    // 2026-07-28 removed `ping`. The SDK refuses to send one rather than
+    // inventing an RPC the far end never had, and the supervisor read that
+    // refusal as a dead child: two healthy remote servers restarted every
+    // interval, with the backoff climbing, for as long as the hub was up.
+    // Seen in production the morning after 0.11.0 shipped.
+    const server = new ManagedServer('modern', { kind: 'stdio', command: '/bin/false', args: [], env: {}, hub: true });
+    server.state = 'up';
+    let pings = 0;
+    server.client = {
+      getNegotiatedProtocolVersion: () => '2026-07-28',
+      ping: async () => {
+        pings += 1;
+        throw new Error("Method 'ping' is not supported by the negotiated protocol version (wire era 2026-07-28)");
+      },
+      close: async () => {}
+    } as unknown as NonNullable<ManagedServer['client']>;
+
+    await expect(server['checkAlive']()).resolves.toBeUndefined();
+    expect(pings).toBe(0);
+    // Still up: nothing was wrong with it.
+    expect(server.state).toBe('up');
+
+    await server.stop();
+  });
+
+  it('still pings a child on a revision that has one', async () => {
+    // The other half, so the fix cannot silently turn the liveness probe off
+    // for everybody.
+    const server = new ManagedServer('legacy', { kind: 'stdio', command: '/bin/false', args: [], env: {}, hub: true });
+    server.state = 'up';
+    let pings = 0;
+    server.client = {
+      getNegotiatedProtocolVersion: () => '2025-11-25',
+      ping: async () => {
+        pings += 1;
+      },
+      close: async () => {}
+    } as unknown as NonNullable<ManagedServer['client']>;
+
+    await server['checkAlive']();
+    expect(pings).toBe(1);
+    expect(server.state).toBe('up');
+
+    await server.stop();
+  });
+
   it('does not reject when the client goes away during stop()', async () => {
     const server = new ManagedServer('racy-stop', { kind: 'stdio', command: '/bin/false', args: [], env: {}, hub: true });
     server.state = 'up';

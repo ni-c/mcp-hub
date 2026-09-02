@@ -696,6 +696,69 @@ describe('the authorization flow with a metadata document', () => {
     expect(new URL(silent.headers.location).searchParams.get('code')).toBeTruthy();
   });
 
+  it('registers a document that declares a grant this server does not have', async () => {
+    // claude.ai's real document, reduced to the part that mattered: it declares
+    // jwt-bearer alongside the two grants it actually uses. oidc-provider
+    // refuses a registration outright when it sees a grant type the server does
+    // not offer, so 0.11.0 answered every attempt with
+    // `invalid_client_metadata: grant_types can only contain
+    // 'authorization_code' or 'refresh_token'` and claude.ai could not connect
+    // at all. The hand-written server this replaced ignored the extras, which
+    // is why the failure arrived with the rewrite rather than with the client.
+    const clientId = 'https://client.example/extra-grants.json';
+    serve(clientId, {
+      ...publicClientDocument(clientId),
+      grant_types: ['authorization_code', 'refresh_token', 'urn:ietf:params:oauth:grant-type:jwt-bearer']
+    });
+
+    const { code, verifier } = await authorizeInBrowser(hub.app, clientId, {
+      password: PASSWORD,
+      redirectUri: REDIRECT_URI,
+      resource: 'http://localhost:3000/hub'
+    });
+    const tokens = await request(hub.app)
+      .post('/token')
+      .type('form')
+      .send({
+        grant_type: 'authorization_code',
+        code,
+        code_verifier: verifier,
+        client_id: clientId,
+        redirect_uri: REDIRECT_URI,
+        resource: 'http://localhost:3000/hub'
+      })
+      .expect(200);
+    expect(tokens.body.token_type).toBe('Bearer');
+
+    // The grant it does not have was dropped, not honoured: asking for it is
+    // still refused, so trimming the declaration widened nothing.
+    const refused = await request(hub.app)
+      .post('/token')
+      .type('form')
+      .send({
+        grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+        assertion: 'irrelevant',
+        client_id: clientId
+      });
+    expect(refused.status).toBeGreaterThanOrEqual(400);
+    expect(refused.body.error).toBe('unsupported_grant_type');
+  });
+
+  it('refuses a document whose grants this server has none of', async () => {
+    // Trimming a superset is a kindness to a client that talks to many
+    // servers. Trimming everything away is not: it would register a client
+    // that has no way to get a token, and the failure would surface later and
+    // somewhere else.
+    const clientId = 'https://client.example/no-usable-grant.json';
+    serve(clientId, {
+      ...publicClientDocument(clientId),
+      grant_types: ['urn:ietf:params:oauth:grant-type:jwt-bearer']
+    });
+
+    const page = await authorize(clientId, pkcePair().challenge);
+    expect(page.status).toBeGreaterThanOrEqual(400);
+  });
+
   it('asks for consent before issuing a code to a document it has not seen', async () => {
     const clientId = 'https://client.example/unapproved.json';
     serve(clientId, publicClientDocument(clientId, ['https://app.example/cb']));

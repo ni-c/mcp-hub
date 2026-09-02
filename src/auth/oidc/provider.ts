@@ -8,6 +8,13 @@ import type { AuthStore } from '../store.js';
 import { createOidcAdapter } from './adapter.js';
 import { HUB_SCOPE, installDiscoveryFixups, installThrowawaySecret } from './quirks.js';
 
+/**
+ * The grant types this server has. `clientDefaults` below and the discovery
+ * document say the same thing; this is the list a client's own declaration is
+ * trimmed against, so it lives where both can be checked against it.
+ */
+const SUPPORTED_GRANT_TYPES = ['authorization_code', 'refresh_token'];
+
 /** Pinned by test/e2e.test.ts — a client that caches `expires_in` must not be
  *  handed a different number by the new authorization server. */
 const ACCESS_TOKEN_TTL_S = 15 * 60;
@@ -212,8 +219,40 @@ export function buildOidcProvider(store: AuthStore, options: OidcProviderOptions
       properties: ['x_mcp_hub'],
       validator(_ctx, key, _value, metadata) {
         if (key !== 'x_mcp_hub') return;
-        const grants = (metadata.grant_types as string[] | undefined) ?? ['authorization_code'];
-        if (!grants.includes('refresh_token')) metadata.grant_types = [...grants, 'refresh_token'];
+        /**
+         * Two adjustments, and the second one is why claude.ai could not
+         * connect to 0.11.0 at all.
+         *
+         * A client may declare grant types this server does not offer, and
+         * oidc-provider refuses the whole registration when it sees one —
+         * `invalid_client_metadata: grant_types can only contain
+         * 'authorization_code' or 'refresh_token'`. claude.ai's metadata
+         * document declares `urn:ietf:params:oauth:grant-type:jwt-bearer`
+         * alongside the two it actually uses here, so every attempt died on a
+         * grant it was never going to ask for. The hand-written server this
+         * replaced ignored the extras, which is why the failure arrived with
+         * the rewrite rather than with the client.
+         *
+         * Dropping them is the right answer rather than a lenient one: what a
+         * client may do is decided by what the authorization server supports,
+         * the registration response says which types were actually registered
+         * (RFC 7591 §3.2.1), and a client reading that response learns the
+         * truth. Rejecting instead makes an optimistic superset — the sensible
+         * thing for a client that talks to many servers — fatal.
+         */
+        const declared = (metadata.grant_types as string[] | undefined) ?? ['authorization_code'];
+        const grants = declared.filter(grant => SUPPORTED_GRANT_TYPES.includes(grant));
+        // Everything it asked for is something this server has never heard of.
+        // That is not a superset to trim, it is a client aimed at the wrong
+        // kind of server, and saying so beats registering it with no way to
+        // get a token.
+        if (grants.length === 0) {
+          throw new errors.InvalidClientMetadata(
+            `grant_types must include one of: ${SUPPORTED_GRANT_TYPES.join(', ')}`
+          );
+        }
+        if (!grants.includes('refresh_token')) grants.push('refresh_token');
+        metadata.grant_types = grants;
 
         /**
          * The hub's redirect-URI policy, which oidc-provider does not have:
@@ -253,7 +292,7 @@ export function buildOidcProvider(store: AuthStore, options: OidcProviderOptions
     },
 
     clientDefaults: {
-      grant_types: ['authorization_code', 'refresh_token'],
+      grant_types: [...SUPPORTED_GRANT_TYPES],
       token_endpoint_auth_method: 'none',
       // Not cosmetic: the hub's key is Ed25519, so RS256 — which is what
       // oidc-provider defaults a new client to — is not an algorithm this

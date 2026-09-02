@@ -43,6 +43,24 @@ function classifyAuthFailure(error: unknown): 'restart' | 'unauthorized' {
 }
 
 /**
+ * Whether this connection's protocol revision still has `ping`.
+ *
+ * `2026-07-28` removed it. Asked on that era the SDK refuses rather than
+ * sending anything, so a liveness probe there is not a failed ping — it is a
+ * question that no longer exists. Everything older has it.
+ *
+ * Read from the connection rather than from the config, because the era is not
+ * a property of the server we configured: it is the outcome of the opening
+ * exchange with the server that actually answered.
+ */
+function eraHasPing(client: Client): boolean {
+  const era = client.getNegotiatedProtocolVersion?.();
+  // Undefined means the SDK has not recorded one, which is every revision that
+  // predates the negotiation API. Those all have ping.
+  return era === undefined || era < '2026-07-28';
+}
+
+/**
  * Remote upstreams get their configured headers on EVERY request via a fetch
  * wrapper — requestInit alone does not cover the SSE stream GET.
  */
@@ -628,6 +646,23 @@ export class ManagedServer {
     // a local makes the whole method immune to that reassignment.
     const client = this.client;
     if (this.state !== 'up' || !client) return;
+    // `ping` does not exist on 2026-07-28: the revision removed it, and the SDK
+    // refuses to send one rather than inventing an RPC the far end never had.
+    // Without this check the refusal reads as a dead child and the supervisor
+    // restarts a server that is perfectly healthy — forever, with the backoff
+    // climbing. Seen in production the morning after 0.11.0 went out: two
+    // remote children that happened to speak the modern era flapped every
+    // interval while the rest of the hub was fine.
+    //
+    // Nothing replaces it. On that era liveness is the transport's business,
+    // which is where it always was for a stdio child: the process exits, the
+    // transport closes, onExit restarts it. What an HTTP child on the modern
+    // era loses is the *active* probe — a server that stops answering without
+    // closing is noticed at the next real call rather than within a minute.
+    // Sending some other request as a substitute heartbeat would be worse: it
+    // would be a call the operator never asked for, against a server that
+    // charges for it or logs it, every interval, forever.
+    if (!eraHasPing(client)) return;
     try {
       await client.ping({ timeout: PING_TIMEOUT_MS });
     } catch (error) {
