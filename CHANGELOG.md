@@ -151,6 +151,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The meta-tools no longer advertise an empty schema where they mean
+  "anything".** Five fields carry a document the hub does not own — a child's
+  `annotations` on `list_tools` and `get_tool_schema`, the two schemas on
+  `get_tool_schema`, and the `arguments` of `call_tool` — and zod writes that
+  as `"additionalProperties": {}`. An empty schema is legal and means exactly
+  what `true` means, but it is the spelling some MCP clients refuse or
+  mishandle, which is the worst kind of bug to own: the tool works against the
+  client you tested with and fails against the one you did not.
+
+  Only the emitted JSON Schema changes. The runtime is still as permissive as
+  it has to be, and deliberately so: those fields are validated against the zod
+  schema, a child is free to put anything in them, and the SDK turns a refused
+  answer into an error result. A test walks every schema the hub advertises and
+  fails on any node that constrains nothing, so a future zod release cannot put
+  the spelling back without saying so.
+
 - **A non-object output schema now reaches a 2025 client with its value wrapped
   to match.** The per-server endpoint writes its own `tools/call` handler, and
   such a handler has to run the result through the wire codec itself. It did

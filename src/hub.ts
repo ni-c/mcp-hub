@@ -54,8 +54,14 @@ const serverStatus = z
  * `outputSchema` describe a non-object *instance*: the schema itself is still
  * a JSON object — `{"type": "array", …}` — so it is the instance root that got
  * freer, not the document.
+ *
+ * The `meta` is not decoration. Left to itself zod writes "accepts anything" as
+ * `"additionalProperties": {}` — an empty schema, which is legal and means
+ * exactly the same as `true`, but is the spelling some MCP clients refuse or
+ * mishandle. `meta` is merged into the emitted JSON Schema and nothing else, so
+ * the wire says `true` while the runtime stays as permissive as it has to be.
  */
-const foreignDocument = z.looseObject({});
+const foreignDocument = z.looseObject({}).meta({ additionalProperties: true });
 
 const listServersOutput = z.object({
   servers: z.array(
@@ -310,7 +316,13 @@ export function buildHubServer(supervisor: Supervisor, secret: string): McpServe
       inputSchema: z.object({
         server: z.string().describe('Server name from list_servers'),
         tool: z.string().describe('Tool name from list_tools'),
-        arguments: z.record(z.string(), z.unknown()).optional().describe('Tool arguments matching its input schema')
+        // `meta` for the same reason as `foreignDocument`: say `true` on the
+        // wire rather than the empty schema zod would write by itself.
+        arguments: z
+          .record(z.string(), z.unknown())
+          .meta({ additionalProperties: true })
+          .optional()
+          .describe('Tool arguments matching its input schema')
       }),
       // The one place the hub cannot know the answer, so it gives the strongest
       // one. Whatever the named tool does, call_tool does — it may delete, it
