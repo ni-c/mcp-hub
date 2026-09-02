@@ -17,7 +17,7 @@ includes **elicitation** — a child server's question reaches the person at the
 instead of dying at the gateway
 ([how](https://mcp-hub.ni-c.de/guide/elicitation)) — and **subscriptions**: the hub
 serves `subscriptions/listen` to its clients and subscribes to its children on
-whichever revision *they* speak, so a server that has never heard of it still reaches
+whichever revision _they_ speak, so a server that has never heard of it still reaches
 a client that speaks nothing else
 ([how](https://mcp-hub.ni-c.de/guide/subscriptions)).
 
@@ -100,7 +100,7 @@ replaces N containers with one process:
   dying at the gateway. The hub attributes it to the server that asked, strips
   what could lie about that, drops embedded sampling and roots requests, and
   seals the resumption state against the call it belongs to. `passthrough:
-  "off"` withdraws one server's right to ask;
+"off"` withdraws one server's right to ask;
   [details](https://mcp-hub.ni-c.de/guide/elicitation).
 - **Change notifications, in both eras**: a client opens a
   `subscriptions/listen` stream and hears when a child's tools, prompts or
@@ -115,6 +115,38 @@ replaces N containers with one process:
   file plus a signing key under `/data`), six runtime dependencies, and
   multi-arch images — a stated project goal is to run comfortably on a
   single-board computer like a Raspberry Pi.
+
+## Servers to run behind it
+
+The hub is server-agnostic — it serves any stdio MCP server whose entry fits
+Claude Code's `mcpServers` format, which is most of them. These seventeen are
+built and maintained alongside it, so their documentation carries the hub entry
+you need and their tool filters line up with the hub's own `allowTools` /
+`denyTools`:
+
+| Server                                                                 | npm                               | What it reaches                                                                |
+| ---------------------------------------------------------------------- | --------------------------------- | ------------------------------------------------------------------------------ |
+| [audiobookshelf-mcp](https://audiobookshelf-mcp.ni-c.de)               | `audiobookshelf-mcp`              | Audiobookshelf — libraries, listening progress, collections and playlists      |
+| [calibreweb-mcp](https://calibreweb-mcp.ni-c.de)                       | `calibreweb-mcp`                  | Calibre-Web — read-only library access through the OPDS feed                   |
+| [freshrss-mcp](https://freshrss-mcp.ni-c.de)                           | `@ni-c/freshrss-mcp`              | FreshRSS — feeds, categories and articles as plain text, not stream ids        |
+| [google-search-console-mcp](https://google-search-console-mcp.ni-c.de) | `@ni-c/google-search-console-mcp` | Google Search Console — properties, sitemaps, search analytics, URL inspection |
+| [healthchecks-mcp](https://healthchecks-mcp.ni-c.de)                   | `healthchecks-mcp`                | Healthchecks — cron and uptime checks, and why one failed                      |
+| [hetzner-dns-mcp](https://hetzner-dns-mcp.ni-c.de)                     | `hetzner-dns-mcp`                 | Hetzner Cloud DNS — zones, record sets and BIND import/export                  |
+| [imap-mcp](https://imap-mcp.ni-c.de)                                   | `@ni-c/imap-mcp`                  | IMAP mailboxes — read, search, organise and draft mail; it cannot send         |
+| [linkwarden-mcp](https://linkwarden-mcp.ni-c.de)                       | `linkwarden-mcp`                  | Linkwarden — bookmarks, collections and the article text it preserved          |
+| [mealie-mcp](https://mealie-mcp.ni-c.de)                               | `@ni-c/mealie-mcp`                | Mealie — recipes, meal plans, shopping lists and cookbooks                     |
+| [ntfy-mcp](https://ntfy-mcp.ni-c.de)                                   | `@ni-c/ntfy-mcp`                  | ntfy — publish and update notifications, manage users and topic access         |
+| [opengist-mcp](https://opengist-mcp.ni-c.de)                           | `opengist-mcp`                    | Opengist — gists, revisions, commit history and raw files                      |
+| [osm-mcp](https://osm-mcp.ni-c.de)                                     | `osm-mcp`                         | OpenStreetMap — geocoding, routing, isochrones and POI search                  |
+| [rustpad-mcp](https://rustpad-mcp.ni-c.de)                             | `rustpad-mcp`                     | Rustpad — collaborative pads edited through real OT, not overwrites            |
+| [smtp-mcp](https://smtp-mcp.ni-c.de)                                   | `@ni-c/smtp-mcp`                  | SMTP — sends mail, behind a recipient allowlist and a human confirmation       |
+| [wg-easy-mcp](https://wg-easy-mcp.ni-c.de)                             | `wg-easy-mcp`                     | wg-easy v15+ — the full WireGuard client lifecycle                             |
+| [wikijs-mcp](https://wikijs-mcp.ni-c.de)                               | `@ni-c/wikijs-mcp`                | Wiki.js — search, read and edit pages, plus assets, users and groups           |
+| [woodpecker-ci-mcp](https://woodpecker-ci-mcp.ni-c.de)                 | `@ni-c/woodpecker-ci-mcp`         | Woodpecker CI — repositories, pipelines, logs, secrets and crons               |
+
+Each one runs perfectly well on its own over stdio. Put them behind the hub when
+you want them reachable from a client that cannot spawn a local process, or when
+you would rather register one connector than seventeen.
 
 ## Configuration
 
