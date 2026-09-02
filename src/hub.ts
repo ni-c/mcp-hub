@@ -261,6 +261,10 @@ export function buildHubServer(supervisor: Supervisor, secret: string): McpServe
           // A marker, not the schema itself: this list exists to stay small,
           // and a page of JSON Schema per tool is what get_tool_schema is for.
           // Omitted rather than false, for passThrough's reason.
+          //
+          // It stays a marker now that every server this family ships declares
+          // one. A hub runs whatever its config names, and a child written by
+          // somebody else is the ordinary case here, not the odd one.
           ...(t.outputSchema === undefined ? {} : { hasOutputSchema: true as const })
         }))
       });
@@ -324,6 +328,14 @@ export function buildHubServer(supervisor: Supervisor, secret: string): McpServe
           .optional()
           .describe('Tool arguments matching its input schema')
       }),
+      // No outputSchema, and the only tool here without one. That is a
+      // construction rather than an omission: this tool answers with a child's
+      // result, so the shape is the child's own and changes with the `tool`
+      // argument. A schema here could say no more than "an object", which is
+      // less than the caller can already have — get_tool_schema returns the
+      // child's own outputSchema, and call_tool hands the matching
+      // structuredContent back verbatim.
+      //
       // The one place the hub cannot know the answer, so it gives the strongest
       // one. Whatever the named tool does, call_tool does — it may delete, it
       // may reach the whole internet, and forwarding is not the same as

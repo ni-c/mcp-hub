@@ -961,6 +961,47 @@ describe('/hub aggregate', () => {
     await client.close();
   });
 
+  it('declares an object-rooted output schema on every meta-tool but call_tool', async () => {
+    // The same shape as the annotation test above, for the same reason: a tool
+    // added later inherits nothing, so the rule is asserted over the whole list
+    // rather than tool by tool.
+    //
+    // The root is asserted and not only the presence. A non-object root is
+    // legal under SEP-2106, but the 2025-era codec has nowhere to put it and
+    // rewrites it to `{result: …}` — one answer with two shapes, depending on
+    // which revision the client speaks.
+    const client = await mcpClient('/hub', accessToken);
+    const { tools } = await client.listTools();
+    // call_tool is the one exception, and it is one by construction: its answer
+    // is a child's, whose shape differs per call. get_tool_schema publishes it.
+    const exempt = new Set(['call_tool']);
+    expect(tools.length).toBeGreaterThan(exempt.size);
+    for (const tool of tools) {
+      if (exempt.has(tool.name)) {
+        expect(tool.outputSchema, tool.name).toBeUndefined();
+        continue;
+      }
+      expect(tool.outputSchema, tool.name).toBeDefined();
+      expect((tool.outputSchema as { type?: string }).type, tool.name).toBe('object');
+    }
+    await client.close();
+  });
+
+  it('projects a child’s structuredContent on the child’s own endpoint too', async () => {
+    // The /hub door is covered above; this is the other one, and different code
+    // answers it. proxy.ts hands the result to projectCallToolResult with the
+    // child's advertised schema, and until a child declared one there was
+    // nothing for that line to act on.
+    const client = await mcpClient('/annotated/mcp', accessToken);
+    const { tools } = await client.listTools();
+    const measure = tools.find(tool => tool.name === 'measure_thing');
+    expect((measure?.outputSchema as { properties?: Record<string, unknown> })?.properties).toHaveProperty('unit');
+
+    const result = (await client.callTool({ name: 'measure_thing', arguments: { what: 'a field' } })) as CallToolResult;
+    expect(result.structuredContent).toEqual({ what: 'a field', value: 42, unit: 'furlongs' });
+    await client.close();
+  });
+
   it('walks the list_servers -> list_tools -> get_tool_schema -> call_tool flow', async () => {
     const client = await mcpClient('/hub', accessToken);
 
