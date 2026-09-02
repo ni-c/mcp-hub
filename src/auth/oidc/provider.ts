@@ -331,9 +331,42 @@ export function buildOidcProvider(store: AuthStore, options: OidcProviderOptions
       if (!approved && !ctx.oidc.result?.consent) return undefined;
 
       const existing = ctx.oidc.result?.consent?.grantId ?? ctx.oidc.session?.grantIdFor(clientId);
-      if (existing) return ctx.oidc.provider.Grant.find(existing);
+      const grant = existing
+        ? ((await ctx.oidc.provider.Grant.find(existing)) ??
+          new ctx.oidc.provider.Grant({ clientId, accountId: ctx.oidc.session?.accountId }))
+        : new ctx.oidc.provider.Grant({ clientId, accountId: ctx.oidc.session?.accountId });
 
-      const grant = new ctx.oidc.provider.Grant({ clientId, accountId: ctx.oidc.session?.accountId });
+      /**
+       * Whatever scope the request asked for has to end up ON the grant, even
+       * though the hub issues nothing for it.
+       *
+       * The hub advertises `scopes_supported: ["openid"]` and cannot stop:
+       * oidc-provider's configuration.js adds it unconditionally. A client that
+       * reads the discovery document therefore asks for `openid` — claude.ai
+       * does — and a requested scope that the grant does not carry leaves the
+       * consent prompt unsatisfied. oidc-provider then sends the browser back
+       * to the interaction, the consent page is rendered again, approving it
+       * finishes the interaction, the resume finds the same missing scope, and
+       * round it goes. What that looks like from the outside is an approve
+       * button that reloads the page and does nothing, for ever.
+       *
+       * Granting it is bookkeeping and nothing more: no id_token is ever
+       * issued and `features.userinfo` is off, so `openid` on the grant buys
+       * the client no claim it could read. The scope set has already been
+       * validated against `scopes_supported` by the time this runs, so there is
+       * nothing here to widen.
+       *
+       * This is also why the grant is now *amended* rather than returned as
+       * found: a session that already holds a grant from an earlier flow would
+       * otherwise keep whatever scopes it was minted with, and a client that
+       * later asks for one more would loop the same way with no way out but
+       * clearing cookies.
+       */
+      const scopes = String(ctx.oidc.params?.scope ?? '')
+        .split(' ')
+        .filter(Boolean);
+      if (scopes.length > 0) grant.addOIDCScope(scopes.join(' '));
+
       const requested = ctx.oidc.params?.resource;
       for (const resource of [requested ?? []].flat()) {
         grant.addResourceScope(String(resource), HUB_SCOPE);

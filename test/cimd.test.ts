@@ -744,6 +744,29 @@ describe('the authorization flow with a metadata document', () => {
     expect(refused.body.error).toBe('unsupported_grant_type');
   });
 
+  it('settles when the client asks for the scope the hub advertises', async () => {
+    // The hub's discovery document says `scopes_supported: ["openid"]` and
+    // cannot say otherwise — oidc-provider adds it unconditionally. So a client
+    // that reads the document asks for it, and claude.ai does.
+    //
+    // A requested scope the grant does not carry leaves the consent prompt
+    // unsatisfied: the resume sends the browser back to the interaction, the
+    // consent page renders again, approving it finishes the interaction, the
+    // resume finds the same missing scope. From the outside that is an approve
+    // button that reloads the page and never does anything. This walk gives up
+    // after twelve hops, so the loop is what fails the test.
+    const clientId = 'https://client.example/openid-scope.json';
+    serve(clientId, publicClientDocument(clientId));
+
+    const { code } = await authorizeInBrowser(hub.app, clientId, {
+      password: PASSWORD,
+      redirectUri: REDIRECT_URI,
+      resource: 'http://localhost:3000/hub',
+      scope: 'openid'
+    });
+    expect(code).toBeTruthy();
+  });
+
   it('refuses a document whose grants this server has none of', async () => {
     // Trimming a superset is a kindness to a client that talks to many
     // servers. Trimming everything away is not: it would register a client

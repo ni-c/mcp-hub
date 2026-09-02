@@ -72,6 +72,8 @@ export interface AuthorizeOptions {
   password: string;
   redirectUri: string;
   resource?: string;
+  /** Scope to request. Real clients read it off the discovery document. */
+  scope?: string;
   /** Reuse a signed-in agent, to reach the consent page rather than login. */
   agent?: ReturnType<typeof request.agent>;
   /** What to do when the consent page appears. Defaults to approving. */
@@ -102,7 +104,8 @@ export async function authorizeInBrowser(
     code_challenge: challenge,
     code_challenge_method: 'S256',
     state: 'xyz',
-    ...(options.resource ? { resource: options.resource } : {})
+    ...(options.resource ? { resource: options.resource } : {}),
+    ...(options.scope ? { scope: options.scope } : {})
   });
 
   let location = `/authorize?${query.toString()}`;
