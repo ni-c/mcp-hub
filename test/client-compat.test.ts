@@ -83,6 +83,30 @@ describe('client compatibility', () => {
     expect(hub.store.getClient(registration.body.client_id)?.client_secret).toBeUndefined();
   });
 
+  it('registers a client whose scope field is empty instead of refusing it (MCP Inspector)', async () => {
+    const registration = await request(hub.app)
+      .post('/register')
+      .send({ redirect_uris: [REDIRECT_URI], token_endpoint_auth_method: 'none', client_name: 'inspector-like', scope: '' })
+      .expect(201);
+    // Registered as if the optional field had been left out, which is what the
+    // client meant by leaving its input untouched.
+    expect(registration.body.scope).toBeUndefined();
+    expect(hub.store.getClient(registration.body.client_id)?.scope).toBeUndefined();
+  });
+
+  it('keeps a scope that says something, and still refuses one it does not know', async () => {
+    const registration = await request(hub.app)
+      .post('/register')
+      .send({ redirect_uris: [REDIRECT_URI], token_endpoint_auth_method: 'none', scope: 'openid' })
+      .expect(201);
+    expect(registration.body.scope).toBe('openid');
+    // The empty-string concession is not a licence to invent scopes.
+    await request(hub.app)
+      .post('/register')
+      .send({ redirect_uris: [REDIRECT_URI], token_endpoint_auth_method: 'none', scope: 'admin' })
+      .expect(400);
+  });
+
   it('keeps confidential-client secrets non-expiring', async () => {
     const registration = await request(hub.app)
       .post('/register')

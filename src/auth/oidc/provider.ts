@@ -255,6 +255,32 @@ export function buildOidcProvider(store: AuthStore, options: OidcProviderOptions
         metadata.grant_types = grants;
 
         /**
+         * An empty `scope` is not a narrow scope, it is a malformed one: RFC
+         * 6749 §3.3 defines the value as at least one scope-token, so `''` is
+         * outside the grammar and client_schema.js refuses the entire
+         * registration with `scope must be a non-empty string if provided`.
+         *
+         * The MCP Inspector sends exactly that. Its scope input is optional,
+         * an untouched field serialises as `''` rather than being left out,
+         * and the SDK copies `clientMetadata` into the registration body
+         * verbatim — so an empty text box, which is the default state, is
+         * enough to make dynamic registration impossible. Any client built on
+         * `@modelcontextprotocol/client` that carries a scope field it does
+         * not fill has the same shape, and none of them can tell from the
+         * error that the field they never touched is the problem.
+         *
+         * Dropping it is the substitution RFC 7591 §3.2.1 provides for ("MAY
+         * reject or replace any of the client's requested metadata values"),
+         * and it lands the client exactly where omitting the optional field
+         * would have. Nothing is widened by that: `scope` is a CEILING on what
+         * a client may ask for, the hub authorizes a client and binds the
+         * token to a resource, and neither decision reads this field. A scope
+         * that says something is left untouched, and `scopes()` still refuses
+         * one this server does not know.
+         */
+        if (metadata.scope === '') delete metadata.scope;
+
+        /**
          * The hub's redirect-URI policy, which oidc-provider does not have:
          * it keeps out javascript:/data:/vbscript: but accepts plain http to
          * any host. That last one matters — the authorization code travels in
