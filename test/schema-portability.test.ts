@@ -126,7 +126,7 @@ async function listMetaTools() {
   started.push(hub);
 
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  await hub.build().connect(serverTransport);
+  await hub.build('modern').connect(serverTransport);
   const client = new Client({ name: 'vitest', version: '1.0.0' });
   await client.connect(clientTransport);
 
