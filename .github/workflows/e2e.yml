@@ -30,6 +30,10 @@ on:
       - 'tsconfig.e2e.json'
       - 'demo/**'
       - 'src/timings.ts'
+      # The demo suite asserts the shape the meta-tools answer in. Changing
+      # that shape is exactly what 0.11.0 did, and the nightly was the first
+      # thing to say so — days after the pull request that did it was green.
+      - 'src/hub.ts'
       - '.github/workflows/e2e.yml'
 
 permissions:

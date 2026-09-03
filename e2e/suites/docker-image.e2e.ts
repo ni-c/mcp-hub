@@ -133,7 +133,12 @@ describe.runIf(RUNS_HERE)('the demo everyone is invited to run', () => {
     expect((await client.listTools()).tools).toHaveLength(6);
 
     const servers = (await client.callTool({ name: 'list_servers', arguments: {} })) as CallToolResult;
-    const listed = JSON.parse((servers.content[0] as { text: string }).text) as Array<{ name: string; toolCount: number }>;
+    // Read the structured result, not the text: since 0.11.0 the meta-tools
+    // declare an output schema, and a schema-aware client reads the object it
+    // describes. The two channels are written from one value, so asserting
+    // they still agree is what catches a drift between them.
+    const listed = (servers.structuredContent as { servers: Array<{ name: string; toolCount: number }> }).servers;
+    expect(JSON.parse((servers.content[0] as { text: string }).text)).toEqual(servers.structuredContent);
     const total = listed.reduce((sum, server) => sum + server.toolCount, 0);
     expect(total).toBe(9);
   });
