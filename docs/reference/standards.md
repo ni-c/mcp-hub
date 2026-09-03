@@ -120,6 +120,7 @@ admit.
 | A tool's `outputSchema` and a result's `structuredContent` | carried | carried, with the SEP-2106 wrap |
 | **Elicitation** — a child asking the person a question | **carried both ways** | not offered |
 | Embedded `sampling/createMessage` or `roots/list` in a child's question | dropped, and named in the log | — |
+| `describe_connection`, where `MCP_DIAGNOSTICS` is on | answers, and reports this era | answers, and reports this era |
 | **`subscriptions/listen`** — a child's changes reaching a client | **carried** | not offered |
 | `listChanged` notifications (tools, prompts, resources) | delivered on a subscription | not advertised, not delivered |
 | `notifications/resources/updated` | delivered on a subscription | not advertised, not delivered |
@@ -156,9 +157,9 @@ it alone where the *child* already did it — a gateway that unwrapped somebody
 else's answer to make it look modern would be inventing a shape nobody sent.
 Object-rooted schemas, which is nearly all of them, are identical on both.
 
-The hub's own six meta-tools all use an object root for exactly this reason:
-with an array root a client could tell from the payload which revision it had
-been given, and the promise above is that it cannot.
+The hub's own meta-tools all use an object root for exactly this reason: with an
+array root a client could tell from the payload which revision it had been
+given, and the promise above is that it cannot.
 
 **Elicitation is the row worth reading twice.** It is what
 [`smtp-mcp`](/guide/elicitation) and `imap-mcp` use to put a question in front

@@ -136,7 +136,7 @@ export async function createHub(options: HubOptions) {
   // open subscription streams. /hub carries tools and nothing else, so the only
   // change worth relaying is a child's tool list moving; the supervisor
   // publishes those here.
-  const hubRoute = createRoute(() => buildHubServer(supervisor, store.cookieSecret).server, {
+  const hubRoute = createRoute(era => buildHubServer(supervisor, store.cookieSecret, era).server, {
     label: '/hub',
     // Every child, because the aggregate's tool list spans all of them.
     onDemandChange: () => supervisor.reconcileAll()

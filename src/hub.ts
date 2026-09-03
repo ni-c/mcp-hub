@@ -1,10 +1,13 @@
-import { McpServer } from '@modelcontextprotocol/server';
-import type { CallToolResult, InputRequiredResult } from '@modelcontextprotocol/server';
+import { McpServer, CLIENT_CAPABILITIES_META_KEY } from '@modelcontextprotocol/server';
+import type { CallToolResult, ClientCapabilities, InputRequiredResult } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { ManagedServer, ServerState, Supervisor } from './supervisor.js';
 import { VERSION } from './version.js';
 import { forwardToolCall } from './forward.js';
 import { loggableToolName, toolAllowed } from './tool-filter.js';
+import { booleanEnv } from './mcp-limits.js';
+import { REFUSAL_REASON, decidePassthrough } from './elicitation.js';
+import { REVISION, type Era } from './proxy.js';
 
 /**
  * A meta-tool answer, in both channels at once.
@@ -104,6 +107,25 @@ const getToolSchemaOutput = z.object({
   annotations: foreignDocument.optional()
 });
 
+const describeConnectionOutput = z.object({
+  era: z.enum(['modern', 'legacy']).describe('Which protocol era this very call arrived on.'),
+  revision: z.string().describe('The revision string that era puts on the wire.'),
+  hubVersion: z.string(),
+  caller: z.object({
+    declaresElicitation: z
+      .boolean()
+      .describe('Whether this request carried an elicitation capability. Only the 2026 era can carry one at all.')
+  }),
+  elicitation: z.object({
+    wouldForward: z
+      .boolean()
+      .optional()
+      .describe('Whether a question from the named server would reach you. Absent when no server was named and the answer depends on one.'),
+    reason: z.string().optional().describe('Why not, or what the answer still depends on. Absent when a question would be carried.'),
+    server: z.string().optional().describe('The server this answer was computed for, if one was named.')
+  })
+});
+
 const wakeServerOutput = z.object({ name: z.string(), status: serverStatus, toolCount: z.number().int() });
 
 const sleepServerOutput = z.object({ name: z.string(), status: serverStatus });
@@ -174,7 +196,16 @@ const requireAllowedTool = (managed: ManagedServer, tool: string, server: string
   return toolError(`Unknown tool "${tool}" on server "${server}". Use list_tools to see available tools.`);
 };
 
-export function buildHubServer(supervisor: Supervisor, secret: string): McpServer {
+/**
+ * The aggregate, built for the era it will serve.
+ *
+ * `era` is not decoration: both entry points already construct one instance per
+ * era — `createMcpHandler` per request, `serveStdio` per connection — and the
+ * SDK hands the era to the factory precisely so a server can vary by it. The
+ * only thing that varies here is `describe_connection`, which would otherwise
+ * have to guess the one fact it exists to report.
+ */
+export function buildHubServer(supervisor: Supervisor, secret: string, era: Era): McpServer {
   const hub = new McpServer({ name: 'mcp-hub', version: VERSION });
 
   const findServer = (name: string) => supervisor.get(name);
@@ -428,6 +459,74 @@ export function buildHubServer(supervisor: Supervisor, secret: string): McpServe
       return structured({ name: managed.name, status: managed.state });
     }
   );
+
+  /**
+   * The seventh tool, off unless an operator asks for it.
+   *
+   * Off by default because every tool a client can see costs context in every
+   * conversation that client has, and "six meta-tools instead of N×tools" is
+   * the whole argument for the aggregate. This one answers a question most
+   * deployments never ask. It is not off for safety: it reports only what the
+   * caller's own request already contains, and says nothing about any other
+   * client — which is exactly why it exists instead of a tool that hands out
+   * the hub's log.
+   *
+   * Read here rather than at module load so a test can set it per case, and
+   * because this function runs once per request anyway.
+   */
+  if (booleanEnv('MCP_DIAGNOSTICS', false)) {
+    hub.registerTool(
+      'describe_connection',
+      {
+        title: 'Describe this connection',
+        description:
+          'Report how you are connected to this hub right now: the protocol era, and whether a server could ask you a question mid-call. ' +
+          'Name a server to include its own switch and era in the answer.',
+        inputSchema: z.object({
+          server: z.string().optional().describe('Server name from list_servers. Omit to ask about the connection alone.')
+        }),
+        outputSchema: describeConnectionOutput,
+        annotations: READS
+      },
+      async ({ server }, ctx) => {
+        const managed = server === undefined ? undefined : findServer(server);
+        if (server !== undefined && !managed) {
+          return toolError(`Unknown server "${server}". Use list_servers to see available servers.`);
+        }
+
+        // Exactly what forwardToolCall reads, from exactly the same place.
+        const envelope = ctx.mcpReq.envelope as Record<string, unknown> | undefined;
+        const declared = (envelope?.[CLIENT_CAPABILITIES_META_KEY] as ClientCapabilities | undefined)?.elicitation;
+
+        // A sleeping child has negotiated no era, and asking here must not wake
+        // one: this tool reports, it does not act.
+        const childEra = managed?.state === 'up' ? managed.client?.getProtocolEra() : undefined;
+        const decision = decidePassthrough({ config: managed?.config, declaredElicitation: declared, childEra });
+
+        // Without a named server the first two conditions still hold for every
+        // server there is — an operator's global switch and the caller's own
+        // capability do not vary by child. The last two do, so an answer that
+        // stopped there is reported as "depends", not as a refusal the caller
+        // could act on.
+        const dependsOnAServer =
+          managed === undefined && (decision.refusal === 'child-asleep' || decision.refusal === 'child-era');
+
+        return structured({
+          era,
+          revision: REVISION[era],
+          hubVersion: VERSION,
+          caller: { declaresElicitation: declared !== undefined },
+          elicitation: dependsOnAServer
+            ? { reason: 'you could be asked; whether a given server may ask depends on that server — name one to find out' }
+            : {
+                wouldForward: decision.forward,
+                ...(decision.refusal ? { reason: REFUSAL_REASON[decision.refusal] } : {}),
+                ...(managed ? { server: managed.name } : {})
+              }
+        });
+      }
+    );
+  }
 
   return hub;
 }

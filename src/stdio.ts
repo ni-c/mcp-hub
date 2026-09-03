@@ -8,6 +8,7 @@ import { Supervisor, UpstreamAuthRegistry } from './supervisor.js';
 import { AuthStore } from './auth/store.js';
 import { ToolCache } from './tool-cache.js';
 import { buildHubServer } from './hub.js';
+import type { Era } from './proxy.js';
 import { isMainModule } from './main-module.js';
 import { SubscriptionRegistry } from './subscriptions.js';
 import { IDLE_TIMEOUT_MS } from './timings.js';
@@ -152,7 +153,7 @@ export function createStdioHub(options: StdioHubOptions) {
   // A factory rather than an instance: the entry point below decides the era
   // from the opening exchange and pins one instance to the connection, and it
   // can only do that if it owns the construction.
-  return { build: () => buildHubServer(supervisor, requestStateSecret), supervisor, watcher };
+  return { build: (era: Era) => buildHubServer(supervisor, requestStateSecret, era), supervisor, watcher };
 }
 
 export async function runStdio(options: StdioHubOptions): Promise<void> {
@@ -185,8 +186,10 @@ export async function runStdio(options: StdioHubOptions): Promise<void> {
   // only decides whether the hub bothers to watch the children upstream.
   let registry: SubscriptionRegistry | undefined;
   const handle = serveStdio(
-    () => {
-      const hub = build();
+    ctx => {
+      // The era the opening exchange settled on. serveStdio hands it over for
+      // exactly this: an instance may differ by the era it will serve.
+      const hub = build(ctx.era);
       registry?.close();
       registry = new SubscriptionRegistry(
         {

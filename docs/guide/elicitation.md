@@ -88,6 +88,29 @@ the correct behaviour for a client that genuinely cannot be asked. Over stdio
 there is no such limit: `mcp-hub-stdio` is spawned per client session, so both
 eras reach a person.
 
+### Finding out why nothing was asked
+
+A child's fallback is deliberately quiet, and that is the problem: a server that
+took its two-call token instead of asking looks exactly like a server that had
+nothing to ask. Two ways to tell them apart.
+
+From the operator's side, the hub says it once per client, server and reason:
+
+```
+mcp-hub: [freshrss] elicitation not forwarded for client "…" — the caller
+declared no elicitation capability for this request, so a question would have
+nowhere to go
+```
+
+Once, not per call: a connector that cannot be asked calls all day and the
+answer never changes.
+
+From inside the client, switch
+[`MCP_DIAGNOSTICS`](/reference/environment#diagnostics) on and ask
+[`describe_connection`](/reference/hub-tools#describe-connection) — it reports
+the era, the capability this request carried, and for a named server whether a
+question would reach you.
+
 ## Switching it off
 
 Per server, in `mcp.json`:

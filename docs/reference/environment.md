@@ -92,6 +92,19 @@ question. Full behaviour: [Elicitation](/guide/elicitation).
 These five are read by the request path, so an unusable value logs and keeps
 the default.
 
+## Diagnostics
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `MCP_DIAGNOSTICS` | `false` | Adds [`describe_connection`](/reference/hub-tools#describe-connection) to `/hub`, a seventh meta-tool that reports how the caller is connected. Off because every tool a client can see costs context in every conversation it has, and most deployments never need to ask. Read per request. |
+
+The switch is about context cost, not safety. The tool reports only what the
+caller's own request already carried and says nothing about any other client —
+which is why it exists in place of a tool that hands out the hub's log. That log
+carries upstream URLs, internal hostnames and text written by the children;
+serving it through `/hub` would let any registered connector read what every
+other connector is doing.
+
 ## Subscriptions
 
 What a client may watch, and how much of it the hub will hold open. See

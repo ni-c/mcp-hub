@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- #region changelog -->
 
+## [Unreleased]
+
+### Added
+
+- **`describe_connection`, behind `MCP_DIAGNOSTICS`.** A seventh meta-tool that
+  answers the one question a client cannot answer for itself: which protocol
+  era this connection is on, whether this request carried an elicitation
+  capability, and — for a named server — whether a question from it would
+  actually reach the person at the far end.
+
+  It exists because a server falling back to its two-call token looks identical
+  to a server that simply did not ask. From inside the client both are silence,
+  and only the hub knows which one it was.
+
+  Off by default. Not for safety — it reports only what the caller's own request
+  already carried, and nothing about any other client — but because every tool a
+  client can see costs context in every conversation it has, and "six meta-tools
+  instead of N×tools" is the argument for the aggregate. With the switch on,
+  `/hub` and `--stdio` serve seven.
+
+- **One log line when a question is dropped.** When the hub declines to carry a
+  child's elicitation it now says so once per client, server and reason, instead
+  of leaving the only trace inside a tool result that one caller sees. The
+  decision itself moved into a single function that both the forwarding path and
+  the new tool call, so the explanation cannot drift from the behaviour.
+
 ## [0.11.0] - 2026-09-01
 
 ### Added

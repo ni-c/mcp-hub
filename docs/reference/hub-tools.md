@@ -3,7 +3,9 @@
 The `/hub` endpoint exposes exactly six tools, regardless of how many servers
 are configured. Four of them are how a client reaches everything else; the
 remaining two (`wake_server`, `sleep_server`) steer the
-[on-demand lifecycle](/guide/on-demand).
+[on-demand lifecycle](/guide/on-demand). A seventh,
+[`describe_connection`](#describe-connection), appears only where an operator
+switched diagnostics on.
 
 Servers marked [`"hub": false`](/guide/configuration#hiding-a-server-from-hub)
 keep their *tools* out of the aggregate: `list_tools`, `get_tool_schema` and
@@ -221,6 +223,53 @@ still planning instead of inside the first real call. An always-running server
 Frees the server's resources right away — the stdio child exits, a sandbox
 container is removed. Returns `{ name, status }`; already-sleeping servers are
 a no-op. Always-running servers are refused.
+
+## `describe_connection`
+
+Present only when [`MCP_DIAGNOSTICS`](/reference/environment#diagnostics) is
+`true`, which is why the endpoint is described above as exactly six tools. With
+the switch on it is seven.
+
+> Report how you are connected to this hub right now: the protocol era, and
+> whether a server could ask you a question mid-call.
+
+| Input | Type | Description |
+|---|---|---|
+| `server` | string, optional | server name from `list_servers`; omit to ask about the connection alone |
+
+```json
+{
+  "era": "legacy",
+  "revision": "2025-11-25",
+  "hubVersion": "0.11.0",
+  "caller": { "declaresElicitation": false },
+  "elicitation": {
+    "wouldForward": false,
+    "reason": "the caller declared no elicitation capability for this request, so a question would have nowhere to go"
+  }
+}
+```
+
+It exists because of one silence that has two causes. When a server that would
+normally ask for confirmation falls back to its two-call token instead, the
+client cannot tell whether nobody asked or whether *it* cannot be asked — and
+the answer decides whether anything is wrong at all. Ask this tool and the hub
+says which.
+
+Named without a `server`, the answer covers what does not vary by child: the
+era, whether this request carried an elicitation capability, and the operator's
+global switch. Whether a *particular* server may ask also depends on that
+server's own switch and era, so `wouldForward` is then absent and the reason
+says so rather than guessing. Name a server and all four conditions are
+answered — the same decision `call_tool` makes, from the same function, so the
+explanation cannot drift from the behaviour.
+
+A named server is never woken to answer: a sleeping child has negotiated no era,
+and the answer says that instead of starting it. This tool reports, it does not
+act.
+
+When the hub does drop a question, it also says so once in its own log — per
+client, server and reason. See [Elicitation](/guide/elicitation).
 
 ## Caching
 

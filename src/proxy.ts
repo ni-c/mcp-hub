@@ -28,6 +28,16 @@ import {
  */
 export type Era = 'modern' | 'legacy';
 
+/**
+ * The revision each era puts on the wire.
+ *
+ * Only ever read to *tell* somebody which one they are on; nothing branches on
+ * the string. `Era` stays the type everything else is written against, because
+ * a revision date is a fact about the wire and an era is a fact about
+ * behaviour, and the code cares about the second one.
+ */
+export const REVISION: Record<Era, string> = { modern: '2026-07-28', legacy: '2025-11-25' };
+
 /** What `Client.request` accepts as its second argument. Named so the two
  *  forwarding helpers below can be generic over it without repeating the
  *  `Parameters<...>` incantation twice. */

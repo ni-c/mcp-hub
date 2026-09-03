@@ -51,7 +51,7 @@ async function connect(hub: ReturnType<typeof startHub>): Promise<Client> {
   // build() rather than a ready-made instance: runStdio hands the factory to
   // serveStdio, which pins one instance per connection once the opening
   // exchange has settled the era. Calling it here is what that entry point does.
-  await hub.build().connect(serverTransport);
+  await hub.build('modern').connect(serverTransport);
   const client = new Client({ name: 'vitest', version: '1.0.0' });
   await client.connect(clientTransport);
   return client;
@@ -67,7 +67,7 @@ async function connect(hub: ReturnType<typeof startHub>): Promise<Client> {
  */
 async function connectVia(hub: ReturnType<typeof startHub>, options: ClientOptions = {}): Promise<{ client: Client; close: () => Promise<void> }> {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const handle = serveStdio(() => hub.build(), { transport: serverTransport });
+  const handle = serveStdio(ctx => hub.build(ctx.era), { transport: serverTransport });
   const client = new Client({ name: 'vitest', version: '1.0.0' }, options);
   await client.connect(clientTransport);
   return {
