@@ -7,6 +7,7 @@
 [![license](https://img.shields.io/npm/l/%40ni-c%2Fmcp-hub)](LICENSE)
 [![container](https://img.shields.io/badge/ghcr.io-ni--c%2Fmcp--hub-blue)](https://github.com/ni-c/mcp-hub/pkgs/container/mcp-hub)
 [![docs](https://img.shields.io/badge/docs-mcp--hub.ni--c.de-informational)](https://mcp-hub.ni-c.de)
+[![Glama](https://glama.ai/mcp/servers/ni-c/mcp-hub/badges/score.svg)](https://glama.ai/mcp/servers/ni-c/mcp-hub)
 [![sponsor](https://img.shields.io/badge/sponsor-ni--c-ea4aaa?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/ni-c)
 
 A dual-era [Model Context Protocol](https://modelcontextprotocol.io) (MCP) gateway: it
