@@ -120,7 +120,7 @@ replaces N containers with one process:
 ## Servers to run behind it
 
 The hub is server-agnostic — it serves any stdio MCP server whose entry fits
-Claude Code's `mcpServers` format, which is most of them. These seventeen are
+Claude Code's `mcpServers` format, which is most of them. These eighteen are
 built and maintained alongside it, so their documentation carries the hub entry
 you need and their tool filters line up with the hub's own `allowTools` /
 `denyTools`:
@@ -128,6 +128,7 @@ you need and their tool filters line up with the hub's own `allowTools` /
 | Server                                                                 | npm                               | What it reaches                                                                |
 | ---------------------------------------------------------------------- | --------------------------------- | ------------------------------------------------------------------------------ |
 | [audiobookshelf-mcp](https://audiobookshelf-mcp.ni-c.de)               | `audiobookshelf-mcp`              | Audiobookshelf — libraries, listening progress, collections and playlists      |
+| [caldav-mcp](https://caldav-mcp.ni-c.de)                               | `@ni-c/caldav-mcp`                | CalDAV — events, tasks and journal entries on any server that speaks it        |
 | [calibreweb-mcp](https://calibreweb-mcp.ni-c.de)                       | `calibreweb-mcp`                  | Calibre-Web — read-only library access through the OPDS feed                   |
 | [freshrss-mcp](https://freshrss-mcp.ni-c.de)                           | `@ni-c/freshrss-mcp`              | FreshRSS — feeds, categories and articles as plain text, not stream ids        |
 | [google-search-console-mcp](https://google-search-console-mcp.ni-c.de) | `@ni-c/google-search-console-mcp` | Google Search Console — properties, sitemaps, search analytics, URL inspection |
@@ -147,7 +148,7 @@ you need and their tool filters line up with the hub's own `allowTools` /
 
 Each one runs perfectly well on its own over stdio. Put them behind the hub when
 you want them reachable from a client that cannot spawn a local process, or when
-you would rather register one connector than seventeen.
+you would rather register one connector than eighteen.
 
 ## Configuration
 
