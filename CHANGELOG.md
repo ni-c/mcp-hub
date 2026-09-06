@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- #region changelog -->
 
+## [0.11.1] - 2026-09-06
+
+### Security
+
+- **The published image shipped a vulnerable `libssh2`, and no amount of
+  rescanning was going to change that.** `libssh2-1 1.10.0-3+b1` — pulled in as
+  a dependency of `git`, which the image installs so servers can be fetched
+  straight from a repository — is affected by CVE-2026-7598 and CVE-2026-58050,
+  both HIGH, both fixed in `bookworm-security` as `1.10.0-3+deb12u1` before the
+  scanner ever reported them. The fix could not reach the image because the apt
+  layer was never rebuilt: the base digest is pinned and the apt command is a
+  constant, so the layer cache answered every build with the packages installed
+  the day it was first built. The image scanned green one afternoon and red
+  three hours later from the same cached layer, and a workflow rerun reproduced
+  the finding exactly.
+
+  Both Dockerfiles now take an `APT_SECURITY_EPOCH` build argument that is
+  interpolated into the apt command itself, and CI passes the current UTC date.
+  The layer therefore expires once a day rather than never, while builds within
+  a day stay cached. The argument has to appear *in* the command — BuildKit keys
+  a `RUN` on its expanded command line, and an ARG that is merely declared
+  invalidates nothing. In the hub image the npm replacement step moved above
+  that boundary: it is the expensive one, it rots with its pins rather than with
+  time, and it needs neither apt nor the system CA store.
+
+  This is the second time the same cache has held back a Debian security fix
+  (CVE-2026-56408 in `libexpat1` was the first), which is why the remedy is a
+  mechanism rather than another rebuild.
+
+### Changed
+
+- The npm tarball no longer carries the `.js.map` source maps — 61 files and
+  360 kB unpacked, against 540 kB of actual code. `sourceMap` stays on and the
+  maps are still built: the integration tests and CI run `dist/index.js` out of
+  a checkout, where `src/` sits right next to it and a stack trace resolves
+  through them. In an installed package it cannot — the sources those maps point
+  at are not part of it.
+
 ## [0.11.0] - 2026-09-03
 
 ### Added
