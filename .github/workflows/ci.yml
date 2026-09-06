@@ -3,8 +3,13 @@ name: CI
 on:
   push:
     branches: [main]
-    tags: ['v*']
+    tags: ["v*"]
   pull_request:
+  schedule:
+    # So a dependency advisory published after the last push still reaches
+    # someone. Without it `audit` only ever runs on a change, which is the one
+    # moment a new CVE is least likely to have appeared.
+    - cron: "0 6 * * 1"
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -45,7 +50,20 @@ jobs:
         with:
           name: coverage
           path: coverage/
-      - run: npm audit --omit=dev --audit-level=high
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+      # `--ignore-scripts`: an audit has no business running install hooks.
+      - run: npm ci --ignore-scripts
+      # The whole tree, not `--omit=dev`. This package is published with
+      # provenance, so what builds it is part of what ships.
+      - run: npm audit --audit-level=high
 
   codeql:
     runs-on: ubuntu-latest
@@ -71,7 +89,7 @@ jobs:
           scan-type: fs
           scan-ref: .
           scanners: secret
-          exit-code: '1'
+          exit-code: "1"
 
   container-scan:
     needs: test
@@ -165,7 +183,7 @@ jobs:
           image-ref: mcp-hub:audit-${{ matrix.tag }}
           severity: HIGH,CRITICAL
           ignore-unfixed: true
-          exit-code: '1'
+          exit-code: "1"
           skip-setup-trivy: true
       # The docker proxy is built and scanned in this same job rather than as
       # another matrix dimension: the matrix decides the job names, and those
@@ -207,7 +225,7 @@ jobs:
           image-ref: mcp-hub-docker-proxy:audit-${{ matrix.tag }}
           severity: HIGH,CRITICAL
           ignore-unfixed: true
-          exit-code: '1'
+          exit-code: "1"
           skip-setup-trivy: true
 
   # A release gate, not a pull-request one. `if:` restricts it to tag pushes, so
