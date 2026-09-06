@@ -184,6 +184,10 @@ describe('the attribution prefix cannot be forged', () => {
         fc.string({ maxLength: 8000, unit: 'grapheme' }),
         fc.string({ maxLength: 60 }),
         (message, serverName) => {
+          // Only where the sender wrote none: the guarantee is that the *cut*
+          // introduces no replacement glyph, not that a message may never
+          // contain one. A U+FFFD somebody actually sent survives, correctly.
+          fc.pre(!message.includes('\ufffd') && !serverName.includes('\ufffd'));
           const { requests } = sanitiseInputRequests(
             { ask: { method: 'elicitation/create', params: { message } } } as never,
             serverName
