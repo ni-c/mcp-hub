@@ -23,20 +23,40 @@ RUN npm run build && npm prune --omit=dev --ignore-scripts
 # git for servers installed straight from a repository.
 FROM node:24-bookworm-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e
 COPY --from=ghcr.io/astral-sh/uv:0.12.3@sha256:2d890623d310b57771ce840f0da5eed5fc6d657da05ffaa45d82797b53fa3abc /uv /uvx /usr/local/bin/
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends git python3 python3-pip ca-certificates tini \
-    && rm -rf /var/lib/apt/lists/*
 # The base image bundles npm 11, whose vendored deps (tar, brace-expansion,
 # sigstore, ...) carry known HIGH/CRITICAL CVEs; replace it wholesale. Even
 # current npm still pins three vendored packages to vulnerable releases, so
 # overwrite those in place with the fixed same-major versions (identical
 # dependency footprint, verified against the registry).
+# This sits *before* the apt layer on purpose: it is the expensive one (three
+# packages fetched and unpacked, under QEMU on arm64), it does not rot with
+# time — only with the pins written here — and everything below the cache
+# buster is rebuilt daily. Nothing here needs apt: `tar` is essential in the
+# base image, and npm reaches the registry over Node's built-in CA store, not
+# the system one (which the base image purges).
 RUN npm install -g npm@12.0.2 \
     && npm pack brace-expansion@5.0.9 ip-address@10.3.1 tar@7.5.22 --pack-destination /tmp > /dev/null \
     && tar -xzf /tmp/brace-expansion-5.0.9.tgz --strip-components=1 -C /usr/local/lib/node_modules/npm/node_modules/brace-expansion \
     && tar -xzf /tmp/ip-address-10.3.1.tgz --strip-components=1 -C /usr/local/lib/node_modules/npm/node_modules/ip-address \
     && tar -xzf /tmp/tar-7.5.22.tgz --strip-components=1 -C /usr/local/lib/node_modules/npm/node_modules/tar \
     && rm -f /tmp/brace-expansion-5.0.9.tgz /tmp/ip-address-10.3.1.tgz /tmp/tar-7.5.22.tgz
+
+# A Debian security update reaches this image only if this layer is actually
+# rebuilt, and on its own it never is: the base digest is pinned and the apt
+# command is a constant, so the buildx cache hands back whatever was installed
+# the day the layer was first built. That is not theory — libexpat1
+# (CVE-2026-56408) and libssh2 (CVE-2026-7598, CVE-2026-58050) were both fixed
+# in bookworm-security and both shipped in published images anyway, because a
+# cached layer cannot be re-scanned into correctness and a workflow rerun does
+# not touch it.
+# So CI passes today's date here (see ci.yml) and the layer expires once a day.
+# The value MUST appear in the command: BuildKit keys a RUN on its expanded
+# command line, and a declared-but-unused ARG invalidates nothing.
+ARG APT_SECURITY_EPOCH=0
+RUN echo "apt index epoch: $APT_SECURITY_EPOCH" \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends git python3 python3-pip ca-certificates tini \
+    && rm -rf /var/lib/apt/lists/*
 
 # Ownership proof for the MCP Registry: must match server.json's name.
 LABEL io.modelcontextprotocol.server.name="io.github.ni-c/mcp-hub"

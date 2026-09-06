@@ -100,12 +100,22 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      # The apt layers of both Dockerfiles are keyed on this date, so they expire
+      # once a day instead of never. Without it the pinned base digest and the
+      # constant apt command make the layer permanently cacheable, and a Debian
+      # security fix can never enter an image — the state this job reported for
+      # libexpat1 and again for libssh2, each time a real CVE in a published
+      # image rather than a scanner artifact. One step for the whole job so the
+      # image that is scanned and the image that is published agree.
+      - id: epoch
+        run: echo "day=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           load: true
           platforms: ${{ matrix.platform }}
           tags: mcp-hub:audit-${{ matrix.tag }}
+          build-args: APT_SECURITY_EPOCH=${{ steps.epoch.outputs.day }}
           cache-from: type=gha,scope=scan-${{ matrix.tag }}
           cache-to: type=gha,mode=max,scope=scan-${{ matrix.tag }}
       # Report first, gate second. The report step never fails, so the SARIF is
@@ -168,6 +178,7 @@ jobs:
           load: true
           platforms: ${{ matrix.platform }}
           tags: mcp-hub-docker-proxy:audit-${{ matrix.tag }}
+          build-args: APT_SECURITY_EPOCH=${{ steps.epoch.outputs.day }}
           cache-from: type=gha,scope=scan-proxy-${{ matrix.tag }}
           cache-to: type=gha,mode=max,scope=scan-proxy-${{ matrix.tag }}
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
@@ -251,6 +262,11 @@ jobs:
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main
       - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      # Same daily apt expiry as container-scan, and it has to be repeated here:
+      # this job builds from its own cache scope, so a fresh scan says nothing
+      # about what is pushed unless both are given the same date.
+      - id: epoch
+        run: echo "day=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
@@ -272,6 +288,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: APT_SECURITY_EPOCH=${{ steps.epoch.outputs.day }}
           sbom: true
           provenance: mode=max
           cache-from: type=gha
@@ -296,6 +313,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta-proxy.outputs.tags }}
           labels: ${{ steps.meta-proxy.outputs.labels }}
+          build-args: APT_SECURITY_EPOCH=${{ steps.epoch.outputs.day }}
           sbom: true
           provenance: mode=max
           cache-from: type=gha
