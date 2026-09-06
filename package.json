@@ -78,6 +78,7 @@
     "@types/oidc-provider": "^9.11.1",
     "@types/supertest": "^7.2.1",
     "@vitest/coverage-v8": "5.0.0",
+    "fast-check": "^4.9.0",
     "oxlint": "^1.80.0",
     "supertest": "^7.0.0",
     "svg-asset-set": "https://github.com/ni-c/svg-asset-set/releases/download/v0.1.0/svg-asset-set-0.1.0.tgz",
