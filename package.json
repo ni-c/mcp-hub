@@ -77,13 +77,13 @@
     "@types/node": "^26.2.0",
     "@types/oidc-provider": "^9.11.1",
     "@types/supertest": "^7.2.1",
-    "@vitest/coverage-v8": "4.1.11",
+    "@vitest/coverage-v8": "5.0.0",
     "oxlint": "^1.80.0",
     "supertest": "^7.0.0",
     "svg-asset-set": "https://github.com/ni-c/svg-asset-set/releases/download/v0.1.0/svg-asset-set-0.1.0.tgz",
     "tsx": "^4.19.0",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.10"
+    "vitest": "^5.0.0"
   },
   "mcpName": "io.github.ni-c/mcp-hub"
 }
