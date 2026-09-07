@@ -12,6 +12,13 @@ import { createOidcInteractionRoutes } from '../src/auth/oidc/interactions.js';
 import { operatorCredential } from '../src/auth/password.js';
 import { parseEnvFile } from '../src/docker-proxy/secrets.js';
 import { sanitiseInputRequests } from '../src/elicitation.js';
+import { buildHubServer } from '../src/hub.js';
+import { MAX_CHILD_DESCRIPTION_CHARS, MAX_CHILD_ERROR_CHARS } from '../src/child-text.js';
+import { logSafe } from '../src/auth/text.js';
+import { parseSocketMode } from '../src/docker-proxy/server.js';
+import { SubscriptionRegistry } from '../src/subscriptions.js';
+import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
+import type { CallToolResult } from '@modelcontextprotocol/server';
 import { authorizeInBrowser, registerPublicClient } from './auth-flow.js';
 
 const REDIRECT_URI = 'https://client.example/cb';
@@ -433,5 +440,154 @@ describe('PKCE is required of every client', () => {
       .redirects(0);
     expect(withChallenge.status).toBe(303);
     expect(withChallenge.headers.location).toMatch(/\/interaction\//);
+  });
+});
+
+const text = (result: unknown) => ((result as CallToolResult).content[0] as { text: string }).text;
+
+async function connected(supervisor: Parameters<typeof buildHubServer>[0]) {
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await buildHubServer(supervisor, 'secret', 'legacy').connect(serverTransport);
+  const client = new Client({ name: 'review', version: '0.0.0' });
+  await client.connect(clientTransport);
+  // Listed first, so the SDK validates every structuredContent below against
+  // the declared output schema — the client-side check a plain call skips.
+  await client.listTools();
+  return client;
+}
+
+
+describe("a child's words in the hub's own answers", () => {
+  // Built at runtime: an editor or a diff tool would otherwise swallow them.
+  const ESC = String.fromCharCode(27);
+  const NUL = String.fromCharCode(0);
+  const RLO = String.fromCodePoint(0x202e);
+  const ZWSP = String.fromCodePoint(0x200b);
+  const EVIL = `Ti${ESC}[2Ktle${RLO}reversed${ZWSP} hidden${NUL}`;
+  const LONG = 'x'.repeat(20_000);
+  const unsafe = new RegExp(`[${NUL}-${String.fromCharCode(8)}${String.fromCharCode(14)}-${String.fromCharCode(31)}${ZWSP}${RLO}]`);
+
+  function fakeSupervisor(overrides: Record<string, unknown> = {}) {
+    const managed = {
+      name: 'child',
+      config: { hub: true },
+      state: 'up',
+      onDemand: false,
+      hasSnapshot: true,
+      serverInfo: { name: 'child-server', version: '1.0.0', title: EVIL },
+      tools: [
+        { name: 'do_it', description: `${EVIL}\nsecond line`, inputSchema: { type: 'object' } },
+        { name: 'long', description: LONG, inputSchema: { type: 'object' } }
+      ],
+      client: {
+        getProtocolEra: () => 'legacy',
+        request: async () => {
+          throw new Error(`boom ${EVIL} ${LONG}`);
+        }
+      },
+      markUsed: () => {},
+      wake: async () => {},
+      ...overrides
+    };
+    const servers = new Map([[managed.name, managed]]);
+    return { servers, get: (name: string) => servers.get(name) } as unknown as Parameters<typeof buildHubServer>[0];
+  }
+
+  it('cleans and bounds the title in list_servers', async () => {
+    const client = await connected(fakeSupervisor());
+    const result = (await client.callTool({ name: 'list_servers', arguments: {} })) as CallToolResult;
+    const servers = (result.structuredContent as { servers: { description: string }[] }).servers;
+    expect(servers[0].description).toBe('Ti[2Ktlereversed hidden');
+    expect(text(result)).not.toMatch(unsafe);
+  });
+
+  it('cleans the first line in list_tools and bounds the full text in get_tool_schema', async () => {
+    const client = await connected(fakeSupervisor());
+    const listed = (await client.callTool({ name: 'list_tools', arguments: { server: 'child' } })) as CallToolResult;
+    const tools = (listed.structuredContent as { tools: { name: string; description: string }[] }).tools;
+    expect(tools[0].description).toBe('Ti[2Ktlereversed hidden');
+    expect(tools[1].description.length).toBeLessThanOrEqual(120);
+    const schema = (await client.callTool({ name: 'get_tool_schema', arguments: { server: 'child', tool: 'long' } })) as CallToolResult;
+    const description = (schema.structuredContent as { description: string }).description;
+    expect(description.length).toBeLessThanOrEqual(MAX_CHILD_DESCRIPTION_CHARS);
+    expect(description.endsWith('…')).toBe(true);
+    expect(text(schema)).not.toMatch(unsafe);
+  });
+
+  it("bounds and cleans a child's error inside the hub's sentence", async () => {
+    const client = await connected(fakeSupervisor());
+    const result = (await client.callTool({ name: 'call_tool', arguments: { server: 'child', tool: 'do_it', arguments: {} } })) as CallToolResult;
+    expect(result.isError).toBe(true);
+    expect(text(result)).toMatch(/^Tool call failed: boom Ti\[2Ktlereversed hidden x+…$/);
+    expect(text(result).length).toBeLessThan(MAX_CHILD_ERROR_CHARS + 40);
+    expect(text(result)).not.toMatch(unsafe);
+  });
+
+  it('says so when a wake fails, in the same bounded form', async () => {
+    const client = await connected(
+      fakeSupervisor({
+        onDemand: true,
+        state: 'sleeping',
+        client: undefined,
+        wake: async () => {
+          throw new Error(`no${NUL}start ${LONG}`);
+        }
+      })
+    );
+    const result = (await client.callTool({ name: 'wake_server', arguments: { server: 'child' } })) as CallToolResult;
+    expect(result.isError).toBe(true);
+    expect(text(result)).toMatch(/^Server "child" failed to start: nostart x+…$/);
+    expect(text(result)).not.toMatch(unsafe);
+  });
+
+  it('never carries a control character into a tool result, whatever the child says', async () => {
+    await fc.assert(
+      fc.asyncProperty(fc.string({ maxLength: 300 }), async title => {
+        const client = await connected(fakeSupervisor({ serverInfo: { name: 'n', version: '1', title } }));
+        const result = (await client.callTool({ name: 'list_servers', arguments: {} })) as CallToolResult;
+        expect(text(result)).not.toMatch(unsafe);
+        expect(JSON.parse(text(result))).toEqual(result.structuredContent);
+        await client.close();
+      }),
+      { numRuns: 40 }
+    );
+  });
+
+  it('escapes the identity a child declares before it reaches the log', () => {
+    const name = `evil${ESC}[2Kmcp-hub: everything fine\n2026-01-01 mcp-hub: login ok`;
+    const line = `[child] up (${logSafe(name, 100)} ${logSafe(`v${NUL}`, 40)})`;
+    expect(line).not.toMatch(unsafe);
+    expect(line).not.toContain('\n');
+    expect(line).toContain('\\x1b');
+    expect(line).toContain('\\x0a');
+    expect(line).toContain('\\x00');
+  });
+});
+
+describe('operator inputs that used to reach the process raw', () => {
+  it.each(['0660', '660', '0777', '0600'])('accepts SOCKET_MODE %s', value => {
+    expect(parseSocketMode(value)).toBe(Number.parseInt(value, 8));
+  });
+  it.each(['abc', '', '0778', '0660x', '06600', 'eyJhbGciOiJIUzI1NiJ9'])('refuses SOCKET_MODE %j without echoing it', value => {
+    let message = '';
+    try {
+      parseSocketMode(value);
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toMatch(/three or four octal digits/);
+    if (value.length > 2) expect(message).not.toContain(value);
+  });
+
+  it('flushes the debounce window early when a child announces too many distinct resources', () => {
+    const delivered: string[] = [];
+    const registry = new SubscriptionRegistry(
+      { toolsChanged: () => delivered.push('tools'), promptsChanged: () => {}, resourcesChanged: () => {}, resourceUpdated: uri => delivered.push(uri) },
+      { debounceMs: 60_000 }
+    );
+    for (let i = 0; i < 3000; i += 1) registry.publish({ kind: 'resource_updated', uri: `res://${i}` });
+    expect(delivered.length).toBeGreaterThanOrEqual(2048);
+    expect(registry['pending'].size).toBeLessThanOrEqual(1024);
+    registry.close();
   });
 });

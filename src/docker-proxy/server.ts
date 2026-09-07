@@ -11,6 +11,20 @@ const UPSTREAM_TIMEOUT_MS = 15 * 60_000;
 const POLICY_CHECK_TIMEOUT_MS = 5_000;
 const MAX_INSPECT_BYTES = 1024 * 1024;
 
+/**
+ * The mode of the listening socket, from SOCKET_MODE.
+ *
+ * `parseInt(value, 8)` read `abc` as NaN and `0777x` as 0777, and the NaN
+ * reached chmodSync inside the listen callback — an uncaught exception at
+ * startup with a stack trace where a sentence should be. Three or four octal
+ * digits, nothing else; the value is never echoed, it is one line below the
+ * secrets directory in every compose file.
+ */
+export function parseSocketMode(value: string): number {
+  if (!/^[0-7]{3,4}$/.test(value)) throw new Error(`SOCKET_MODE must be three or four octal digits such as 0660 (${value.length} characters given)`);
+  return Number.parseInt(value, 8);
+}
+
 export interface ProxyOptions {
   /** Where the real daemon listens. */
   dockerSocket: string;

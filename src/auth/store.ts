@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/server';
+import { logSafe } from './text.js';
 
 export interface RefreshTokenRecord {
   clientId: string;
@@ -789,7 +790,7 @@ export class AuthStore {
       });
     } catch (error) {
       // Bookkeeping must never be the reason an authorization fails.
-      console.warn(`mcp-hub: could not record activity for client ${clientId}: ${(error as Error).message}`);
+      console.warn(`mcp-hub: could not record activity for client ${logSafe(clientId)}: ${(error as Error).message}`);
     }
   }
 

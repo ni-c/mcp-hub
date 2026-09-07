@@ -411,15 +411,25 @@ function cimdAllowedOriginsEnv(): string[] {
     try {
       url = new URL(entry);
     } catch {
-      console.error(`mcp-hub: CIMD_ALLOWED_ORIGINS entry "${entry}" is not a URL`);
+      console.error(`mcp-hub: CIMD_ALLOWED_ORIGINS entry ${describeEntry(entry)} is not a URL`);
       process.exit(1);
     }
     if (url.protocol !== 'https:' || url.origin !== entry.replace(/\/$/, '')) {
-      console.error(`mcp-hub: CIMD_ALLOWED_ORIGINS entry "${entry}" must be a bare https origin, e.g. https://chatgpt.com`);
+      console.error(`mcp-hub: CIMD_ALLOWED_ORIGINS entry ${describeEntry(entry)} must be a bare https origin, e.g. https://chatgpt.com`);
       process.exit(1);
     }
   }
   return entries.map(entry => new URL(entry).origin);
+}
+
+/**
+ * A configuration value in a diagnostic, quoted only when it has the shape of
+ * one. CIMD_ALLOWED_ORIGINS sits a few lines from PASSWORD_HASH in every
+ * compose file, and a value that is not an origin is exactly what a secret
+ * pasted into the wrong line looks like.
+ */
+function describeEntry(entry: string): string {
+  return /^https?:\/\/[^\s]{1,120}$/i.test(entry) ? `"${entry}"` : `(a ${entry.length}-character value that does not look like an origin)`;
 }
 
 function nonNegativeIntegerEnv(name: string, fallback: number): number {

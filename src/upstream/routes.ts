@@ -4,6 +4,7 @@ import type { AuthStore } from '../auth/store.js';
 import { readSignedPayload } from '../auth/signed-token.js';
 import { renderPage, escapeHtml } from '../auth/page.js';
 import { logSafe } from '../auth/text.js';
+import { earlyRateLimit } from '../auth/rate-limit.js';
 import type { ConfigWatcher } from '../config.js';
 import type { Supervisor, UpstreamAuthRegistry } from '../supervisor.js';
 import { readSessionCookie } from '../auth/session.js';
@@ -61,7 +62,10 @@ export function createUpstreamRoutes(options: UpstreamRoutesOptions): Router {
    * hot-reloadable, so a server can become `cimd` long after boot, and an
    * Express route cannot be added later.
    */
-  router.get(`/${UPSTREAM_CLIENT_METADATA_PREFIX}/:id.json`, async (req, res) => {
+  // Unauthenticated, and each hit derives one HMAC per configured upstream and
+  // may export a public key: cheap, but not free, and nothing legitimate asks
+  // for it more than once per login.
+  router.get(`/${UPSTREAM_CLIENT_METADATA_PREFIX}/:id.json`, earlyRateLimit(15 * 60_000, 60, 600), async (req, res) => {
     const wanted = String(req.params.id);
     for (const [name, server] of watcher.current) {
       if (server.kind !== 'remote' || server.oauth?.mode !== 'cimd') continue;
@@ -106,7 +110,9 @@ export function createUpstreamRoutes(options: UpstreamRoutesOptions): Router {
     }
     if (typeof query.error === 'string') {
       console.warn(`mcp-hub: upstream login for ${logSafe(login.serverName)} was declined: ${logSafe(query.error)}`);
-      page(res, 400, 'Authorization declined', `The upstream reported "${query.error}". Nothing was changed.`);
+      // An OAuth error code is a short token; anything else is a page written
+      // by whoever answered as the upstream, and it does not get to write ours.
+      page(res, 400, 'Authorization declined', `The upstream reported "${logSafe(query.error, 80)}". Nothing was changed.`);
       return;
     }
     const code = typeof query.code === 'string' ? query.code : '';

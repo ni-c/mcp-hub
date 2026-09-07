@@ -27,6 +27,7 @@ import type { ToolCacheEntry } from './tool-cache.js';
 import { filterTools, hasToolFilter, unmatchedPatterns } from './tool-filter.js';
 import type { RouteChannel, SubscriptionRegistry } from './subscriptions.js';
 import { subscriptionsAllowed } from './subscriptions.js';
+import { logSafe } from './auth/text.js';
 
 export type ServerState = 'starting' | 'up' | 'down' | 'stopped' | 'sleeping' | 'unauthorized';
 
@@ -445,7 +446,9 @@ export class ManagedServer {
     // The start itself opens a full idle window, so a pre-warmed server is not
     // swept away just before the tool call it was warmed for.
     this.lastUsedAt = this.startedAt;
-    console.log(`[${this.name}] up (${this.serverInfo?.name ?? 'unknown'} ${this.serverInfo?.version ?? ''})`.trim());
+    // The child's declared identity, on its way into a file LOG_FILE mirrors
+    // and fail2ban reads: escaped and bounded like any other stranger's text.
+    console.log(`[${this.name}] up (${logSafe(this.serverInfo?.name ?? 'unknown', 100)} ${logSafe(this.serverInfo?.version ?? '', 40)})`.trim());
     this.resolveWakeWaiters();
     if (this.capabilities?.tools) {
       client.setNotificationHandler('notifications/tools/list_changed', () => {
@@ -521,7 +524,7 @@ export class ManagedServer {
     }
     this.reconciling = true;
     void this.runReconcile()
-      .catch(error => console.error(`[${this.name}] could not update subscriptions: ${(error as Error).message}`))
+      .catch(error => console.error(`[${this.name}] could not update subscriptions: ${logSafe((error as Error).message, 500)}`))
       .finally(() => {
         this.reconciling = false;
         if (!this.reconcileQueued) return;
@@ -635,7 +638,7 @@ export class ManagedServer {
       this.reportToolFilter(upstream);
       this.options.persist?.(this);
     } catch (error) {
-      console.error(`[${this.name}] failed to list tools: ${(error as Error).message}`);
+      console.error(`[${this.name}] failed to list tools: ${logSafe((error as Error).message, 500)}`);
     }
   }
 
@@ -669,7 +672,7 @@ export class ManagedServer {
     try {
       await client.ping({ timeout: PING_TIMEOUT_MS });
     } catch (error) {
-      console.error(`[${this.name}] ping failed, restarting: ${(error as Error).message}`);
+      console.error(`[${this.name}] ping failed, restarting: ${logSafe((error as Error).message, 500)}`);
       // close() triggers transport.onclose -> onExit -> restart with backoff.
       // Already-closed transports reject here; onExit has then run regardless.
       await client.close().catch(() => {});
@@ -698,7 +701,7 @@ export class ManagedServer {
       this.state = 'unauthorized';
       this.lastError = reason;
       this.rejectWakeWaiters(new Error(`Server "${this.name}" needs an upstream login`));
-      console.error(`[${this.name}] unauthorized (${reason}); run: mcp-hub-admin upstream login ${this.name}`);
+      console.error(`[${this.name}] unauthorized (${logSafe(reason, 500)}); run: mcp-hub-admin upstream login ${this.name}`);
       return;
     }
     this.state = 'down';
@@ -710,12 +713,12 @@ export class ManagedServer {
     if (this.onDemand && this.restartsSinceUse > (this.options.maxUnusedRestarts ?? MAX_UNUSED_RESTARTS)) {
       // A crash-looping server nobody asks for would occupy the machine
       // forever. Give up until the next wake, which starts fresh.
-      console.error(`[${this.name}] down (${reason}), giving up until next use after ${this.restartsSinceUse - 1} failed restarts`);
+      console.error(`[${this.name}] down (${logSafe(reason, 500)}), giving up until next use after ${this.restartsSinceUse - 1} failed restarts`);
       this.state = 'sleeping';
       this.rejectWakeWaiters(new Error(`Server "${this.name}" failed to start: ${reason}`));
       return;
     }
-    console.error(`[${this.name}] down (${reason}), restarting in ${Math.round(this.backoffMs / 1000)}s`);
+    console.error(`[${this.name}] down (${logSafe(reason, 500)}), restarting in ${Math.round(this.backoffMs / 1000)}s`);
     this.restartTimer = setTimeout(() => {
       this.restarts++;
       void this.start();
@@ -996,7 +999,7 @@ export class Supervisor {
         const managed = this.servers.get(container.server);
         if (!managed || managed.state !== 'sleeping') continue;
       }
-      console.log(`mcp-hub: removing orphaned sandbox container ${container.name}`);
+      console.log(`mcp-hub: removing orphaned sandbox container ${logSafe(container.name)}`);
       await dockerClient().removeContainer(container.name);
     }
   }
