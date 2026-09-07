@@ -117,7 +117,7 @@ replaces N containers with one process:
   re-read on waking; `subscriptions: "off"` withdraws one server's right to
   push; [details](https://mcp-hub.ni-c.de/guide/subscriptions).
 - **Lightweight by design**: one Node process, no database (state is one JSON
-  file plus a signing key under `/data`), six runtime dependencies, and
+  file plus a signing key under `/data`), ten runtime dependencies, and
   multi-arch images — a stated project goal is to run comfortably on a
   single-board computer like a Raspberry Pi.
 
@@ -204,7 +204,8 @@ working. `allowTools` / `denyTools` cut finer and apply to every kind of
 server: a filtered tool is absent from both `tools/list` and `/hub`, and is
 refused if called anyway — before the server is woken.
 Reserved names: `mcp`, `hub`, `authorize`, `token`, `register`,
-`login`, `consent`, `health`, `livez`, `revoke`, `upstream`, `.well-known`.
+`login`, `consent`, `health`, `livez`, `revoke`, `jwks`, `interaction`,
+`session`, `userinfo`, `upstream`, `.well-known`.
 
 All stdio children share the hub's Unix user and can read its mounted files.
 Only install fully trusted stdio servers. A server with a different trust level
@@ -236,6 +237,13 @@ USER node
 ```
 
 ### Environment
+
+Without a non-empty `PASSWORD` or a bcrypt `PASSWORD_HASH` the HTTP hub still
+starts, but its login is disabled: the startup log says so, the sign-in page
+answers `503` with the reason, and no client can be approved — so no token can
+be issued. A configured hash takes precedence, and a hash that is not a bcrypt
+hash disables the login the same way rather than falling back to `PASSWORD`.
+The local `--stdio` mode uses neither variable.
 
 | Variable                        | Required            | Description                                                                                                                   |
 | ------------------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
@@ -424,7 +432,7 @@ immediately. Per-client recipes:
 | `/hub`                                                               | Bearer                     | aggregate endpoint with the 6 meta-tools                          |
 | `/livez`                                                             | none                       | minimal process liveness (`200`)                                  |
 | `/health`                                                            | Bearer                     | per-server status (`200` all up / `503` degraded)                 |
-| `/authorize`, `/token`, `/register`, `/login`, `/consent`, `/revoke` | —                          | OAuth 2.1 · CIMD + DCR                                            |
+| `/authorize`, `/token`, `/register`, `/revoke`, `/interaction/<uid>/…` | —                          | OAuth 2.1 · CIMD + DCR; the login and consent pages live under `/interaction/` |
 | `/register/<client_id>`                                              | registration token         | RFC 7592: a client reads, changes or removes its own registration |
 | `/upstream/callback`                                                 | signed state + hub session | where an upstream returns after `upstream login`                  |
 | `/.well-known/mcp-hub-client/<id>.json`                              | none                       | the hub's own client metadata document, one per `cimd` upstream   |
@@ -448,7 +456,7 @@ immediately. Per-client recipes:
   rotate; replaying one that was already rotated away is treated as a leak and
   revokes the whole grant, access tokens included.
 - Upstream auth is fully decoupled from the hub's own OAuth: an expired
-  upstream token just marks that one server `down` (503 on its path, visible
+  upstream token just marks that one server `unauthorized` (503 on its path, visible
   in `/health`) — clients never see the upstream's 401.
 - One login can approve multiple connectors, but each token is valid only for
   its requested server or `/hub`. Registration remains open as the MCP

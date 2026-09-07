@@ -253,9 +253,10 @@ describe('the refusal log line', () => {
 
   it('keeps a registered client from forging a line in the file fail2ban reads', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    noteRefusal('freshrss', 'evil [2Kmcp-hub: everything is fine', 'caller');
+    noteRefusal('freshrss', 'evil\u0000\u001b[2Kmcp-hub: everything is fine', 'caller');
     const line = warn.mock.calls[0][0] as string;
-    expect(line).not.toMatch(/[ -]/);
+    // eslint-disable-next-line no-control-regex -- matching them is the point
+    expect(line).not.toMatch(/[\u0000-\u001f]/);
     expect(line).toContain('everything is fine');
   });
 

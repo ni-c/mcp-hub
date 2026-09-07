@@ -93,6 +93,16 @@ runtime root filesystem read-only.
 approve a client and reach every server the hub exposes. Use a strong one and
 store the bcrypt hash, not the plain text.
 
+**No password means no login, not an open one.** With neither a non-empty
+`PASSWORD` nor a bcrypt `PASSWORD_HASH` configured the hub starts and serves
+`/livez` and the discovery documents, but the sign-in page answers `503` with
+the reason and every login attempt is refused — the startup log carries the
+same sentence. Nothing can be approved, so nothing can be reached. A
+`PASSWORD_HASH` that is not a bcrypt hash disables the login in the same way;
+it never falls back to `PASSWORD`. (Before 0.11.2 an unset password compared
+equal to an empty form field, which approved the client.) Local `--stdio` mode
+relies on the operating-system account and uses neither variable.
+
 **Identifying yourself is open, approval is not.** Both ways of obtaining a
 `client_id` — a [Client ID Metadata
 Document](/guide/client-registration#client-id-metadata-documents) or

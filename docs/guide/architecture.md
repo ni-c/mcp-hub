@@ -98,18 +98,20 @@ forwards requests verbatim to the supervisor's client.
 
 The order of the middleware is deliberate:
 
-1. **Rate limit** — before anything is parsed, and before an unknown IP is
-   inserted into any table.
-2. **Bearer verification** — two shapes: an opaque OAuth access token, looked
+1. **Bearer verification** — two shapes: an opaque OAuth access token, looked
    up in the store so a withdrawn one stops working at once, or an
    admin-minted API token, which is an EdDSA JWT with a pinned algorithm.
-3. **Resource check** — the token's audience must match this endpoint;
+   There is no per-IP rate limit on the MCP routes; that budget guards the
+   OAuth endpoints, where a caller has no token yet.
+2. **Resource check** — the token's audience must match this endpoint;
    `/health` shares the `/hub` resource.
-4. **Per-client gate** — requests per minute and in-flight concurrency, keyed
-   by OAuth client rather than IP.
-5. **Body parsing** — capped at `MCP_BODY_LIMIT`, and only now, so an
+3. **Body parsing** — capped at `MCP_BODY_LIMIT`, and only now, so an
    unauthenticated request never allocates a megabyte.
-6. **Routing** — to `/hub`, to one server's proxy, or 404.
+4. **Per-client gate** — requests per minute, in-flight concurrency and open
+   streams, keyed by OAuth client rather than IP. After the parse, because a
+   `subscriptions/listen` POST belongs to the stream budget and only the parsed
+   body says which kind of POST this is.
+5. **Routing** — to `/hub`, to one server's proxy, or 404.
 
 An unauthenticated request costs one token lookup and nothing more: no bcrypt,
 no allocation proportional to the body.
@@ -224,15 +226,16 @@ per client session, so both eras reach a person.
 <figcaption>The backoff never gives up — a server whose dependency is down recovers on its own once the dependency returns. The two states below it are the ones a restart cannot reach: an idle on-demand server rests until it is used, and an upstream whose OAuth token is missing or refused waits for a person.</figcaption>
 </figure>
 
-The numbers, all fixed:
+The numbers, and the environment variable that moves each one (they exist for
+tests that cannot wait a minute; a deployment has no reason to touch them):
 
-| | |
-|---|---|
-| Ping interval | 60 s |
-| Ping timeout | 30 s |
-| Initial backoff | 1 s |
-| Maximum backoff | 5 min |
-| Backoff reset | after 5 min of uptime |
+| | | |
+|---|---|---|
+| Ping interval | 60 s | `MCP_PING_INTERVAL_MS` |
+| Ping timeout | 30 s | `MCP_PING_TIMEOUT_MS` |
+| Initial backoff | 1 s | `MCP_BACKOFF_INITIAL_MS` |
+| Maximum backoff | 5 min | `MCP_BACKOFF_MAX_MS` |
+| Backoff reset | after 5 min of uptime | `MCP_BACKOFF_RESET_AFTER_MS` |
 
 A ping failure is treated as death: the client is closed, which triggers the
 same restart path an exit would. There is no separate "unhealthy but running"
@@ -300,8 +303,9 @@ six meta-tools, and schemas fetched only when needed.
 
 The hub keeps a per-server tool cache, refreshed when a child sends
 `tools/list_changed`, so `list_tools` answers without a round trip to the
-child. `call_tool` forwards with a five-minute timeout that resets on progress
-notifications.
+child. `call_tool` forwards with a five-minute deadline that is absolute by
+default — a progress notification does not extend it unless
+`MCP_RESET_TIMEOUT_ON_PROGRESS` says so.
 
 Servers marked `"hub": false` are invisible here: `list_servers` omits them and
 `call_tool` refuses them. Their own paths are unaffected.

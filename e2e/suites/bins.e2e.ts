@@ -56,9 +56,7 @@ describe.runIf(RUNS_HERE)('mcp-hub, started the way an operator starts it', () =
     expect(result.stderr).toContain('missing required environment variable EXTERNAL_URL');
   });
 
-  // A hub with no PASSWORD does *not* exit — it starts and accepts an empty
-  // one. That is a finding rather than a missing test, so it lives in
-  // `no-password.e2e.ts` where there is room to say what it means.
+  // Missing and blank passwords are covered by no-password.e2e.ts.
 
   it('refuses an EXTERNAL_URL with a path on it', async () => {
     // The issuer is compared byte-for-byte by clients, so a trailing path would

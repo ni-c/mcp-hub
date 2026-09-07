@@ -20,7 +20,11 @@ export class SecretError extends Error {}
 
 export function parseEnvFile(content: string): Record<string, string> {
   if (content.includes('\0')) throw new SecretError('contains a NUL byte');
-  const result: Record<string, string> = {};
+  // Null prototype: `KEY_PATTERN` admits `__proto__`, and on an ordinary object
+  // `result['__proto__'] = value` replaces the prototype instead of adding a
+  // key — the variable vanished without a word, and the duplicate check two
+  // lines up could not see it either. With nothing inherited it is a key.
+  const result: Record<string, string> = Object.create(null) as Record<string, string>;
   let entries = 0;
   for (const [index, raw] of content.split('\n').entries()) {
     const line = raw.trim();

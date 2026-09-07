@@ -8,16 +8,14 @@ import { REDIRECT_URI } from '../harness/token.js';
 /**
  * What a hub does when nobody gave it a password.
  *
- * `EXTERNAL_URL` is checked at boot by `requireEnv` and the process exits
- * without one. `PASSWORD` and `PASSWORD_HASH` are not checked anywhere: with
- * neither set the hub starts, logs nothing about it, and serves. The comparison
- * in `checkPassword` then reduces to comparing two empty buffers, which is a
- * match — so the operator login is open to anyone who can reach the port.
+ * It starts — `/livez`, the discovery documents and every read-only surface
+ * keep working, which is what a health check or a directory crawler needs —
+ * and it says in its first log lines that the login is disabled. Nobody can
+ * sign in, so no client is ever approved and no token is ever minted.
  *
- * That is worth a test whichever way it is resolved. If the hub is meant to
- * refuse to start, this file says what "refuse" looks like. If it is meant to
- * start, the second test is the one that has to change, and changing it is a
- * decision somebody makes on purpose rather than a default nobody chose.
+ * Until 0.11.2 the second half was the other way round: the comparison in
+ * `checkPassword` reduced to two empty buffers, which match, so an empty form
+ * field approved the client. This suite is the decision, written down.
  */
 
 let gateway: Gateway | undefined;
@@ -28,7 +26,7 @@ afterEach(async () => {
 });
 
 describe.runIf(tierEnabled('process'))('a hub with no PASSWORD and no PASSWORD_HASH', () => {
-  it('starts, and says nothing about it', async () => {
+  it('starts, and says on its first lines that the login is disabled', async () => {
     gateway = await startGateway({
       prefix: 'no-password',
       servers: {},
@@ -37,21 +35,16 @@ describe.runIf(tierEnabled('process'))('a hub with no PASSWORD and no PASSWORD_H
       // either way, so this is the same state as never setting it.
       env: { PASSWORD: '' }
     });
-    expect(gateway.stderr()).not.toMatch(/password/i);
+    expect(gateway.stderr()).toMatch(/neither PASSWORD_HASH nor PASSWORD is set — the operator login is disabled/);
   });
 
-  it('lets an empty password through the operator login', async () => {
+  it('refuses an empty password at the operator login', async () => {
     gateway = await startGateway({ prefix: 'no-password-login', servers: {}, env: { PASSWORD: '' } });
     const clientId = await registerPublicClient(gateway.target, REDIRECT_URI);
-    const { code } = await authorizeInBrowser(gateway.target, clientId, {
-      password: '',
-      redirectUri: REDIRECT_URI,
-      resource: `${gateway.externalUrl}/hub`
-    });
-
-    // Anybody who can reach the port can mint themselves a token for every
-    // server the hub fronts. Recorded as the behaviour it is, so that changing
-    // it is a deliberate act with a failing test attached.
-    expect(code).toBeTruthy();
+    // The login page answers 503 with the reason and never redirects on, so the
+    // walk stalls there instead of arriving at the redirect URI with a code.
+    await expect(
+      authorizeInBrowser(gateway.target, clientId, { password: '', redirectUri: REDIRECT_URI, resource: `${gateway.externalUrl}/hub` })
+    ).rejects.toThrow(/stalled at hop \d+ on \/interaction\/[^ ]+ 503/);
   });
 });

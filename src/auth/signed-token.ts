@@ -24,7 +24,9 @@ export function sign(value: string, secret: string): string {
  */
 export function signatureMatches(value: string, signature: string, secret: string): boolean {
   const expected = sign(value, secret);
-  if (signature.length !== expected.length) return false;
+  // Character lengths alone do not bound the UTF-8 buffers timingSafeEqual
+  // compares. A multibyte forgery must be refused, never throw a RangeError.
+  if (!/^[A-Za-z0-9_-]{43}$/.test(signature)) return false;
   return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
 }
 
@@ -38,7 +40,8 @@ export function signPayload(payload: unknown, secret: string): string {
 /** Undefined for anything that was not signed with this secret, or is not the
  *  shape it claims. Never throws on malformed input. */
 export function readSignedPayload<T>(token: string, secret: string): T | undefined {
-  const [encoded, signature] = token.split('.');
+  const [encoded, signature, extra] = token.split('.');
+  if (extra !== undefined) return undefined;
   if (!encoded || !signature) return undefined;
   if (!signatureMatches(encoded, signature, secret)) return undefined;
   try {

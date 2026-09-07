@@ -4,6 +4,7 @@ import type { AuthStore } from '../auth/store.js';
 import { readSignedPayload } from '../auth/signed-token.js';
 import { renderPage, escapeHtml } from '../auth/page.js';
 import { logSafe } from '../auth/text.js';
+import { earlyRateLimit } from '../auth/rate-limit.js';
 import type { ConfigWatcher } from '../config.js';
 import type { Supervisor, UpstreamAuthRegistry } from '../supervisor.js';
 import { readSessionCookie } from '../auth/session.js';
@@ -52,6 +53,7 @@ const page = (res: Response, status: number, title: string, body: string): void 
 export function createUpstreamRoutes(options: UpstreamRoutesOptions): Router {
   const { store, registry, supervisor, watcher, externalUrl } = options;
   const router = Router();
+  const secure = new URL(externalUrl).protocol === 'https:';
 
   /**
    * One document per upstream, addressed by a derived identifier.
@@ -60,27 +62,28 @@ export function createUpstreamRoutes(options: UpstreamRoutesOptions): Router {
    * hot-reloadable, so a server can become `cimd` long after boot, and an
    * Express route cannot be added later.
    */
-  router.get(`/${UPSTREAM_CLIENT_METADATA_PREFIX}/:id.json`, (req, res) => {
-    void (async () => {
-      const wanted = String(req.params.id);
-      for (const [name, server] of watcher.current) {
-        if (server.kind !== 'remote' || server.oauth?.mode !== 'cimd') continue;
-        if (clientDocumentId(name, store.cookieSecret) !== wanted) continue;
-        const identity = { serverName: name, serverUrl: server.url, oauth: server.oauth, externalUrl };
-        const provider = new UpstreamAuthProvider(identity, store);
-        // The document must name itself byte-for-byte or the upstream refuses it.
-        res.json({
-          client_id: clientMetadataUrl(externalUrl, name, store.cookieSecret),
-          ...hubClientMetadata(identity, server.oauth.clientAuth === 'private_key_jwt' ? await provider.publicJwk() : undefined)
-        });
-        return;
-      }
-      res.status(404).json({ error: 'not_found', error_description: 'No upstream publishes a document here' });
-    })();
+  // Unauthenticated, and each hit derives one HMAC per configured upstream and
+  // may export a public key: cheap, but not free, and nothing legitimate asks
+  // for it more than once per login.
+  router.get(`/${UPSTREAM_CLIENT_METADATA_PREFIX}/:id.json`, earlyRateLimit(15 * 60_000, 60, 600), async (req, res) => {
+    const wanted = String(req.params.id);
+    for (const [name, server] of watcher.current) {
+      if (server.kind !== 'remote' || server.oauth?.mode !== 'cimd') continue;
+      if (clientDocumentId(name, store.cookieSecret) !== wanted) continue;
+      const identity = { serverName: name, serverUrl: server.url, oauth: server.oauth, externalUrl };
+      const provider = new UpstreamAuthProvider(identity, store);
+      // The document must name itself byte-for-byte or the upstream refuses it.
+      res.json({
+        client_id: clientMetadataUrl(externalUrl, name, store.cookieSecret),
+        ...hubClientMetadata(identity, server.oauth.clientAuth === 'private_key_jwt' ? await provider.publicJwk() : undefined)
+      });
+      return;
+    }
+    res.status(404).json({ error: 'not_found', error_description: 'No upstream publishes a document here' });
   });
 
   router.get(`/${UPSTREAM_CALLBACK_PATH}`, (req, res) => {
-    void handleCallback(req.query, req.headers.cookie, res);
+    return handleCallback(req.query, req.headers.cookie, res);
   });
 
   async function handleCallback(query: Record<string, unknown>, cookie: string | undefined, res: Response): Promise<void> {
@@ -94,7 +97,7 @@ export function createUpstreamRoutes(options: UpstreamRoutesOptions): Router {
     // Proving the browser belongs to the operator, not just to whoever ended up
     // holding the redirect. The session cookie rides along because the upstream
     // sends a top-level navigation and the cookie is SameSite=Lax.
-    if (readSessionCookie(cookie, store.cookieSecret) === undefined) {
+    if (readSessionCookie(cookie, store.cookieSecret, secure) === undefined) {
       page(res, 401, 'Not signed in', 'Sign in to this hub in the same browser, then run the login again.');
       return;
     }
@@ -107,7 +110,9 @@ export function createUpstreamRoutes(options: UpstreamRoutesOptions): Router {
     }
     if (typeof query.error === 'string') {
       console.warn(`mcp-hub: upstream login for ${logSafe(login.serverName)} was declined: ${logSafe(query.error)}`);
-      page(res, 400, 'Authorization declined', `The upstream reported "${query.error}". Nothing was changed.`);
+      // An OAuth error code is a short token; anything else is a page written
+      // by whoever answered as the upstream, and it does not get to write ours.
+      page(res, 400, 'Authorization declined', `The upstream reported "${logSafe(query.error, 80)}". Nothing was changed.`);
       return;
     }
     const code = typeof query.code === 'string' ? query.code : '';

@@ -34,7 +34,7 @@ function pkcePair() {
 }
 
 async function obtainToken(
-  app: Express.Application,
+  app: express.Express,
   resource?: string,
   displayedResource = resource // the login page shows the canonical form
 ): Promise<{ access: string; refresh: string; clientId: string }> {
@@ -76,6 +76,10 @@ async function mcpClient(pathname: string, token: string): Promise<Client> {
     requestInit: { headers: { Authorization: `Bearer ${token}` } }
   });
   await client.connect(transport);
+  // Listed once on every connection, so the SDK holds each tool's outputSchema
+  // and validates the structuredContent of every successful call below — the
+  // client-side check a callTool without a prior list never runs.
+  await client.listTools();
   return client;
 }
 

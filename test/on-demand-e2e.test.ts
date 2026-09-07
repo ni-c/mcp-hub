@@ -9,6 +9,7 @@ import type { CallToolResult } from '@modelcontextprotocol/client';
 import { authorizeInBrowser, registerPublicClient } from './auth-flow.js';
 import { createHub } from '../src/index.js';
 import { loadConfig } from '../src/config.js';
+import type express from 'express';
 import { ToolCache } from '../src/tool-cache.js';
 
 const EVERYTHING = path.resolve('node_modules/@modelcontextprotocol/server-everything/dist/index.js');
@@ -21,7 +22,7 @@ let httpServer: ReturnType<Awaited<ReturnType<typeof createHub>>['app']['listen'
 let baseUrl: string;
 let accessToken: string;
 
-async function obtainToken(app: Express.Application): Promise<string> {
+async function obtainToken(app: express.Express): Promise<string> {
   const clientId = await registerPublicClient(app, REDIRECT_URI);
   const { code, verifier } = await authorizeInBrowser(app, clientId, { password: PASSWORD, redirectUri: REDIRECT_URI });
   const tokens = await request(app)

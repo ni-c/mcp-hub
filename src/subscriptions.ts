@@ -74,6 +74,15 @@ export const DEBOUNCE_MS = nonNegativeIntegerEnv('MCP_SUBSCRIPTION_DEBOUNCE_MS',
 export const MAX_STREAM_MS = nonNegativeIntegerEnv('MCP_SUBSCRIPTION_MAX_MS', 30 * 60_000);
 
 /**
+ * Distinct events one debounce window may hold before it is flushed early.
+ *
+ * The window is keyed by event kind and, for `resources/updated`, by URI — and
+ * the URI is the child's. A child announcing a million distinct URIs inside one
+ * window would otherwise be a million map entries the hub holds for it.
+ */
+const MAX_PENDING_EVENTS = 1024;
+
+/**
  * Per-server switch, the sibling of `passthrough`.
  *
  * `"off"` withdraws this upstream's right to push. A server can be perfectly
@@ -240,6 +249,7 @@ export class SubscriptionRegistry {
       this.deliver(event);
       return;
     }
+    if (this.pending.size >= MAX_PENDING_EVENTS) this.flush();
     this.pending.set(event.kind === 'resource_updated' ? `${event.kind}:${event.uri}` : event.kind, event);
     if (this.timer) return;
     this.timer = setTimeout(() => this.flush(), debounceMs);
@@ -266,6 +276,7 @@ export class SubscriptionRegistry {
   }
 
   private flush(): void {
+    clearTimeout(this.timer);
     this.timer = undefined;
     const events = [...this.pending.values()];
     this.pending.clear();

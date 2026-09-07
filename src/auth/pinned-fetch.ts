@@ -45,6 +45,33 @@ export interface GuardedRequestOptions {
   body?: string;
 }
 
+/** Apply the same byte ceiling to native fetch, including decoded/compressed
+ * bodies and error responses. Literal IPs and private upstreams use this path. */
+export async function boundedResponse(response: Response, maxBytes: number): Promise<Response> {
+  const reader = response.body?.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    if (Number(response.headers.get('content-length')) > maxBytes) {
+      throw new Error(`response exceeds ${maxBytes} bytes`);
+    }
+    if (!reader) return response;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > maxBytes) throw new Error(`response exceeds ${maxBytes} bytes`);
+      chunks.push(value);
+    }
+    const headers = new Headers(response.headers);
+    headers.delete('content-encoding');
+    headers.delete('content-length');
+    return new Response(Buffer.concat(chunks), { status: response.status, statusText: response.statusText, headers });
+  } finally {
+    await reader?.cancel().catch(() => {});
+  }
+}
+
 export async function guardedRequest(url: URL, options: GuardedRequestOptions): Promise<Response> {
   // Only https reaches this in production — the caller rejects anything else
   // before resolving. Plain http is here so the transport can be exercised

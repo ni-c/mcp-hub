@@ -7,7 +7,103 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- #region changelog -->
 
-## [Unreleased]
+## [0.11.2] - 2026-09-07
+
+### Security
+
+- **An unset password was an open login.** With neither `PASSWORD` nor
+  `PASSWORD_HASH` configured, `checkPassword` compared the form field with an
+  empty buffer — which matches an empty field — so anyone who could reach the
+  port approved a client and minted tokens for every server. The hub now starts
+  with its login **disabled** in that case: a warning on the first log line,
+  `503` with the reason on the sign-in page, and every login refused, so
+  nothing can be approved. A `PASSWORD_HASH` that is not a bcrypt hash
+  disables the login the same way instead of falling back to `PASSWORD`; the
+  warning names the variable and its length, never the value. Refusing to
+  *start* was considered and rejected: a health check or a directory crawler
+  that runs the image without a password needs the process, not the login,
+  and the security outcome is the same.
+- **The private-address guard for an upstream's authorization server was off
+  for every DNS-named upstream.** `privateAllowed()` asked `isPrivateAddress`
+  about the upstream's *hostname*; that function answers "refuse" for anything
+  that is not an address literal, and the caller read "refuse" as "the upstream
+  is private, so its authorization server may be too". A public upstream whose
+  metadata pointed the token or registration endpoint at `127.0.0.1` or
+  `169.254.169.254` was followed there. The hostname is now resolved and the
+  upstream counts as private only when every answer is; a resolution failure
+  or a mixed answer keeps the guard on; and the endpoints must be https unless
+  the upstream is private.
+- **The native-fetch path of the upstream OAuth client read bodies without a
+  ceiling.** Literal-IP and private upstreams bypass the pinned transport and
+  its 256 KiB cap; `boundedResponse()` applies the same cap there, including to
+  error bodies and decoded responses.
+- **A forged `state` on `/upstream/callback` hung the request.** A signature of
+  the right length in characters but not in bytes made `timingSafeEqual` throw
+  `RangeError`, and the route's `void (async …)` swallowed the rejection, so
+  the browser waited forever. `signatureMatches` checks the shape before
+  comparing, `readSessionCookie` no longer throws on broken percent-encoding,
+  and both routes are async handlers whose rejection Express answers.
+- **PKCE is required of every client, confidential ones included.**
+  oidc-provider's default asks for a `code_challenge` only from public
+  clients; the discovery document and the standards page have said "S256
+  required" since the first release. A secret proves who redeems a code, the
+  challenge proves it was the one who asked for it.
+- **The session cookie carries the `__Host-` prefix behind HTTPS**, as
+  `docs/guide/security.md` has promised since it was written. The browser then
+  refuses the cookie from any other origin, path or domain, so a session
+  somebody obtained cannot be fixed into another browser from a sibling host.
+  Behind plain http, where the prefix is not settable, the bare name stays.
+- **Prototype names as identifiers no longer fault the authorization server.**
+  Every map in `state.json` is keyed by something a caller chose, and
+  `JSON.parse` handed them back with `Object.prototype` behind them:
+  `state.clients['constructor']` was `Object` itself, a truthy record that is
+  not a client, and `/authorize?client_id=constructor` answered
+  `500 server_error` with a fault in the log. The maps have a null prototype
+  now; an unknown name is `undefined` on every path.
+- **A child's words are cleaned and bounded before they reach a tool result.**
+  `list_servers` carried a child's `title` verbatim, `list_tools` and
+  `get_tool_schema` its descriptions at any length, and every failure sentence
+  quoted the child's error message as received — a bidi override reverses the
+  line, a zero-width character hides text a model still reads, an ESC sequence
+  lands in the terminal. `childText()` strips the same characters an
+  elicitation prompt loses and cuts to the field's size; schemas and
+  annotations stay verbatim by contract. The supervisor's `up (name version)`
+  and failure lines, the client id in the activity warning and the upstream's
+  error on the callback page go through `logSafe` for the same reason.
+- **A URL-mode elicitation is forwarded only for an https page.** The client
+  opens that page under the hub's own attribution line; `javascript:`, plain
+  http, private-use schemes and credentials in the URL are dropped and counted.
+- **A variable called `__proto__` in a sandbox secrets file vanished without a
+  word**, and an elicitation keyed `__proto__` was swallowed: on an ordinary
+  object the assignment replaces the prototype instead of adding a key. Both
+  maps are null-prototype now.
+- **Rotated upstream secrets and headers were never applied** to a running
+  hub: the credential manager was keyed on a fingerprint that deliberately
+  survives a secret rotation, so the old configuration stayed alive in memory
+  until a restart. The manager is rebuilt when the configuration changes; the
+  stored tokens survive, as they should.
+
+### Fixed
+
+- **The nightly end-to-end suite had not run since the move to vitest 5.**
+  vitest 5 removed the `vitest/reporters` subpath; the budget reporter imported
+  its `Reporter` type from there, so `typecheck:e2e` failed before a single
+  test started, on every tier (#58). The type now comes from `vitest/node`.
+- `SOCKET_MODE` is validated as three or four octal digits; `abc` used to reach
+  `chmodSync` as `NaN` and end the proxy with a stack trace.
+- A `CIMD_ALLOWED_ORIGINS` entry that does not look like an origin is described
+  by its length in the startup error rather than printed — it sits a few lines
+  from `PASSWORD_HASH` in every compose file.
+- The subscription debounce window flushes early once it holds 1024 distinct
+  events, instead of growing with the resource URIs a child announces.
+- `/.well-known/mcp-hub-client/<id>.json` has a rate limit like every other
+  unauthenticated route.
+- Four source files carried raw NUL, ESC, VT and FF bytes in string and regex
+  literals, which made git treat them as binary and hide every later change
+  from review. They are `\uXXXX` escapes now, with the same runtime meaning.
+- Both images no longer ship yarn and corepack, which nothing in them runs,
+  and the hub image no longer copies `package-lock.json` into the runtime
+  layer, which nothing reads once the install has happened.
 
 ### Changed
 
@@ -16,13 +112,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to module scope, and un-shadowed names). The MCP Transport callbacks are set
   through one `setTransportHandlers()` helper, and `_meta` / `_requestHandlers`
   are allowed as protocol-defined names. No runtime behaviour changed.
-
-### Fixed
-
-- **The nightly end-to-end suite had not run since the move to vitest 5.**
-  vitest 5 removed the `vitest/reporters` subpath; the budget reporter imported
-  its `Reporter` type from there, so `typecheck:e2e` failed before a single
-  test started, on every tier (#58). The type now comes from `vitest/node`.
+- The documentation says what the code does: the request pipeline parses the
+  body before the per-client gate and has no per-IP limiter on MCP routes;
+  `call_tool`'s deadline is absolute by default; `/revoke` revokes the
+  presented access token; the login and consent pages live under
+  `/interaction/<uid>/`; the reserved-name lists gained `jwks`, `interaction`,
+  `session` and `userinfo`; there are ten runtime dependencies; an unusable
+  upstream token is state `unauthorized`; the ten supervisor clocks in
+  `src/timings.ts` are listed as environment variables; and the 100-entry
+  ceiling on never-approved registrations is written down.
 
 ### CI
 
@@ -33,6 +131,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   test job now runs `typecheck:e2e` (seconds, once per matrix), and changes to
   `package.json` or `package-lock.json` trigger the E2E workflow on the pull
   request itself.
+- The unit tests are type-checked too (`typecheck:test`, `tsconfig.test.json`);
+  the twelve errors it surfaced were narrowing casts in tests.
+- `dependency-review-action` (pinned, fails on high) checks what a pull request
+  changes in the dependency tree; `npm audit` only sees the tree as it is.
+- The release workflow checks that the CHANGELOG has a section for the tag
+  *before* `npm publish`, not after it in the job that creates the GitHub
+  release. The nightly image build passes the same daily apt epoch `ci.yml`
+  does.
+- The fast suite's client helpers list tools before every call, so the SDK's
+  client-side `structuredContent` check runs on every success path.
 
 ## [0.11.1] - 2026-09-06
 

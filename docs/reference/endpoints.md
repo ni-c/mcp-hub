@@ -82,8 +82,9 @@ two keys stay away rather than reporting a zero.
 | `/upstream/callback` | signed `state` + hub session | where an upstream sends the browser back after an `upstream login`; single use |
 | `/.well-known/mcp-hub-client/<id>.json` | none | the hub's own client metadata document, one per `oauth.mode: "cimd"` upstream; `404` for an identifier nobody publishes |
 | `/revoke` | client credentials | token revocation (RFC 7009) |
-| `/login` | — | password form; a correct password approves the requesting client |
-| `/consent` | session + CSRF token | Approve / Deny page for a client not yet confirmed |
+| `/interaction/<uid>/` | — | the page an unfinished authorization sends the browser to: the password form, or the Approve / Deny page for a signed-in operator and a client not yet confirmed |
+| `/interaction/<uid>/login` | password | a correct password approves the requesting client; `503` while no usable password is configured |
+| `/interaction/<uid>/consent` | session + CSRF token | Approve / Deny for a client not yet confirmed |
 
 Auth responses carry `Cache-Control: no-store`. The interactive pages deny
 framing and carry a restrictive CSP.
@@ -150,6 +151,7 @@ covers every resource the hub exposes.
 These cannot be used as server names, because the hub serves them itself:
 
 `mcp` · `hub` · `authorize` · `token` · `register` · `login` · `consent` ·
-`health` · `livez` · `revoke` · `upstream` · `.well-known`
+`health` · `livez` · `revoke` · `jwks` · `interaction` · `session` · `userinfo` ·
+`upstream` · `.well-known`
 
 The check is case-insensitive and happens when the config is parsed.

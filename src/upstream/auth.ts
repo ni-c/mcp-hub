@@ -1,9 +1,11 @@
 import { discoverOAuthServerInfo, exchangeAuthorization, refreshAuthorization, startAuthorization } from '@modelcontextprotocol/client';
+import dns from 'node:dns/promises';
+import net from 'node:net';
 import type { OAuthDiscoveryState, OAuthClientInformation, OAuthTokens } from '@modelcontextprotocol/client';
 import type { RemoteServerConfig } from '../config.js';
 import type { AuthStore, UpstreamCredentials, UpstreamLogin } from '../auth/store.js';
 import { isPrivateAddress, resolvePublicAddress } from '../auth/address.js';
-import { guardedRequest } from '../auth/pinned-fetch.js';
+import { boundedResponse, guardedRequest } from '../auth/pinned-fetch.js';
 import { logSafe } from '../auth/text.js';
 import { UpstreamAuthProvider, callbackUrl, credentialFingerprint, hubClientMetadata } from './provider.js';
 import type { UpstreamIdentity } from './provider.js';
@@ -101,11 +103,12 @@ export class UpstreamAuth {
   private async privateAllowed(): Promise<boolean> {
     if (this.allowPrivate === undefined) {
       const hostname = new URL(this.identity.serverUrl).hostname.replace(/^\[|\]$/g, '');
-      try {
-        this.allowPrivate = isPrivateAddress(hostname) || (await resolvePublicAddress(hostname).then(() => false, () => true));
-      } catch {
-        this.allowPrivate = true;
-      }
+      // isPrivateAddress accepts numeric addresses only and rejects everything
+      // else. Passing a DNS name to it used to enable private access for every
+      // named upstream. Failed or mixed DNS answers must not relax the policy.
+      const addresses = net.isIP(hostname) ? [{ address: hostname }] : await dns.lookup(hostname, { all: true });
+      if (addresses.length === 0) throw new Error('upstream hostname resolved to no addresses');
+      this.allowPrivate = addresses.every(entry => isPrivateAddress(entry.address));
     }
     return this.allowPrivate;
   }
@@ -115,9 +118,13 @@ export class UpstreamAuth {
   private async asFetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
     const url = new URL(input instanceof Request ? input.url : String(input));
     const allowPrivate = await this.privateAllowed();
+    if (url.username || url.password || (url.protocol !== 'https:' && !(allowPrivate && url.protocol === 'http:'))) {
+      throw new Error('upstream OAuth endpoints must use HTTPS (HTTP is allowed only for private upstreams) without URL credentials');
+    }
     const pinned = await resolvePublicAddress(url.hostname, allowPrivate);
     if (!pinned) {
-      return fetch(url, { ...init, redirect: 'error', signal: AbortSignal.timeout(AS_TIMEOUT_MS) });
+      const response = await fetch(url, { ...init, redirect: 'error', signal: AbortSignal.timeout(AS_TIMEOUT_MS) });
+      return boundedResponse(response, AS_MAX_BYTES);
     }
     return guardedRequest(url, {
       pinnedAddress: pinned,

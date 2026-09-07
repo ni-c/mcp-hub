@@ -8,6 +8,7 @@ import { loggableToolName, toolAllowed } from './tool-filter.js';
 import { booleanEnv } from './mcp-limits.js';
 import { REFUSAL_REASON, decidePassthrough } from './elicitation.js';
 import { REVISION, type Era } from './proxy.js';
+import { MAX_CHILD_DESCRIPTION_CHARS, MAX_CHILD_ERROR_CHARS, MAX_CHILD_TITLE_CHARS, childText } from './child-text.js';
 
 /**
  * A meta-tool answer, in both channels at once.
@@ -136,8 +137,13 @@ function toolError(message: string): CallToolResult {
 
 function firstLine(description: string | undefined): string {
   if (!description) return '';
-  const line = description.split('\n', 1)[0].trim();
+  const line = childText(description, MAX_CHILD_DESCRIPTION_CHARS).split('\n', 1)[0].trim();
   return line.length > 120 ? `${line.slice(0, 117)}...` : line;
+}
+
+/** A child's failure, as the hub's own error sentence may quote it. */
+function reason(error: unknown): string {
+  return childText(error instanceof Error ? error.message : String(error), MAX_CHILD_ERROR_CHARS);
 }
 
 /**
@@ -235,7 +241,7 @@ export function buildHubServer(supervisor: Supervisor, secret: string, era: Era)
       try {
         await managed.wake();
       } catch (error) {
-        return toolError(`Server "${managed.name}" failed to start: ${(error as Error).message}`);
+        return toolError(`Server "${managed.name}" failed to start: ${reason(error)}`);
       }
     } else if (managed.state === 'sleeping') {
       void managed.wake().catch(() => {});
@@ -258,7 +264,9 @@ export function buildHubServer(supervisor: Supervisor, secret: string, era: Era)
       structured({
         servers: [...supervisor.servers.values()].map(s => ({
           name: s.name,
-          description: (s.serverInfo as { title?: string } | undefined)?.title ?? s.serverInfo?.name ?? '',
+          // The child's own words, and the one field of this answer that is:
+          // cleaned and cut like a description, never carried verbatim.
+          description: childText((s.serverInfo as { title?: string } | undefined)?.title ?? s.serverInfo?.name, MAX_CHILD_TITLE_CHARS),
           status: s.state,
           toolCount: s.tools.length,
           ...(s.config.hub ? {} : { hidden: true as const })
@@ -331,7 +339,7 @@ export function buildHubServer(supervisor: Supervisor, secret: string, era: Era)
       return structured({
         server: managed.name,
         name: found.name,
-        description: found.description ?? '',
+        description: childText(found.description, MAX_CHILD_DESCRIPTION_CHARS),
         inputSchema: found.inputSchema,
         // The reason this tool exists twice over: call_tool hands back the
         // child's structuredContent, and until this line the caller had no way
@@ -392,7 +400,7 @@ export function buildHubServer(supervisor: Supervisor, secret: string, era: Era)
         try {
           await managed.wake();
         } catch (error) {
-          return toolError(`Server "${server}" failed to start: ${(error as Error).message}`);
+          return toolError(`Server "${server}" failed to start: ${reason(error)}`);
         }
       }
       if (managed.state !== 'up' || !managed.client) return toolError(`Server "${server}" is ${managed.state}, try again later.`);
@@ -414,7 +422,7 @@ export function buildHubServer(supervisor: Supervisor, secret: string, era: Era)
         // Aggregate semantics: every failure here is a tool result, never a
         // protocol error, because six meta-tools stand in for every server and
         // one unreachable child must not look like a broken hub.
-        return toolError(`Tool call failed: ${(error as Error).message}`);
+        return toolError(`Tool call failed: ${reason(error)}`);
       }
     }
   );
@@ -435,7 +443,7 @@ export function buildHubServer(supervisor: Supervisor, secret: string, era: Era)
       try {
         await managed.wake();
       } catch (error) {
-        return toolError(`Server "${server}" failed to start: ${(error as Error).message}`);
+        return toolError(`Server "${server}" failed to start: ${reason(error)}`);
       }
       managed.markUsed();
       return structured({ name: managed.name, status: managed.state, toolCount: managed.tools.length });

@@ -16,6 +16,7 @@ import { mountOidcProvider } from './auth/oidc/mount.js';
 import { buildOidcProvider } from './auth/oidc/provider.js';
 import { OidcTokenVerifier } from './auth/oidc/verifier.js';
 import { authSecurityHeaders } from './auth/headers.js';
+import { operatorCredential } from './auth/password.js';
 import { createProtectedResourceRoutes } from './auth/protected-resource.js';
 import { createRegistrationManagementRoutes } from './auth/registration.js';
 import { createUpstreamRoutes } from './upstream/routes.js';
@@ -69,6 +70,12 @@ export type ClientRegistrationMechanism = 'cimd' | 'dcr';
 export const CLIENT_REGISTRATION_MECHANISMS: ClientRegistrationMechanism[] = ['cimd', 'dcr'];
 
 export async function createHub(options: HubOptions) {
+  // Said before anything else is built, so it is the first line an operator
+  // reads. The hub still starts: with no usable password nobody can approve a
+  // client, so nothing is reachable, and a process that runs and says why is
+  // more useful to a health check or a directory crawler than one that exits.
+  const credential = operatorCredential(options);
+  if (!credential.enabled) console.warn(`mcp-hub: ${credential.problem}`);
   // Canonical issuer identifier: URL.href form ('https://host/' for a root
   // URL), so JWT iss/aud, AS metadata issuer and PRM authorization_servers all
   // match byte-for-byte — claude.ai compares these strictly.
@@ -404,15 +411,25 @@ function cimdAllowedOriginsEnv(): string[] {
     try {
       url = new URL(entry);
     } catch {
-      console.error(`mcp-hub: CIMD_ALLOWED_ORIGINS entry "${entry}" is not a URL`);
+      console.error(`mcp-hub: CIMD_ALLOWED_ORIGINS entry ${describeEntry(entry)} is not a URL`);
       process.exit(1);
     }
     if (url.protocol !== 'https:' || url.origin !== entry.replace(/\/$/, '')) {
-      console.error(`mcp-hub: CIMD_ALLOWED_ORIGINS entry "${entry}" must be a bare https origin, e.g. https://chatgpt.com`);
+      console.error(`mcp-hub: CIMD_ALLOWED_ORIGINS entry ${describeEntry(entry)} must be a bare https origin, e.g. https://chatgpt.com`);
       process.exit(1);
     }
   }
   return entries.map(entry => new URL(entry).origin);
+}
+
+/**
+ * A configuration value in a diagnostic, quoted only when it has the shape of
+ * one. CIMD_ALLOWED_ORIGINS sits a few lines from PASSWORD_HASH in every
+ * compose file, and a value that is not an origin is exactly what a secret
+ * pasted into the wrong line looks like.
+ */
+function describeEntry(entry: string): string {
+  return /^https?:\/\/[^\s]{1,120}$/i.test(entry) ? `"${entry}"` : `(a ${entry.length}-character value that does not look like an origin)`;
 }
 
 function nonNegativeIntegerEnv(name: string, fallback: number): number {

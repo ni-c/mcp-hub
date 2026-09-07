@@ -5,7 +5,7 @@ import { ConfigWatcher, loadConfig, warnMutableDockerImages, type HubConfig } fr
 import { installFileLogging } from '../logfile.js';
 import { VERSION } from '../version.js';
 import { containerName } from '../sandbox/container-spec.js';
-import { createDockerProxy, recreateSandbox } from './server.js';
+import { createDockerProxy, parseSocketMode, recreateSandbox } from './server.js';
 import { SecretsWatcher } from './secrets-watcher.js';
 import { SecretStore, validateConfigSecrets } from './secrets.js';
 import { warnSingleFileMount } from '../mount-check.js';
@@ -31,7 +31,13 @@ const configPath = env('CONFIG_PATH', '/config/mcp.json');
 const listenSocket = env('LISTEN_SOCKET', '/run/proxy/docker.sock');
 const dockerSocket = env('DOCKER_SOCKET', '/var/run/docker.sock');
 const secretsDir = env('SANDBOX_SECRETS_DIR', '/run/secrets');
-const socketMode = Number.parseInt(env('SOCKET_MODE', '0660'), 8);
+let socketMode: number;
+try {
+  socketMode = parseSocketMode(env('SOCKET_MODE', '0660'));
+} catch (error) {
+  console.error(`mcp-hub-docker-proxy: ${(error as Error).message}`);
+  process.exit(1);
+}
 
 if (process.env.LOG_FILE) {
   installFileLogging(process.env.LOG_FILE);
