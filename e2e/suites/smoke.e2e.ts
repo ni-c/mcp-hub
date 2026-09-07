@@ -94,7 +94,7 @@ describe.each(tiers)('a hub at the %s tier', (tier: Tier) => {
 
     const client = await clients.connect('/hub', token.access);
     const tools = (await client.listTools()) as ListToolsResult;
-    expect(tools.tools.map(tool => tool.name).sort()).toEqual([
+    expect(tools.tools.map(tool => tool.name).toSorted()).toEqual([
       'call_tool',
       'get_tool_schema',
       'list_servers',
@@ -105,7 +105,7 @@ describe.each(tiers)('a hub at the %s tier', (tier: Tier) => {
 
     const servers = (await client.callTool({ name: 'list_servers', arguments: {} })) as CallToolResult;
     const { servers: listed } = servers.structuredContent as { servers: Array<{ name: string; status: string }> };
-    expect(listed.map(server => server.name).sort()).toEqual(['everything', 'weather']);
+    expect(listed.map(server => server.name).toSorted()).toEqual(['everything', 'weather']);
     expect(listed.every(server => server.status === 'up')).toBe(true);
   });
 

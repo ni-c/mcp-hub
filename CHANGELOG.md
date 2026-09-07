@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- oxlint's `suspicious` category is on; 95 findings resolved (mostly
+  `Array#toSorted()` over copy-and-sort, helpers that captured nothing hoisted
+  to module scope, and un-shadowed names). The MCP Transport callbacks are set
+  through one `setTransportHandlers()` helper, and `_meta` / `_requestHandlers`
+  are allowed as protocol-defined names. No runtime behaviour changed.
+
 ### Fixed
 
 - **The nightly end-to-end suite had not run since the move to vitest 5.**

@@ -121,7 +121,7 @@ describe.runIf(RUNS_HERE)('the demo everyone is invited to run', () => {
     const health = (await new WireClient(demo).request('/health', { token })).json as {
       servers: Record<string, { state: string }>;
     };
-    expect(Object.keys(health.servers).sort()).toEqual(['docs', 'tickets', 'weather']);
+    expect(Object.keys(health.servers).toSorted()).toEqual(['docs', 'tickets', 'weather']);
     // `weather` is configured keepAlive in the demo, as the README's "that is
     // the contrast" paragraph promises.
     expect(health.servers.weather.state).toBe('up');

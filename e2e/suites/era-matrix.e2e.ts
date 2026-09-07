@@ -52,7 +52,7 @@ describeEachEraPair('the catalogue', (clientEra, childEra) => {
   it('offers the same tools whichever era asks', async () => {
     const client = await clients.connect(routeFor(childEra), tokenFor(childEra), { era: clientEra });
     const listed = (await client.listTools()) as ListToolsResult;
-    expect(listed.tools.map(tool => tool.name).sort()).toEqual(CATALOGUE.tools);
+    expect(listed.tools.map(tool => tool.name).toSorted()).toEqual(CATALOGUE.tools);
   });
 
   it('carries a declared outputSchema through to the client', async () => {
@@ -109,7 +109,7 @@ describeEachEraPair('the catalogue', (clientEra, childEra) => {
     const client = await clients.connect(routeFor(childEra), tokenFor(childEra), { era: clientEra });
 
     const resources = (await client.listResources()) as ListResourcesResult;
-    expect(resources.resources.map(resource => resource.uri).sort()).toEqual(CATALOGUE.resources);
+    expect(resources.resources.map(resource => resource.uri).toSorted()).toEqual(CATALOGUE.resources);
 
     const templates = (await client.listResourceTemplates()) as ListResourceTemplatesResult;
     expect(templates.resourceTemplates.map(template => template.uriTemplate)).toEqual(CATALOGUE.templates);
@@ -127,7 +127,7 @@ describeEachEraPair('the catalogue', (clientEra, childEra) => {
     const client = await clients.connect(routeFor(childEra), tokenFor(childEra), { era: clientEra });
 
     const prompts = (await client.listPrompts()) as ListPromptsResult;
-    expect(prompts.prompts.map(prompt => prompt.name).sort()).toEqual(CATALOGUE.prompts);
+    expect(prompts.prompts.map(prompt => prompt.name).toSorted()).toEqual(CATALOGUE.prompts);
 
     const bare = (await client.getPrompt({ name: 'greeting' })) as GetPromptResult;
     expect((bare.messages[0].content as { text: string }).text).toBe('Say hello.');

@@ -107,7 +107,7 @@ describe('SubscriptionRegistry demand', () => {
     expect(demand.toolsListChanged).toBe(true);
     expect(demand.resourcesListChanged).toBe(true);
     expect(demand.promptsListChanged).toBe(false);
-    expect([...demand.uris].sort()).toEqual(['file:///a', 'file:///b']);
+    expect(demand.uris.toSorted()).toEqual(['file:///a', 'file:///b']);
   });
 
   it('keeps a URI another lease still wants when one releases', () => {

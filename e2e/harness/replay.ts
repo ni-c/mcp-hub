@@ -91,7 +91,7 @@ export function listTranscripts(root: string): string[] {
   for (const entry of fs.readdirSync(root, { withFileTypes: true, recursive: true })) {
     if (entry.isFile() && entry.name.endsWith('.jsonl')) files.push(path.join(entry.parentPath, entry.name));
   }
-  return files.sort();
+  return files.toSorted();
 }
 
 /** Substitutes `${NAME}` from the live context, recursively. */
@@ -162,7 +162,7 @@ export async function replayTranscript(gateway: Gateway, entries: TranscriptEntr
       try {
         expectSubset(body, substitute(entry.res.jsonSubset, context));
       } catch (error) {
-        throw new Error(`${where}: ${(error as Error).message}`);
+        throw new Error(`${where}: ${(error as Error).message}`, { cause: error });
       }
     }
 

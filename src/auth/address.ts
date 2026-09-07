@@ -63,7 +63,7 @@ export async function resolvePublicAddress(hostname: string, allowPrivate = fals
   try {
     addresses = await dns.lookup(hostname, { all: true });
   } catch (error) {
-    throw new Error(`cannot resolve ${hostname}: ${(error as Error).message}`);
+    throw new Error(`cannot resolve ${hostname}: ${(error as Error).message}`, { cause: error });
   }
   if (addresses.some(entry => isPrivateAddress(entry.address))) {
     throw new Error(`${hostname} resolves to a private address`);

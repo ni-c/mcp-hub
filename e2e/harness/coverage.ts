@@ -49,11 +49,11 @@ export function toolCoverage(called: ReadonlySet<string>, allTools: readonly str
   const catalogue = new Set(allTools);
   const reasons = Object.keys(skipped);
   return {
-    called: [...called].sort(),
-    skipped: reasons.sort(),
-    missing: allTools.filter(tool => !called.has(tool) && !(tool in skipped)).sort(),
-    staleReasons: reasons.filter(tool => called.has(tool)).sort(),
-    unknownReasons: reasons.filter(tool => !catalogue.has(tool)).sort()
+    called: [...called].toSorted(),
+    skipped: reasons.toSorted(),
+    missing: allTools.filter(tool => !called.has(tool) && !(tool in skipped)).toSorted(),
+    staleReasons: reasons.filter(tool => called.has(tool)).toSorted(),
+    unknownReasons: reasons.filter(tool => !catalogue.has(tool)).toSorted()
   };
 }
 

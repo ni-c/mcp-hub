@@ -377,7 +377,7 @@ describe('client ID metadata documents and private_key_jwt', () => {
     // Narrower than oidc-provider's default, which also offers
     // client_secret_basic and client_secret_jwt: nothing the hub issues can use
     // them, so they would be surface without a purpose.
-    expect(meta.body.token_endpoint_auth_methods_supported.sort()).toEqual(['client_secret_post', 'none', 'private_key_jwt']);
+    expect(meta.body.token_endpoint_auth_methods_supported.toSorted()).toEqual(['client_secret_post', 'none', 'private_key_jwt']);
     expect(meta.body.token_endpoint_auth_signing_alg_values_supported).toContain('EdDSA');
   });
 
@@ -672,9 +672,9 @@ describe('the login and consent pages', () => {
 describe('bearer authentication with both token shapes', () => {
   /** A protected route standing in for /hub, using the SDK middleware the hub
    *  uses, so the verifier is exercised exactly as it will be in production. */
-  function protectedApp(store: AuthStore, resource: URL) {
+  function protectedApp(authStore: AuthStore, resource: URL) {
     const guarded = express();
-    const verifier = new OidcTokenVerifier(store, {
+    const verifier = new OidcTokenVerifier(authStore, {
       externalUrl: EXTERNAL_URL,
       requireResource: true,
       resolveResource: url => (url.href === resource.href ? resource : undefined)

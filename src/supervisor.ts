@@ -18,6 +18,7 @@ import {
 import type { HubConfig, ServerConfig, RemoteServerConfig, ConfigDiff } from './config.js';
 import { SocketTransport } from './transports/socket.js';
 import { DockerTransport } from './transports/docker.js';
+import { setTransportHandlers } from './transports/stream.js';
 import { DockerClient, parseSandboxDockerHost } from './sandbox/docker-client.js';
 import type { AuthStore } from './auth/store.js';
 import { UpstreamAuth, UpstreamLoginRequiredError } from './upstream/auth.js';
@@ -141,15 +142,18 @@ export interface ManagedServerOptions {
 /** Whether two upstream listen filters ask for the same thing. */
 function sameFilter(a: SubscriptionFilter | undefined, b: SubscriptionFilter): boolean {
   if (!a) return false;
-  // JSON rather than a joined string: with a plain separator, ['a b'] and
-  // ['a', 'b'] compare equal, and the hub would skip a reconcile it owed.
-  const uris = (filter: SubscriptionFilter) => JSON.stringify([...(filter.resourceSubscriptions ?? [])].sort());
   return (
     (a.toolsListChanged ?? false) === (b.toolsListChanged ?? false) &&
     (a.promptsListChanged ?? false) === (b.promptsListChanged ?? false) &&
     (a.resourcesListChanged ?? false) === (b.resourcesListChanged ?? false) &&
-    uris(a) === uris(b)
+    subscriptionUris(a) === subscriptionUris(b)
   );
+}
+
+/** JSON rather than a joined string: with a plain separator, ['a b'] and
+ *  ['a', 'b'] compare equal, and the hub would skip a reconcile it owed. */
+function subscriptionUris(filter: SubscriptionFilter): string {
+  return JSON.stringify((filter.resourceSubscriptions ?? []).toSorted());
 }
 
 /** Whether a filter asks for nothing at all, in which case nothing is held upstream. */
@@ -421,7 +425,7 @@ export class ManagedServer {
         inputRequired: { autoFulfill: false }
       }
     );
-    transport.onclose = () => this.onExit(this.exitReason(), generation);
+    setTransportHandlers(transport, { onclose: () => this.onExit(this.exitReason(), generation) });
     try {
       await client.connect(transport);
     } catch (error) {

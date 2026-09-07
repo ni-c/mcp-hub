@@ -54,6 +54,13 @@ function intersect(a: unknown, b: unknown): unknown {
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
+// Every run gets a different port, and the responses are full of it — issuer,
+// resource identifier, every endpoint URL. Substituted back to the
+// placeholder the replayer expands, or the golden would only ever pass on the
+// port that happened to be free the day it was curated.
+const generalise = (value: unknown, externalUrl: string): unknown =>
+  JSON.parse(JSON.stringify(value ?? null).split(JSON.stringify(externalUrl).slice(1, -1)).join('${EXTERNAL_URL}')) as unknown;
+
 async function main(): Promise<void> {
   const index = process.argv.indexOf('--file');
   const file = index === -1 ? undefined : process.argv[index + 1];
@@ -64,13 +71,6 @@ async function main(): Promise<void> {
   const entries = readTranscript(path.resolve(file));
 
   const runs: Array<Array<{ body: unknown; headers: unknown }>> = [];
-  // Every run gets a different port, and the responses are full of it — issuer,
-  // resource identifier, every endpoint URL. Substituted back to the
-  // placeholder the replayer expands, or the golden would only ever pass on the
-  // port that happened to be free the day it was curated.
-  const generalise = (value: unknown, externalUrl: string): unknown =>
-    JSON.parse(JSON.stringify(value ?? null).split(JSON.stringify(externalUrl).slice(1, -1)).join('${EXTERNAL_URL}')) as unknown;
-
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const gateway = await startGateway({
       prefix: `curate-${attempt}`,

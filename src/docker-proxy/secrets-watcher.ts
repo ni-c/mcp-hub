@@ -25,7 +25,7 @@ const DEBOUNCE_MS = 1_000;
 
 /** Content identity of a secret set: key order and formatting do not matter. */
 function fingerprint(secrets: Record<string, string>): string {
-  return JSON.stringify(Object.entries(secrets).sort(([a], [b]) => a.localeCompare(b)));
+  return JSON.stringify(Object.entries(secrets).toSorted(([a], [b]) => a.localeCompare(b)));
 }
 
 /** All docker servers that reference a given secret set. */

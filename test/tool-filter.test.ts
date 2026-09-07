@@ -79,10 +79,10 @@ describe('loggableToolName', () => {
   });
 });
 
-describe('parsing allowTools and denyTools', () => {
-  const parse = (entry: Record<string, unknown>) =>
-    parseConfig(JSON.stringify({ mcpServers: { a: { command: 'x', ...entry } } })).get('a');
+const parse = (entry: Record<string, unknown>) =>
+  parseConfig(JSON.stringify({ mcpServers: { a: { command: 'x', ...entry } } })).get('a');
 
+describe('parsing allowTools and denyTools', () => {
   it('accepts arrays of names and patterns', () => {
     expect(parse({ allowTools: ['list_*', 'get_a'], denyTools: ['delete_a'] })).toMatchObject({
       allowTools: ['list_*', 'get_a'],

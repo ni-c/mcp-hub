@@ -308,7 +308,7 @@ describe.runIf(RUNS_HERE)('mcp-hub-stdio', () => {
     );
     try {
       const tools = await client.listTools();
-      expect(tools.tools.map(tool => tool.name).sort()).toEqual([
+      expect(tools.tools.map(tool => tool.name).toSorted()).toEqual([
         'call_tool',
         'get_tool_schema',
         'list_servers',

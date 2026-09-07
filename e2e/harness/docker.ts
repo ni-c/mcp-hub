@@ -50,7 +50,7 @@ export async function assertDockerUsable(): Promise<void> {
     try {
       await run('docker', args, { timeout: 30_000 });
     } catch (error) {
-      throw new Error(`mcp-hub e2e: \`docker ${args.join(' ')}\` failed: ${String(error)}`);
+      throw new Error(`mcp-hub e2e: \`docker ${args.join(' ')}\` failed: ${String(error)}`, { cause: error });
     }
   }
 }

@@ -576,11 +576,7 @@ function parseServer(name: string, entry: Record<string, unknown>, env: NodeJS.P
     }
     const headers = requireStringRecord(name, 'headers', entry.headers ?? {});
     const url = expand(entry.url);
-    try {
-      new URL(url);
-    } catch {
-      throw new ConfigError(`Server "${name}": "url" is not a valid URL`);
-    }
+    if (!URL.canParse(url)) throw new ConfigError(`Server "${name}": "url" is not a valid URL`);
     const oauth = parseUpstreamOAuth(name, entry.oauth, expand);
     if (oauth && Object.keys(headers).some(key => key.toLowerCase() === 'authorization')) {
       // The transport merges requestInit headers last, so the static one would

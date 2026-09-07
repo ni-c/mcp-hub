@@ -171,6 +171,14 @@ afterAll(async () => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
+function formFields(html: string): { request: string; csrf?: string; action: string } {
+  return {
+    request: /name="request" value="([^"]+)"/.exec(html)![1],
+    csrf: /name="csrf" value="([^"]+)"/.exec(html)?.[1],
+    action: /<form[^>]*action="([^"]*)"/.exec(html)![1]
+  };
+}
+
 describe('OAuth', () => {
   it('serves AS metadata at root and path-scoped PRM documents', async () => {
     const as = await request(hub.app).get('/.well-known/oauth-authorization-server').expect(200);
@@ -223,16 +231,8 @@ describe('OAuth', () => {
     const location = started.headers.location as string;
     // Straight back to the client means no page was needed: already approved.
     if (location.startsWith(redirectUri)) return started;
-    const path = location.startsWith('http') ? new URL(location).pathname : location;
-    return agent.get(path).redirects(0);
-  }
-
-  function formFields(html: string): { request: string; csrf?: string; action: string } {
-    return {
-      request: /name="request" value="([^"]+)"/.exec(html)![1],
-      csrf: /name="csrf" value="([^"]+)"/.exec(html)?.[1],
-      action: /<form[^>]*action="([^"]*)"/.exec(html)![1]
-    };
+    const pathname = location.startsWith('http') ? new URL(location).pathname : location;
+    return agent.get(pathname).redirects(0);
   }
 
   it('sets anti-clickjacking and browser hardening headers on interactive auth pages', async () => {
@@ -769,7 +769,7 @@ describe('/hub aggregate', () => {
   it('exposes exactly the six meta-tools', async () => {
     const client = await mcpClient('/hub', accessToken);
     const tools = await client.listTools();
-    expect(tools.tools.map(t => t.name).sort()).toEqual(['call_tool', 'get_tool_schema', 'list_servers', 'list_tools', 'sleep_server', 'wake_server']);
+    expect(tools.tools.map(t => t.name).toSorted()).toEqual(['call_tool', 'get_tool_schema', 'list_servers', 'list_tools', 'sleep_server', 'wake_server']);
     await client.close();
   });
 
