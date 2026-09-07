@@ -29,7 +29,7 @@ const GARBAGE_BYTES = envInt('GARBAGE_BYTES', 0);
 
 // Before anything else, the way a CLI framework prints its banner.
 process.stdout.write('noisy-fixture v1.0.0 — starting up\n');
-process.stdout.write('[32m✔[0m ready\n');
+process.stdout.write('\u001b[32m✔\u001b[0m ready\n');
 // A line that looks like the start of JSON and is not: the case a parser that
 // sniffs the first character gets wrong.
 process.stdout.write('{\n');
