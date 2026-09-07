@@ -77,12 +77,12 @@ Named explicitly, so you do not have to find out by trying:
 
 | | |
 |---|---|
-| **Access-token revocation** | `/revoke` accepts an access token and does nothing with it. Only refresh tokens are revoked there. To kill live access tokens, use `mcp-hub-admin clients revoke`, which sets a marker the verifier checks. |
+| **Revoking somebody else's tokens** | `/revoke` revokes the one access or refresh token the client presents (RFC 7009). To withdraw *every* token of a client at once, use `mcp-hub-admin clients revoke`, which sets a marker the verifier checks. |
 | **`client_credentials` inbound** | The hub issues tokens to a person who approved a client, not to a machine identity. Use an [API token](/guide/clients#api-tokens) for that. |
 | **Device authorization grant** ([RFC 8628](https://www.rfc-editor.org/rfc/rfc8628)) | Neither direction. |
 | **`private_key_jwt` for dynamically registered clients** | Inbound it is accepted only from metadata-document clients. A DCR client uses its secret. |
 | **DPoP** ([RFC 9449](https://www.rfc-editor.org/rfc/rfc9449)), **mTLS** ([RFC 8705](https://www.rfc-editor.org/rfc/rfc8705)), **PAR** ([RFC 9126](https://www.rfc-editor.org/rfc/rfc9126)), **token introspection** ([RFC 7662](https://www.rfc-editor.org/rfc/rfc7662)), **token exchange** ([RFC 8693](https://www.rfc-editor.org/rfc/rfc8693)), `client_secret_jwt` | None of them, in either direction. |
-| **A published JWKS for the hub's own tokens** | Access tokens are EdDSA-signed and verified by the hub alone; there is no endpoint for a third party to verify them. |
+| **Verifying the hub's tokens elsewhere** | OAuth access tokens are opaque and only the hub's store can answer for them; API tokens are EdDSA-signed and verified by the hub alone. `/jwks` is served because oidc-provider serves it, and holds nothing a third party could verify a token against. |
 | **Scopes as an authorization boundary** | Scopes are carried through but nothing is enforced on them. Authorization is by resource, not by scope. |
 | **Users, roles, audit trails** | One shared password, no per-user identity. Every token's subject is the same. See [what the hub does not protect against](/guide/security#what-the-hub-does-not-protect-against). |
 | **Per-user upstream tokens** | An upstream credential belongs to the deployment, not to the client that triggered the call. The hub does not act on behalf of individual users. |
@@ -124,7 +124,7 @@ admit.
 | **`subscriptions/listen`** — a child's changes reaching a client | **carried** | not offered |
 | `listChanged` notifications (tools, prompts, resources) | delivered on a subscription | not advertised, not delivered |
 | `notifications/resources/updated` | delivered on a subscription | not advertised, not delivered |
-| `resources/subscribe` | removed from the revision | not advertised, refused |
+| `resources/subscribe` | removed from the revision; a child's `subscribe` capability is re-advertised so a client knows `subscriptions/listen` may name resource URIs | not advertised, refused |
 | `logging/setLevel`, `notifications/message` | not advertised, no handler | not advertised, no handler |
 
 **Subscriptions are the second row worth reading twice**, for the same reason
