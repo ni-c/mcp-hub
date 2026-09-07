@@ -16,6 +16,7 @@ import { mountOidcProvider } from './auth/oidc/mount.js';
 import { buildOidcProvider } from './auth/oidc/provider.js';
 import { OidcTokenVerifier } from './auth/oidc/verifier.js';
 import { authSecurityHeaders } from './auth/headers.js';
+import { operatorCredential } from './auth/password.js';
 import { createProtectedResourceRoutes } from './auth/protected-resource.js';
 import { createRegistrationManagementRoutes } from './auth/registration.js';
 import { createUpstreamRoutes } from './upstream/routes.js';
@@ -69,13 +70,12 @@ export type ClientRegistrationMechanism = 'cimd' | 'dcr';
 export const CLIENT_REGISTRATION_MECHANISMS: ClientRegistrationMechanism[] = ['cimd', 'dcr'];
 
 export async function createHub(options: HubOptions) {
-  // Refuse before creating state, starting children or opening any listener.
-  if (!options.passwordHash && !options.password?.trim()) {
-    throw new Error('PASSWORD_HASH or a non-empty PASSWORD is required for the HTTP hub');
-  }
-  if (options.passwordHash && !/^\$2[aby]\$(?:0[4-9]|[12]\d|3[01])\$[./A-Za-z0-9]{53}$/.test(options.passwordHash)) {
-    throw new Error('PASSWORD_HASH must be a valid bcrypt hash');
-  }
+  // Said before anything else is built, so it is the first line an operator
+  // reads. The hub still starts: with no usable password nobody can approve a
+  // client, so nothing is reachable, and a process that runs and says why is
+  // more useful to a health check or a directory crawler than one that exits.
+  const credential = operatorCredential(options);
+  if (!credential.enabled) console.warn(`mcp-hub: ${credential.problem}`);
   // Canonical issuer identifier: URL.href form ('https://host/' for a root
   // URL), so JWT iss/aud, AS metadata issuer and PRM authorization_servers all
   // match byte-for-byte — claude.ai compares these strictly.

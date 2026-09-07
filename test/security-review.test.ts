@@ -7,6 +7,10 @@ import request from 'supertest';
 import fc from 'fast-check';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createHub } from '../src/index.js';
+import { operatorCredential } from '../src/auth/password.js';
+import { authorizeInBrowser, registerPublicClient } from './auth-flow.js';
+
+const REDIRECT_URI = 'https://client.example/cb';
 import { AuthStore } from '../src/auth/store.js';
 import { boundedResponse } from '../src/auth/pinned-fetch.js';
 import { createSessionCookie, readSessionCookie } from '../src/auth/session.js';
@@ -31,10 +35,10 @@ function discovery(endpoint = 'https://127.0.0.1/register') {
     authorizationServerMetadata: { issuer: 'https://authorization.example', authorization_endpoint: 'https://authorization.example/authorize', token_endpoint: 'https://authorization.example/token', response_types_supported: ['code'], registration_endpoint: endpoint }
   };
 }
-async function hubWith(passwordOptions: { password?: string; passwordHash?: string }) {
+async function hubWith(credentials: { password?: string; passwordHash?: string }) {
   const dir = directory();
   fs.writeFileSync(path.join(dir, 'mcp.json'), '{"mcpServers":{}}');
-  const hub = await createHub({ externalUrl: 'http://localhost/', configPath: path.join(dir, 'mcp.json'), dataPath: path.join(dir, 'data'), idleTimeoutMinutes: 0, ...passwordOptions });
+  const hub = await createHub({ externalUrl: 'http://localhost/', configPath: path.join(dir, 'mcp.json'), dataPath: path.join(dir, 'data'), idleTimeoutMinutes: 0, ...credentials });
   hubs.push(hub);
   return hub;
 }
@@ -45,18 +49,81 @@ afterEach(async () => {
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
-describe('HTTP password configuration fails closed', () => {
-  it.each([undefined, '', ' \t\n'])('refuses missing or blank password %j before creating state', async password => {
-    const dir = directory();
-    await expect(createHub({ externalUrl: 'http://localhost/', configPath: path.join(dir, 'absent.json'), dataPath: path.join(dir, 'data'), password })).rejects.toThrow(/PASSWORD_HASH or a non-empty PASSWORD/);
-    expect(fs.existsSync(path.join(dir, 'data'))).toBe(false);
+describe('HTTP password configuration fails closed at the login, not at startup', () => {
+  /** The login page of a fresh authorization, the way a browser reaches it. */
+  async function loginPage(hub: Awaited<ReturnType<typeof createHub>>) {
+    const clientId = await registerPublicClient(hub.app, REDIRECT_URI);
+    const agent = request.agent(hub.app);
+    const query = new URLSearchParams({
+      client_id: clientId, redirect_uri: REDIRECT_URI, response_type: 'code', code_challenge: 'a'.repeat(43),
+      code_challenge_method: 'S256', state: 'xyz', resource: 'http://localhost/hub'
+    });
+    let location = `/authorize?${query}`;
+    for (let hop = 0; hop < 6; hop += 1) {
+      const res = await agent.get(location).redirects(0);
+      if (!res.headers.location) return { agent, location, res };
+      location = new URL(res.headers.location as string, 'http://localhost/').pathname;
+    }
+    throw new Error('login page not reached');
+  }
+
+  it.each([undefined, '', ' \t\n'])('starts without a password %j, warns, and refuses every login', async password => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const hub = await hubWith({ password });
+    expect(warn.mock.calls.map(call => String(call[0]))).toContainEqual(expect.stringContaining('neither PASSWORD_HASH nor PASSWORD is set'));
+    await request(hub.app).get('/livez').expect(200);
+    const { agent, location, res } = await loginPage(hub);
+    expect(res.status).toBe(503);
+    expect(res.text).toContain('Sign-in is disabled');
+    const requestToken = /name="request" value="([^"]+)"/.exec(res.text)![1];
+    // The empty field that used to log in, and a guess: neither may approve.
+    for (const attempt of ['', 'anything']) {
+      const submitted = await agent.post(`${location}login`).type('form').send({ request: requestToken, password: attempt }).redirects(0);
+      expect(submitted.status).toBe(503);
+      expect(submitted.text).toContain('Sign-in is disabled');
+    }
+    expect(Object.keys(hub.store.listApprovals())).toEqual([]);
+    // Not a failed guess either: the fail2ban line is for people guessing.
+    expect(warn.mock.calls.map(call => String(call[0]))).not.toContainEqual(expect.stringContaining('authentication failure'));
   });
-  it('refuses a malformed hash even when a plaintext fallback is configured', async () => {
-    await expect(hubWith({ passwordHash: 'not-a-hash', password: 'valid-fallback' })).rejects.toThrow(/valid bcrypt hash/);
+
+  it('disables the login for a malformed hash instead of falling back to the plaintext password', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const hub = await hubWith({ passwordHash: 'not-a-hash-but-a-secret-value', password: 'valid-fallback' });
+    const warned = warn.mock.calls.map(call => String(call[0])).find(line => line.includes('PASSWORD_HASH'))!;
+    expect(warned).toContain('not a bcrypt hash');
+    expect(warned).not.toContain('not-a-hash-but-a-secret-value');
+    const { agent, location, res } = await loginPage(hub);
+    expect(res.status).toBe(503);
+    const requestToken = /name="request" value="([^"]+)"/.exec(res.text)![1];
+    const submitted = await agent.post(`${location}login`).type('form').send({ request: requestToken, password: 'valid-fallback' }).redirects(0);
+    expect(submitted.status).toBe(503);
+    expect(Object.keys(hub.store.listApprovals())).toEqual([]);
   });
-  it('accepts a hash without a plaintext password', async () => {
+
+  it('accepts a hash without a plaintext password and signs the operator in with it', async () => {
     const hub = await hubWith({ passwordHash: bcrypt.hashSync('test-password', 4) });
     await request(hub.app).get('/livez').expect(200);
+    const clientId = await registerPublicClient(hub.app, REDIRECT_URI);
+    const { code } = await authorizeInBrowser(hub.app, clientId, { password: 'test-password', redirectUri: REDIRECT_URI, resource: 'http://localhost/hub' });
+    expect(code).toBeTruthy();
+  });
+
+  it('decides the credential without ever comparing an empty buffer as equal', () => {
+    for (const options of [{}, { password: '' }, { password: '   ' }, { passwordHash: '' }, { passwordHash: '$2b$04$short' }]) {
+      const credential = operatorCredential(options);
+      expect(credential.enabled).toBe(false);
+      expect(credential.check('')).toBe(false);
+      expect(credential.problem).toBeDefined();
+    }
+    const plain = operatorCredential({ password: 'pw' });
+    expect(plain.enabled).toBe(true);
+    expect(plain.check('pw')).toBe(true);
+    expect(plain.check('')).toBe(false);
+    expect(plain.check('pw\u0000')).toBe(false);
+    const hashed = operatorCredential({ passwordHash: bcrypt.hashSync('pw', 4), password: 'other' });
+    expect(hashed.check('pw')).toBe(true);
+    expect(hashed.check('other')).toBe(false);
   });
 });
 

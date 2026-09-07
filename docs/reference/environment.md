@@ -9,7 +9,7 @@ described under [configuration](/guide/configuration#environment-expansion).
 | Variable | Description |
 |---|---|
 | `EXTERNAL_URL` | The public base URL exactly as clients see it, e.g. `https://mcp.example.net`. No trailing path. Every OAuth metadata document, redirect and resource identifier is derived from it. Missing → the process exits at startup. |
-| `PASSWORD_HASH` *or* `PASSWORD` | The login secret. `PASSWORD_HASH` takes precedence and is what you should use. |
+| `PASSWORD_HASH` *or* `PASSWORD` | The login secret. `PASSWORD_HASH` takes precedence and is what you should use. With neither set — or with a `PASSWORD_HASH` that is not a bcrypt hash — the hub starts with its login **disabled**: a startup warning, `503` on the sign-in page, and no way to approve a client. |
 
 Generate the hash with:
 

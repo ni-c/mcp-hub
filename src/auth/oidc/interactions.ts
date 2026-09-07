@@ -1,6 +1,3 @@
-import crypto from 'node:crypto';
-
-import bcrypt from 'bcryptjs';
 import express, { Router } from 'express';
 import type Provider from 'oidc-provider';
 
@@ -9,6 +6,7 @@ import { renderConsentPage } from '../consent-page.js';
 import { allowFormActionTo, authSecurityHeaders } from '../headers.js';
 import { renderLoginPage } from '../login-page.js';
 import { earlyRateLimit, LoginRateLimiter } from '../rate-limit.js';
+import { operatorCredential } from '../password.js';
 import { isLoopbackOnly } from '../redirect-uri.js';
 import { createSessionCookie, csrfToken, readSessionCookie, SESSION_COOKIE, SESSION_TTL_MS, verifyCsrfToken } from '../session.js';
 import type { AuthStore } from '../store.js';
@@ -70,13 +68,11 @@ export function createOidcInteractionRoutes(options: OidcInteractionOptions): Ro
   router.use(authSecurityHeaders);
   const secure = new URL(options.externalUrl).protocol === 'https:';
 
-  const checkPassword = (password: string): boolean => {
-    if (options.passwordHash) return bcrypt.compareSync(password, options.passwordHash);
-    if (!options.password) return false;
-    const expected = Buffer.from(options.password);
-    const given = Buffer.from(password);
-    return expected.length === given.length && crypto.timingSafeEqual(expected, given);
-  };
+  // Missing or unusable means nobody signs in — never that anybody does. The
+  // empty-buffer comparison this replaced let an empty form field through when
+  // no password was configured, which approved the client and minted tokens.
+  const credential = operatorCredential(options);
+  const disabledNotice = 'Sign-in is disabled: this hub has no usable operator password configured.';
 
   /** What the page may say about who is asking, and what it must not claim. */
   const identityOf = async (clientId: string, resource?: string) => {
@@ -110,7 +106,10 @@ export function createOidcInteractionRoutes(options: OidcInteractionOptions): Ro
         allowFormActionTo(res, redirectUri);
 
         if (details.prompt.name === 'login') {
-          res.status(200).type('html').send(renderLoginPage(details.uid, redirectUri, identity));
+          res
+            .status(credential.enabled ? 200 : 503)
+            .type('html')
+            .send(renderLoginPage(details.uid, redirectUri, identity, credential.enabled ? undefined : disabledNotice));
           return;
         }
         const session = readSessionCookie(req.headers.cookie, store.cookieSecret);
@@ -156,7 +155,15 @@ export function createOidcInteractionRoutes(options: OidcInteractionOptions): Ro
 
       const params = details.params as { client_id?: string; redirect_uri?: string; resource?: string };
       const redirectUri = String(params.redirect_uri ?? '');
-      if (typeof password !== 'string' || !checkPassword(password)) {
+      if (!credential.enabled) {
+        // Not a failed guess: there is nothing to guess. Counting it would let
+        // a misconfigured hub fill the fail2ban log with its own visitors.
+        const identity = await identityOf(String(params.client_id), params.resource);
+        allowFormActionTo(res, redirectUri);
+        res.status(503).type('html').send(renderLoginPage(details.uid, redirectUri, identity, disabledNotice));
+        return;
+      }
+      if (typeof password !== 'string' || !credential.check(password)) {
         rateLimiter.recordFailure(ip);
         console.warn(`mcp-hub: authentication failure from ${logSafe(ip)}`);
         const identity = await identityOf(String(params.client_id), params.resource);

@@ -237,9 +237,12 @@ USER node
 
 ### Environment
 
-The HTTP hub refuses to start without a non-empty `PASSWORD` or a valid bcrypt
-`PASSWORD_HASH`. A configured hash takes precedence; an invalid hash is a startup
-error. The local `--stdio` mode does not require either variable.
+Without a non-empty `PASSWORD` or a bcrypt `PASSWORD_HASH` the HTTP hub still
+starts, but its login is disabled: the startup log says so, the sign-in page
+answers `503` with the reason, and no client can be approved — so no token can
+be issued. A configured hash takes precedence, and a hash that is not a bcrypt
+hash disables the login the same way rather than falling back to `PASSWORD`.
+The local `--stdio` mode uses neither variable.
 
 | Variable                        | Required            | Description                                                                                                                   |
 | ------------------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
