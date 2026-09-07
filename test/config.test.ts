@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseConfig, diffConfigs, ConfigError } from '../src/config.js';
+import { parseConfig, diffConfigs, ConfigError, type StdioServerConfig } from '../src/config.js';
 
 const env = { PAPERLESS_TOKEN: 'secret123' };
 
@@ -61,7 +61,7 @@ describe('parseConfig', () => {
 
   it('accepts explicit type stdio', () => {
     const config = parseConfig(JSON.stringify({ mcpServers: { a: { type: 'stdio', command: 'x' } } }), env);
-    expect(config.get('a')?.command).toBe('x');
+    expect((config.get('a') as StdioServerConfig).command).toBe('x');
   });
 
   it.each([
@@ -150,7 +150,7 @@ describe('parseConfig', () => {
         JSON.stringify(remote({ mode: 'cimd', grant: 'client_credentials', clientAuth: 'private_key_jwt' })),
         env
       );
-      const oauth = (config.get('a') as { oauth: Record<string, unknown> }).oauth;
+      const oauth = (config.get('a') as unknown as { oauth: Record<string, unknown> }).oauth;
       expect(oauth.clientAuth).toBe('private_key_jwt');
       expect('clientSecret' in oauth).toBe(false);
     });

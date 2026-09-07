@@ -34,7 +34,7 @@ function pkcePair() {
 }
 
 async function obtainToken(
-  app: Express.Application,
+  app: express.Express,
   resource?: string,
   displayedResource = resource // the login page shows the canonical form
 ): Promise<{ access: string; refresh: string; clientId: string }> {

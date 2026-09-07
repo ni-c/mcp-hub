@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { ConfigWatcher, loadConfig, type HubConfig, type ConfigDiff } from '../src/config.js';
+import { ConfigWatcher, loadConfig, type HubConfig, type ConfigDiff, type StdioServerConfig } from '../src/config.js';
 import { SecretStore, validateConfigSecrets } from '../src/docker-proxy/secrets.js';
 
 let tmpDir: string;
@@ -39,7 +39,7 @@ describe('ConfigWatcher', () => {
     write({ a: { command: 'x' }, b: { command: 'y' } });
     const { config, diff } = await pending;
     expect(diff).toEqual({ added: ['b'], removed: [], changed: [] });
-    expect(config.get('b')?.command).toBe('y');
+    expect((config.get('b') as StdioServerConfig).command).toBe('y');
   });
 
   it('sees a rename-into-place save (how most editors write)', async () => {
@@ -52,7 +52,7 @@ describe('ConfigWatcher', () => {
     fs.renameSync(staging, configPath);
     const { diff } = await pending;
     expect(diff.changed).toEqual(['a']);
-    expect(watcher.current.get('a')?.command).toBe('renamed');
+    expect((watcher.current.get('a') as StdioServerConfig).command).toBe('renamed');
   });
 
   it('survives a broken edit and applies the next valid one', async () => {

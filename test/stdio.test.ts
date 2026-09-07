@@ -108,13 +108,13 @@ describe('stdio mode', () => {
     await waitFor(() => hub.supervisor.get('everything')?.state === 'up');
 
     const listed = (await client.callTool({ name: 'list_servers', arguments: {} })) as CallToolResult;
-    expect(listed.content[0].text).toContain('everything');
+    expect((listed.content[0] as { text: string }).text).toContain('everything');
 
     const echoed = (await client.callTool({
       name: 'call_tool',
       arguments: { server: 'everything', tool: 'echo', arguments: { message: 'over stdio' } }
     })) as CallToolResult;
-    expect(echoed.content[0].text).toContain('over stdio');
+    expect((echoed.content[0] as { text: string }).text).toContain('over stdio');
     await client.close();
   });
 
@@ -131,15 +131,15 @@ describe('stdio mode', () => {
     await waitFor(() => (hub.supervisor.get('everything')?.tools.length ?? 0) > 0);
 
     const listed = (await client.callTool({ name: 'list_tools', arguments: { server: 'everything' } })) as CallToolResult;
-    expect(listed.content[0].text).toContain('echo');
-    expect(listed.content[0].text).not.toContain('get-env');
+    expect((listed.content[0] as { text: string }).text).toContain('echo');
+    expect((listed.content[0] as { text: string }).text).not.toContain('get-env');
 
     const refused = (await client.callTool({
       name: 'call_tool',
       arguments: { server: 'everything', tool: 'get-env', arguments: {} }
     })) as CallToolResult;
     expect(refused.isError).toBe(true);
-    expect(refused.content[0].text).toContain('Unknown tool');
+    expect((refused.content[0] as { text: string }).text).toContain('Unknown tool');
     await client.close();
   });
 
@@ -190,7 +190,7 @@ describe('stdio mode', () => {
       name: 'call_tool',
       arguments: { server: 'everything', tool: 'echo', arguments: { message: 'wake up' } }
     })) as CallToolResult;
-    expect(echoed.content[0].text).toContain('wake up');
+    expect((echoed.content[0] as { text: string }).text).toContain('wake up');
     expect(hub.supervisor.get('everything')!.state).toBe('up');
     await client.close();
   }, 30_000);
@@ -245,7 +245,7 @@ describe('the --stdio entrypoint', () => {
       const lines = stdout.split('\n').filter(Boolean);
       for (const line of lines) expect(() => JSON.parse(line) as unknown).not.toThrow();
       expect(lines).toHaveLength(2);
-      expect(JSON.parse(lines[1]).result.content[0].text).toContain('everything');
+      expect((JSON.parse(lines[1]).result.content[0] as { text: string }).text).toContain('everything');
       expect(stderr).toContain('serving the hub aggregate over stdio');
     } finally {
       child.kill();

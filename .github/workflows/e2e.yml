@@ -89,9 +89,11 @@ jobs:
       # linux/amd64 only, implicitly: arm64 is covered by container-scan under
       # QEMU, and a QEMU-emulated compose stack running Node and a dozen
       # children is too slow and too flaky to be worth the coverage.
+      # The same daily apt cache buster ci.yml passes, or the nightly tests an
+      # image whose apt layer is as old as the runner's build cache.
       - name: Build the image under test
         if: matrix.tier == 'docker'
-        run: docker build -t mcp-hub:e2e .
+        run: docker build --build-arg "APT_SECURITY_EPOCH=$(date -u +%Y-%m-%d)" -t mcp-hub:e2e .
 
       - run: npm run test:e2e -- --reporter=default --reporter=junit --outputFile=junit-${{ matrix.tier }}.xml
         env:

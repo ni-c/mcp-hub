@@ -43,6 +43,12 @@ jobs:
       # green. Once: the check is independent of the Node version.
       - run: npm run typecheck:e2e
         if: matrix.node-version == 24
+      # The unit tree was never type-checked at all: vitest transpiles, so a
+      # changed function head in src/ fell over at run time in the test that
+      # called it, and a test that read a field the type does not have was fine
+      # with everybody. Same shape as the e2e check, once per matrix.
+      - run: npm run typecheck:test
+        if: matrix.node-version == 24
       - run: npm test
         if: matrix.node-version != 24
       - run: npm run test:coverage
@@ -57,6 +63,20 @@ jobs:
         with:
           name: coverage
           path: coverage/
+
+  # What a pull request *changes* in the dependency tree, against the advisory
+  # database — npm audit below sees the tree as it is and cannot tell a bump
+  # that introduced a vulnerable release from one that has always been there.
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high
 
   audit:
     runs-on: ubuntu-latest

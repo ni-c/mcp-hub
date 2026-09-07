@@ -52,6 +52,7 @@
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "test:e2e:watch": "vitest --config vitest.e2e.config.ts",
     "typecheck:e2e": "tsc -p tsconfig.e2e.json",
+    "typecheck:test": "tsc -p tsconfig.test.json",
     "e2e:record": "tsx e2e/tools/record.ts",
     "e2e:curate": "tsx e2e/tools/curate.ts",
     "prepublishOnly": "npm test && npm run build",
