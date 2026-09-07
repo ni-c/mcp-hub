@@ -54,6 +54,9 @@ async function connect(hub: ReturnType<typeof startHub>): Promise<Client> {
   await hub.build('modern').connect(serverTransport);
   const client = new Client({ name: 'vitest', version: '1.0.0' });
   await client.connect(clientTransport);
+  // Same reason as the HTTP helper: the schema check on the success path runs
+  // only in a client that has listed the tools.
+  await client.listTools();
   return client;
 }
 

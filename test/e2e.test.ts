@@ -76,6 +76,10 @@ async function mcpClient(pathname: string, token: string): Promise<Client> {
     requestInit: { headers: { Authorization: `Bearer ${token}` } }
   });
   await client.connect(transport);
+  // Listed once on every connection, so the SDK holds each tool's outputSchema
+  // and validates the structuredContent of every successful call below — the
+  // client-side check a callTool without a prior list never runs.
+  await client.listTools();
   return client;
 }
 
