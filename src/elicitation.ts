@@ -187,7 +187,7 @@ export function openRequestState(token: string, secret: string, expected: StateB
  * a person. Newline and tab survive — a prompt may legitimately have them.
  */
 // eslint-disable-next-line no-control-regex -- matching them is the point
-const UNSAFE_TEXT = /[ --​-‏‪-‮⁠⁦-⁩﻿]/g;
+const UNSAFE_TEXT = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f​-‏‪-‮⁠⁦-⁩﻿]/g;
 
 export function sanitiseText(text: string): string {
   return text.replace(UNSAFE_TEXT, '');
@@ -231,7 +231,10 @@ export interface SanitisedRequests {
  *   could visually undo that prefix.
  */
 export function sanitiseInputRequests(requests: InputRequests | undefined, serverName: string): SanitisedRequests {
-  const out: Record<string, unknown> = {};
+  // Null prototype: the keys are the child's, and `out['__proto__'] = …` on an
+  // ordinary object would swap the prototype for the child's request instead
+  // of forwarding it — silently, with `Object.keys` none the wiser.
+  const out: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
   const dropped: string[] = [];
   const safeName = sanitiseText(serverName);
 
@@ -244,13 +247,36 @@ export function sanitiseInputRequests(requests: InputRequests | undefined, serve
     const params = { ...(request as { params?: Record<string, unknown> }).params };
     delete params._meta;
 
+    // A URL-mode elicitation asks the client to open a page. The hub vouches
+    // for the attribution line above it, so the page it points at has to be
+    // one a browser reaches over TLS — not `javascript:`, not a plain-http
+    // host on the way, and not a scheme the client's platform hands to some
+    // other program. Refused as a whole rather than repaired: a question
+    // without its page is not the question that was asked.
+    if (params.mode === 'url' && !isHttpsUrl(params.url)) {
+      dropped.push(key);
+      continue;
+    }
+
     const message = typeof params.message === 'string' ? params.message : '';
     params.message = clampBytes(`Server "${safeName}" asks:\n\n${sanitiseText(message)}`, MAX_MESSAGE_BYTES);
 
     out[key] = { method: ELICIT_METHOD, params };
   }
 
-  return { requests: out as InputRequests, dropped };
+  // Handed on as an ordinary object: the SDK serialises it, and nothing beyond
+  // this function should have to know about the prototype.
+  return { requests: { ...out } as InputRequests, dropped };
+}
+
+function isHttpsUrl(value: unknown): boolean {
+  if (typeof value !== 'string' || value.length > 8192) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && !url.username && !url.password;
+  } catch {
+    return false;
+  }
 }
 
 /** True when the whole map is small enough to be worth forwarding at all. */

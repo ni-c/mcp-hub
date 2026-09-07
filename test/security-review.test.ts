@@ -8,6 +8,8 @@ import fc from 'fast-check';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createHub } from '../src/index.js';
 import { operatorCredential } from '../src/auth/password.js';
+import { parseEnvFile } from '../src/docker-proxy/secrets.js';
+import { sanitiseInputRequests } from '../src/elicitation.js';
 import { authorizeInBrowser, registerPublicClient } from './auth-flow.js';
 
 const REDIRECT_URI = 'https://client.example/cb';
@@ -305,5 +307,59 @@ describe('prototype names are not identifiers', () => {
     expect(token.body.error).not.toBe('server_error');
     await request(hub.app).get(`/register/${name}`).set('Authorization', 'Bearer x').expect(401);
     expect(failed.mock.calls.map(call => String(call[0]))).not.toContainEqual(expect.stringContaining('authorization server failed'));
+  });
+});
+
+describe('a prototype name in a child-chosen key', () => {
+  it('keeps a secrets variable called __proto__ instead of losing it', () => {
+    const parsed = parseEnvFile('__proto__=evil\nA=b\nconstructor=c\n');
+    expect(Object.keys(parsed).toSorted()).toEqual(['A', '__proto__', 'constructor']);
+    expect(Object.hasOwn(parsed, '__proto__')).toBe(true);
+    expect(parsed.A).toBe('b');
+    expect(() => parseEnvFile('__proto__=1\n__proto__=2\n')).toThrow(/duplicates/);
+  });
+
+  it('forwards an elicitation keyed __proto__ instead of swallowing it', () => {
+    const requests = JSON.parse(
+      '{"__proto__": {"method": "elicitation/create", "params": {"message": "first"}}, "ok": {"method": "elicitation/create", "params": {"message": "second"}}}'
+    ) as never;
+    const { requests: out, dropped } = sanitiseInputRequests(requests, 'srv');
+    expect(dropped).toEqual([]);
+    expect(Object.keys(out).toSorted()).toEqual(['__proto__', 'ok']);
+    expect(Object.getPrototypeOf(out)).toBe(Object.prototype);
+    // `out['__proto__']` would answer the prototype; the own property is the
+    // one the wire carries, so it is read the way JSON.stringify reads it.
+    const wire = JSON.parse(JSON.stringify(out)) as Record<string, unknown>;
+    const forwarded = Object.getOwnPropertyDescriptor(wire, '__proto__')?.value as { params: { message: string } };
+    expect(forwarded.params.message).toBe('Server "srv" asks:\n\nfirst');
+  });
+});
+
+const urlElicitation = (target: unknown) =>
+  ({ open: { method: 'elicitation/create', params: { mode: 'url', message: 'Sign in', elicitationId: 'e1', url: target } } }) as never;
+
+describe('a URL-mode elicitation names a page the hub can vouch for', () => {
+  const cases: [string, unknown][] = [
+    ['javascript:alert(1)', 'javascript:alert(1)'],
+    ['http://phish.example/', 'http://phish.example/'],
+    ['file:///etc/passwd', 'file:///etc/passwd'],
+    ['com.example.app:/cb', 'com.example.app:/cb'],
+    ['https://user:pw@x.example/', 'https://user:pw@x.example/'],
+    ['a number', 42],
+    ['nothing', undefined],
+    ['a 9 kB address', 'https://' + 'a'.repeat(9000)]
+  ];
+  it.each(cases)('drops %s', (_label, target) => {
+      const { requests, dropped } = sanitiseInputRequests(urlElicitation(target), 'srv');
+      expect(Object.keys(requests)).toEqual([]);
+      expect(dropped).toEqual(['open']);
+  });
+
+  it('carries an https page, attributed', () => {
+    const { requests, dropped } = sanitiseInputRequests(urlElicitation('https://idp.example/login?x=1'), 'srv');
+    expect(dropped).toEqual([]);
+    const forwarded = (requests as Record<string, { params: Record<string, unknown> }>).open.params;
+    expect(forwarded.url).toBe('https://idp.example/login?x=1');
+    expect(forwarded.message).toBe('Server "srv" asks:\n\nSign in');
   });
 });
