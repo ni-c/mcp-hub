@@ -39,7 +39,10 @@ RUN npm install -g npm@12.0.2 \
     && tar -xzf /tmp/brace-expansion-5.0.9.tgz --strip-components=1 -C /usr/local/lib/node_modules/npm/node_modules/brace-expansion \
     && tar -xzf /tmp/ip-address-10.3.1.tgz --strip-components=1 -C /usr/local/lib/node_modules/npm/node_modules/ip-address \
     && tar -xzf /tmp/tar-7.5.22.tgz --strip-components=1 -C /usr/local/lib/node_modules/npm/node_modules/tar \
-    && rm -f /tmp/brace-expansion-5.0.9.tgz /tmp/ip-address-10.3.1.tgz /tmp/tar-7.5.22.tgz
+    && rm -f /tmp/brace-expansion-5.0.9.tgz /tmp/ip-address-10.3.1.tgz /tmp/tar-7.5.22.tgz \
+    # Nothing here runs yarn or corepack, and each is a package manager with
+    # its own dependency tree for the scanner to find something in one day.
+    && rm -rf /opt/yarn-v* /usr/local/bin/yarn /usr/local/bin/yarnpkg /usr/local/lib/node_modules/corepack /usr/local/bin/corepack
 
 # A Debian security update reaches this image only if this layer is actually
 # rebuilt, and on its own it never is: the base digest is pinned and the apt
@@ -64,7 +67,9 @@ LABEL io.modelcontextprotocol.server.name="io.github.ni-c/mcp-hub"
 WORKDIR /app
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
-COPY package.json package-lock.json ./
+# Only package.json: the version is read from it at runtime, the lockfile is
+# read by nothing once the install above has happened.
+COPY package.json ./
 
 ENV NODE_ENV=production \
     PORT=80 \
