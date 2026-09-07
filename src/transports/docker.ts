@@ -3,7 +3,7 @@ import type { Transport, JSONRPCMessage } from '@modelcontextprotocol/server';
 import type { DockerServerConfig } from '../config.js';
 import { buildCreateRequest, containerName } from '../sandbox/container-spec.js';
 import { DockerClient } from '../sandbox/docker-client.js';
-import { StreamTransport } from './stream.js';
+import { StreamTransport, setTransportHandlers } from './stream.js';
 
 /** Guards against a corrupt header turning into a multi-gigabyte allocation. */
 const MAX_FRAME_BYTES = 16 * 1024 * 1024;
@@ -96,13 +96,15 @@ export class DockerTransport implements Transport {
     this.stream = stream;
 
     const inner = new StreamTransport(stream, false);
-    inner.onmessage = message => this.onmessage?.(message);
-    inner.onerror = error => this.onerror?.(error);
-    inner.onclose = () => {
-      this.onclose?.();
-      // Best effort: with AutoRemove the daemon usually got there first.
-      if (!this.closing) void this.client.removeContainer(name).catch(() => {});
-    };
+    setTransportHandlers(inner, {
+      onmessage: message => this.onmessage?.(message),
+      onerror: error => this.onerror?.(error),
+      onclose: () => {
+        this.onclose?.();
+        // Best effort: with AutoRemove the daemon usually got there first.
+        if (!this.closing) void this.client.removeContainer(name).catch(() => {});
+      }
+    });
     await inner.start();
     this.inner = inner;
 

@@ -42,13 +42,16 @@ export interface StdioHubOptions {
  */
 export function redirectStdoutLogging(): () => void {
   const original = { log: console.log, info: console.info };
-  const toStderr = (...args: unknown[]) => console.error(...args);
   console.log = toStderr;
   console.info = toStderr;
   return () => {
     console.log = original.log;
     console.info = original.info;
   };
+}
+
+function toStderr(...args: unknown[]): void {
+  console.error(...args);
 }
 
 /**

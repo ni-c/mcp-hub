@@ -7,6 +7,7 @@ import type { JSONRPCMessage } from '@modelcontextprotocol/server';
 import { parseConfig, type DockerServerConfig, type HubConfig } from '../src/config.js';
 import { DockerClient } from '../src/sandbox/docker-client.js';
 import { DockerTransport } from '../src/transports/docker.js';
+import { setTransportHandlers } from '../src/transports/stream.js';
 import { createDockerProxy } from '../src/docker-proxy/server.js';
 import { buildCreateRequest } from '../src/sandbox/container-spec.js';
 
@@ -69,7 +70,7 @@ describe.skipIf(!hasDocker)('a real container over the Docker API', () => {
   const echoOnce = async (client: DockerClient) => {
     const transport = new DockerTransport('dockertest', config.get('dockertest') as DockerServerConfig, client, () => {});
     const messages: JSONRPCMessage[] = [];
-    transport.onmessage = message => messages.push(message);
+    setTransportHandlers(transport, { onmessage: message => messages.push(message) });
     await transport.start();
     await transport.send(ping);
     for (let i = 0; i < 100 && messages.length === 0; i++) await new Promise(resolve => setTimeout(resolve, 50));

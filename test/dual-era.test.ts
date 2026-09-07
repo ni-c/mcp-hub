@@ -97,8 +97,8 @@ describe('both protocol eras from one endpoint', () => {
     const legacy = await connect('/everything/mcp', 'legacy');
     const modern = await connect('/everything/mcp', 'auto');
 
-    const legacyNames = (await legacy.listTools()).tools.map(t => t.name).sort();
-    const modernNames = (await modern.listTools()).tools.map(t => t.name).sort();
+    const legacyNames = (await legacy.listTools()).tools.map(t => t.name).toSorted();
+    const modernNames = (await modern.listTools()).tools.map(t => t.name).toSorted();
 
     expect(legacyNames.length).toBeGreaterThan(0);
     expect(modernNames).toEqual(legacyNames);
@@ -114,8 +114,8 @@ describe('both protocol eras from one endpoint', () => {
     const legacy = await connect('/hub', 'legacy');
     const modern = await connect('/hub', 'auto');
 
-    const legacyNames = (await legacy.listTools()).tools.map(t => t.name).sort();
-    const modernNames = (await modern.listTools()).tools.map(t => t.name).sort();
+    const legacyNames = (await legacy.listTools()).tools.map(t => t.name).toSorted();
+    const modernNames = (await modern.listTools()).tools.map(t => t.name).toSorted();
 
     expect(legacyNames).toContain('list_servers');
     expect(modernNames).toEqual(legacyNames);
@@ -190,9 +190,9 @@ describe('both protocol eras from one endpoint', () => {
     const legacy = await connect('/everything/mcp', 'legacy');
     const modern = await connect('/everything/mcp', 'auto');
 
-    const names = (await legacy.listPrompts()).prompts.map(p => p.name).sort();
+    const names = (await legacy.listPrompts()).prompts.map(p => p.name).toSorted();
     expect(names.length).toBeGreaterThan(0);
-    expect((await modern.listPrompts()).prompts.map(p => p.name).sort()).toEqual(names);
+    expect((await modern.listPrompts()).prompts.map(p => p.name).toSorted()).toEqual(names);
 
     const args = { name: 'args-prompt', arguments: { city: 'Luxembourg' } };
     expect(JSON.stringify((await modern.getPrompt(args)).messages)).toBe(

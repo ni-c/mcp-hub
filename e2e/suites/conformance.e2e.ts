@@ -345,7 +345,7 @@ describe.runIf(RUNS_HERE)('the aggregate as a wire contract', () => {
   it('exposes exactly six tools, named the way the documentation names them', async () => {
     const response = await wire.rpc('/hub', { id: 1, method: 'tools/list', params: {} }, { token: hubToken });
     const body = (response.json ?? response.events?.[0]?.json) as { result: { tools: Array<{ name: string }> } };
-    expect(body.result.tools.map(tool => tool.name).sort()).toEqual([
+    expect(body.result.tools.map(tool => tool.name).toSorted()).toEqual([
       'call_tool',
       'get_tool_schema',
       'list_servers',

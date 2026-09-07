@@ -478,25 +478,25 @@ describe('private_key_jwt outbound', () => {
   }, 30_000);
 });
 
-describe('refreshing', () => {
-  /**
-   * Drives a full login and hands back the hub's own manager.
-   *
-   * Deliberately the registry's instance rather than a fresh one: single flight
-   * is per manager, and the registry is what guarantees there is exactly one per
-   * server. A test that built its own would be measuring two independent
-   * managers and would see two refreshes — correctly.
-   */
-  async function loggedIn(hub: Awaited<ReturnType<typeof createHub>>): Promise<UpstreamAuth> {
-    const auth = hub.upstreamAuth.get('saas')!;
-    const { authorizationUrl } = await startUpstreamLogin(hub.store, auth);
-    const state = new URL(authorizationUrl).searchParams.get('state')!;
-    const { code } = (await (await fetch(authorizationUrl)).json()) as { code: string };
-    const cookie = `mcp_hub_session=${encodeURIComponent(createSessionCookie(hub.store.cookieSecret))}`;
-    await request(hub.app).get('/upstream/callback').set('Cookie', cookie).query({ code, state }).expect(200);
-    return auth;
-  }
+/**
+ * Drives a full login and hands back the hub's own manager.
+ *
+ * Deliberately the registry's instance rather than a fresh one: single flight
+ * is per manager, and the registry is what guarantees there is exactly one per
+ * server. A test that built its own would be measuring two independent
+ * managers and would see two refreshes — correctly.
+ */
+async function loggedIn(hub: Awaited<ReturnType<typeof createHub>>): Promise<UpstreamAuth> {
+  const auth = hub.upstreamAuth.get('saas')!;
+  const { authorizationUrl } = await startUpstreamLogin(hub.store, auth);
+  const state = new URL(authorizationUrl).searchParams.get('state')!;
+  const { code } = (await (await fetch(authorizationUrl)).json()) as { code: string };
+  const cookie = `mcp_hub_session=${encodeURIComponent(createSessionCookie(hub.store.cookieSecret))}`;
+  await request(hub.app).get('/upstream/callback').set('Cookie', cookie).query({ code, state }).expect(200);
+  return auth;
+}
 
+describe('refreshing', () => {
   it('spends the refresh token exactly once when requests collide', async () => {
     const { hub } = await makeHub({ mode: 'dcr', grant: 'authorization_code' });
     try {
@@ -570,12 +570,12 @@ describe('refreshing', () => {
   }, 30_000);
 });
 
-describe('the client identity the hub presents', () => {
-  const identity = (oauth: Record<string, unknown>) =>
-    ({ serverName: 'saas', serverUrl: 'https://saas.example/mcp', oauth, externalUrl: 'https://hub.example/' }) as never;
+const identityWith = (oauth: Record<string, unknown>) =>
+  ({ serverName: 'saas', serverUrl: 'https://saas.example/mcp', oauth, externalUrl: 'https://hub.example/' }) as never;
 
+describe('the client identity the hub presents', () => {
   it('describes an interactive client with the callback as its redirect', () => {
-    const metadata = hubClientMetadata(identity({ mode: 'dcr', grant: 'authorization_code', scopes: ['a', 'b'] }));
+    const metadata = hubClientMetadata(identityWith({ mode: 'dcr', grant: 'authorization_code', scopes: ['a', 'b'] }));
     expect(metadata.redirect_uris).toEqual(['https://hub.example/upstream/callback']);
     expect(metadata.grant_types).toEqual(['authorization_code', 'refresh_token']);
     // The SDK reads the scope from here and nowhere else on the token request.
@@ -583,7 +583,7 @@ describe('the client identity the hub presents', () => {
   });
 
   it('describes a machine client with no redirect at all', () => {
-    const metadata = hubClientMetadata(identity({ mode: 'static', clientId: 'x', grant: 'client_credentials', scopes: [] }));
+    const metadata = hubClientMetadata(identityWith({ mode: 'static', clientId: 'x', grant: 'client_credentials', scopes: [] }));
     expect(metadata.redirect_uris).toEqual([]);
     expect(metadata.grant_types).toEqual(['client_credentials']);
     expect(metadata.scope).toBeUndefined();
@@ -591,12 +591,12 @@ describe('the client identity the hub presents', () => {
 
   it('changes fingerprint when the identity moves, but not when a header does', () => {
     const base = { mode: 'dcr', grant: 'authorization_code', scopes: ['a'] };
-    const first = credentialFingerprint(identity(base));
-    expect(credentialFingerprint(identity({ ...base, scopes: ['a'] }))).toBe(first);
+    const first = credentialFingerprint(identityWith(base));
+    expect(credentialFingerprint(identityWith({ ...base, scopes: ['a'] }))).toBe(first);
     // Order is not meaning.
-    expect(credentialFingerprint(identity({ ...base, scopes: ['a'] }))).toBe(first);
-    expect(credentialFingerprint(identity({ ...base, scopes: ['a', 'b'] }))).not.toBe(first);
-    expect(credentialFingerprint(identity({ ...base, grant: 'client_credentials' }))).not.toBe(first);
+    expect(credentialFingerprint(identityWith({ ...base, scopes: ['a'] }))).toBe(first);
+    expect(credentialFingerprint(identityWith({ ...base, scopes: ['a', 'b'] }))).not.toBe(first);
+    expect(credentialFingerprint(identityWith({ ...base, grant: 'client_credentials' }))).not.toBe(first);
   });
 });
 

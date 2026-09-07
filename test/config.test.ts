@@ -3,6 +3,10 @@ import { parseConfig, diffConfigs, ConfigError } from '../src/config.js';
 
 const env = { PAPERLESS_TOKEN: 'secret123' };
 
+const remote = (oauth: unknown, extra: Record<string, unknown> = {}) => ({
+  mcpServers: { a: { type: 'http', url: 'https://example.com/mcp', oauth, ...extra } }
+});
+
 describe('parseConfig', () => {
   it('parses a Claude-Code-style mcpServers config 1:1', () => {
     const config = parseConfig(
@@ -97,10 +101,6 @@ describe('parseConfig', () => {
   });
 
   describe('upstream OAuth', () => {
-    const remote = (oauth: unknown, extra: Record<string, unknown> = {}) => ({
-      mcpServers: { a: { type: 'http', url: 'https://example.com/mcp', oauth, ...extra } }
-    });
-
     it('accepts a static client with a secret from the environment', () => {
       const config = parseConfig(
         JSON.stringify(remote({ mode: 'static', clientId: 'abc', clientSecret: '${PAPERLESS_TOKEN}', grant: 'client_credentials', scopes: ['read'] })),

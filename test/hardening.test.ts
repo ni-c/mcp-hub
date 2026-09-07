@@ -196,23 +196,23 @@ describe('LoginRateLimiter', () => {
   });
 });
 
-describe('ClientRequestGate', () => {
-  /** Collects the finish/close handlers so a test can end the request itself. */
-  const stubResponse = () => {
-    const listeners = new Map<string, () => void>();
-    const body: Record<string, unknown>[] = [];
-    const response = {
-      once: (event: string, handler: () => void) => listeners.set(event, handler),
-      set: () => response,
-      status: () => response,
-      json: (payload: Record<string, unknown>) => {
-        body.push(payload);
-        return response;
-      }
-    } as unknown as Response;
-    return { response, listeners, body };
-  };
+/** Collects the finish/close handlers so a test can end the request itself. */
+const stubResponse = () => {
+  const listeners = new Map<string, () => void>();
+  const body: Record<string, unknown>[] = [];
+  const response = {
+    once: (event: string, handler: () => void) => listeners.set(event, handler),
+    set: () => response,
+    status: () => response,
+    json: (payload: Record<string, unknown>) => {
+      body.push(payload);
+      return response;
+    }
+  } as unknown as Response;
+  return { response, listeners, body };
+};
 
+describe('ClientRequestGate', () => {
   it('limits concurrent requests per OAuth client and releases on finish', () => {
     const gate = new ClientRequestGate(10, 1, 10);
     const { response, listeners } = stubResponse();
@@ -408,6 +408,28 @@ describe('AuthStore', () => {
   });
 });
 
+/** Drives the middleware with just enough of an Express request/response. */
+function call(middleware: ReturnType<typeof earlyRateLimit>, ip: string) {
+  const headers: Record<string, string> = {};
+  let status = 0;
+  let passed = false;
+  const res = {
+    set: (key: string, value: string) => {
+      headers[key.toLowerCase()] = value;
+      return res;
+    },
+    status: (code: number) => {
+      status = code;
+      return res;
+    },
+    json: () => res
+  };
+  middleware({ ip } as Request, res as unknown as Response, (() => {
+    passed = true;
+  }) as NextFunction);
+  return { status, headers, passed };
+}
+
 /**
  * The admin CLI is a separate process against the same /data volume, so two
  * AuthStore instances on one directory is not an exotic case — it is the
@@ -415,28 +437,6 @@ describe('AuthStore', () => {
  * `cli` for one mcp-hub-admin invocation.
  */
 describe('earlyRateLimit', () => {
-  /** Drives the middleware with just enough of an Express request/response. */
-  function call(middleware: ReturnType<typeof earlyRateLimit>, ip: string) {
-    const headers: Record<string, string> = {};
-    let status = 0;
-    let passed = false;
-    const res = {
-      set: (key: string, value: string) => {
-        headers[key.toLowerCase()] = value;
-        return res;
-      },
-      status: (code: number) => {
-        status = code;
-        return res;
-      },
-      json: () => res
-    };
-    middleware({ ip } as Request, res as unknown as Response, (() => {
-      passed = true;
-    }) as NextFunction);
-    return { status, headers, passed };
-  }
-
   it('lets a caller through up to its budget and then says when to come back', () => {
     const middleware = earlyRateLimit(60_000, 2, 100);
     expect(call(middleware, '203.0.113.1').passed).toBe(true);
@@ -623,15 +623,15 @@ describe('withoutPhantomSecret', () => {
   });
 });
 
+const register = (store: AuthStore, id: string, token?: string) =>
+  store.addClient({ client_id: id, redirect_uris: ['https://x.test/cb'] }, token);
+
 describe('client registration lifecycle', () => {
   const HOUR = 3600;
   const DAY = 86_400;
   // Real windows, so the rules are exercised as configured rather than as
   // degenerate zero-length ones.
   const limits = { maxClients: 5, pendingTtlSeconds: 24 * HOUR, inactiveSeconds: 90 * DAY };
-  const register = (store: AuthStore, id: string, token?: string) =>
-    store.addClient({ client_id: id, redirect_uris: ['https://x.test/cb'] }, token);
-
   afterEach(() => {
     vi.useRealTimers();
   });
@@ -812,20 +812,40 @@ describe('client registration lifecycle', () => {
   });
 });
 
-describe('AuthStore across processes', () => {
-  const record = (label: string) => ({
-    label,
-    resource: 'https://hub.test/hub',
-    createdAt: Math.floor(Date.now() / 1000),
-    expiresAt: Math.floor(Date.now() / 1000) + 3600
+const tokenRecord = (label: string) => ({
+  label,
+  resource: 'https://hub.test/hub',
+  createdAt: Math.floor(Date.now() / 1000),
+  expiresAt: Math.floor(Date.now() / 1000) + 3600
+});
+
+const runWriter = (dir: string, mode: 'create' | 'revoke', prefix: string) =>
+  new Promise<void>((resolve, reject) => {
+    const source = `
+      import { AuthStore } from './src/auth/store.ts';
+      const [dir, mode, prefix] = process.argv.slice(1);
+      const store = new AuthStore(dir);
+      const now = Math.floor(Date.now() / 1000);
+      if (mode === 'revoke') store.revokeApiToken('doomed');
+      else for (let i = 0; i < 50; i++) store.saveApiToken(prefix + i, { label: prefix, resource: 'https://hub.test/hub', createdAt: now, expiresAt: now + 3600 });
+    `;
+    const child = spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', source, dir, mode, prefix], {
+      cwd: path.resolve('.'),
+      stdio: ['ignore', 'ignore', 'pipe']
+    });
+    let stderr = '';
+    child.stderr.on('data', chunk => (stderr += chunk));
+    child.on('error', reject);
+    child.on('exit', code => (code === 0 ? resolve() : reject(new Error(`child exited ${code}: ${stderr}`))));
   });
 
+describe('AuthStore across processes', () => {
   it('sees an API token minted by another process', () => {
     const dir = tmpDir();
     const hub = new AuthStore(dir);
     const cli = new AuthStore(dir);
 
-    cli.saveApiToken('minted-by-cli', record('cli'));
+    cli.saveApiToken('minted-by-cli', tokenRecord('cli'));
 
     // Without this the hub answers "Access token has been revoked" for a token
     // it was never told about, until someone restarts the container.
@@ -835,7 +855,7 @@ describe('AuthStore across processes', () => {
   it('honours an API token revoked by another process', () => {
     const dir = tmpDir();
     const hub = new AuthStore(dir);
-    hub.saveApiToken('doomed', record('doomed'));
+    hub.saveApiToken('doomed', tokenRecord('doomed'));
 
     expect(new AuthStore(dir).revokeApiToken('doomed')).toBe(true);
 
@@ -847,12 +867,12 @@ describe('AuthStore across processes', () => {
   it('does not resurrect a revoked token on its next unrelated write', () => {
     const dir = tmpDir();
     const hub = new AuthStore(dir);
-    hub.saveApiToken('doomed', record('doomed'));
+    hub.saveApiToken('doomed', tokenRecord('doomed'));
     new AuthStore(dir).revokeApiToken('doomed');
 
     // persist() writes the whole file, and the hub persists on every refresh
     // token rotation — minutes apart in practice.
-    hub.saveApiToken('unrelated', record('unrelated'));
+    hub.saveApiToken('unrelated', tokenRecord('unrelated'));
 
     expect(new AuthStore(dir).getApiToken('doomed')).toBeUndefined();
     expect(new AuthStore(dir).getApiToken('unrelated')).toBeDefined();
@@ -875,7 +895,7 @@ describe('AuthStore across processes', () => {
   it('keeps its state when a reload cannot be parsed', () => {
     const dir = tmpDir();
     const hub = new AuthStore(dir);
-    hub.saveApiToken('live', record('live'));
+    hub.saveApiToken('live', tokenRecord('live'));
     const secret = hub.cookieSecret;
 
     fs.writeFileSync(path.join(dir, 'state.json'), '{"cookieSecret": "truncated');
@@ -890,35 +910,15 @@ describe('AuthStore across processes', () => {
   it('never leaves a shared temporary file behind', () => {
     const dir = tmpDir();
     const hub = new AuthStore(dir);
-    hub.saveApiToken('a', record('a'));
+    hub.saveApiToken('a', tokenRecord('a'));
 
     // A fixed "state.json.tmp" would let two writers scribble over each other.
     expect(fs.readdirSync(dir).filter(f => f.includes('.tmp'))).toEqual([]);
   });
 
-  const runWriter = (dir: string, mode: 'create' | 'revoke', prefix: string) =>
-    new Promise<void>((resolve, reject) => {
-      const source = `
-        import { AuthStore } from './src/auth/store.ts';
-        const [dir, mode, prefix] = process.argv.slice(1);
-        const store = new AuthStore(dir);
-        const now = Math.floor(Date.now() / 1000);
-        if (mode === 'revoke') store.revokeApiToken('doomed');
-        else for (let i = 0; i < 50; i++) store.saveApiToken(prefix + i, { label: prefix, resource: 'https://hub.test/hub', createdAt: now, expiresAt: now + 3600 });
-      `;
-      const child = spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', source, dir, mode, prefix], {
-        cwd: path.resolve('.'),
-        stdio: ['ignore', 'ignore', 'pipe']
-      });
-      let stderr = '';
-      child.stderr.on('data', chunk => (stderr += chunk));
-      child.on('error', reject);
-      child.on('exit', code => (code === 0 ? resolve() : reject(new Error(`child exited ${code}: ${stderr}`))));
-    });
-
   it('serializes simultaneous writers in separate OS processes', async () => {
     const dir = tmpDir();
-    new AuthStore(dir);
+    expect(new AuthStore(dir).listApiTokens()).toEqual({});
     await Promise.all([runWriter(dir, 'create', 'left-'), runWriter(dir, 'create', 'right-')]);
     const tokens = new AuthStore(dir).listApiTokens();
     expect(Object.keys(tokens).filter(id => id.startsWith('left-'))).toHaveLength(50);
@@ -928,7 +928,7 @@ describe('AuthStore across processes', () => {
   it('does not resurrect a revocation racing an unrelated OS-process writer', async () => {
     const dir = tmpDir();
     const store = new AuthStore(dir);
-    store.saveApiToken('doomed', record('doomed'));
+    store.saveApiToken('doomed', tokenRecord('doomed'));
     await Promise.all([runWriter(dir, 'revoke', 'unused'), runWriter(dir, 'create', 'kept-')]);
     const reloaded = new AuthStore(dir);
     expect(reloaded.getApiToken('doomed')).toBeUndefined();
@@ -937,7 +937,7 @@ describe('AuthStore across processes', () => {
 
   it('breaks a lock whose owner file was never written', () => {
     const dir = tmpDir();
-    new AuthStore(dir);
+    expect(new AuthStore(dir).listApiTokens()).toEqual({});
     // The lock directory is created before the owner file: a process killed
     // between the two leaves a lock nobody can attribute. Without the age
     // fallback this wedges the data directory permanently.
@@ -947,31 +947,42 @@ describe('AuthStore across processes', () => {
     fs.utimesSync(lock, stale, stale);
 
     const store = new AuthStore(dir);
-    store.saveApiToken('after', record('after'));
+    store.saveApiToken('after', tokenRecord('after'));
     expect(new AuthStore(dir).getApiToken('after')).toBeDefined();
   });
 
   it('rewrites a state file that vanished under a running store', () => {
     const dir = tmpDir();
     const hub = new AuthStore(dir);
-    hub.saveApiToken('live', record('live'));
+    hub.saveApiToken('live', tokenRecord('live'));
     fs.rmSync(path.join(dir, 'state.json'));
 
     // Refusing here would break every refresh-token rotation until restart.
-    hub.saveApiToken('after', record('after'));
+    hub.saveApiToken('after', tokenRecord('after'));
     const reloaded = new AuthStore(dir);
     expect(reloaded.getApiToken('live')).toBeDefined();
     expect(reloaded.getApiToken('after')).toBeDefined();
   });
 });
 
-describe('MCP response and discovery budgets', () => {
-  /** A child that answers `tools/list` however the test wants it to. */
-  const upstream = (reply: (params: { cursor?: string }) => unknown) =>
-    ({
-      request: async (req: { method: string; params?: { cursor?: string } }) => reply(req.params ?? {})
-    }) as never;
+/** A child that answers `tools/list` however the test wants it to. */
+const upstream = (reply: (params: { cursor?: string }) => unknown) =>
+  ({
+    request: async (req: { method: string; params?: { cursor?: string } }) => reply(req.params ?? {})
+  }) as never;
 
+// The options are read once at module load, so each case needs a fresh import.
+const limitsWith = async (env: Record<string, string>) => {
+  vi.resetModules();
+  for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value);
+  try {
+    return await import('../src/mcp-limits.js');
+  } finally {
+    vi.unstubAllEnvs();
+  }
+};
+
+describe('MCP response and discovery budgets', () => {
   it('caps pagination even when an upstream always returns another cursor', async () => {
     let page = 0;
     await expect(listAllTools(upstream(() => ({ tools: [], nextCursor: `page-${++page}` })))).rejects.toThrow(/100 pages/);
@@ -1007,17 +1018,6 @@ describe('MCP response and discovery budgets', () => {
     expect(ABSOLUTE_CALL_TIMEOUT_MS).toBe(5 * 60_000);
     expect(ABSOLUTE_CALL_OPTIONS.resetTimeoutOnProgress).toBe(false);
   });
-
-  // The options are read once at module load, so each case needs a fresh import.
-  const limitsWith = async (env: Record<string, string>) => {
-    vi.resetModules();
-    for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value);
-    try {
-      return await import('../src/mcp-limits.js');
-    } finally {
-      vi.unstubAllEnvs();
-    }
-  };
 
   it('lets a deployment raise the deadline and opt back into progress extending it', async () => {
     const limits = await limitsWith({ MCP_CALL_TIMEOUT_MS: '1800000', MCP_RESET_TIMEOUT_ON_PROGRESS: 'true' });

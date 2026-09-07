@@ -203,13 +203,13 @@ describe('a question reaching the far end', () => {
     // — a hand-built result is legal — and test/elicitation.test.ts covers that.
     const client = await connectAsking();
     const asked = asInputRequired(await call(client, 'ask_with_nasty_text'));
-    const request = asked.inputRequests?.confirm as unknown as { params: Record<string, unknown> } | undefined;
-    const message = String(request?.params.message ?? '');
+    const confirm = asked.inputRequests?.confirm as unknown as { params: Record<string, unknown> } | undefined;
+    const message = String(confirm?.params.message ?? '');
 
     expect(message).toContain('plainreversedhidden');
     for (const ch of ['‮', '‬', '​']) expect(message).not.toContain(ch);
     expect(message.startsWith('Server "elicit" asks:')).toBe(true);
-    expect(request?.params._meta).toBeUndefined();
+    expect(confirm?.params._meta).toBeUndefined();
 
     await client.close();
   }, 30_000);

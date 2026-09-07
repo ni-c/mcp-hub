@@ -50,7 +50,7 @@ export function credentialFingerprint(identity: UpstreamIdentity): string {
   return crypto
     .createHash('sha256')
     .update(
-      JSON.stringify([identity.serverUrl, oauth.mode, oauth.grant, oauth.clientId ?? null, [...oauth.scopes].sort()])
+      JSON.stringify([identity.serverUrl, oauth.mode, oauth.grant, oauth.clientId ?? null, oauth.scopes.toSorted()])
     )
     .digest('hex');
 }

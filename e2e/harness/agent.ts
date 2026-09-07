@@ -213,14 +213,14 @@ export async function runAgent(gateway: Gateway, client: Client, scenario: Scena
 
   const entries = await door.catalogue();
   requests += 1;
-  const catalogue = entries.map(entry => entry.tool.name).sort();
+  const catalogue = entries.map(entry => entry.tool.name).toSorted();
   const called = new Set<string>();
   const steps: AgentStep[] = [];
 
   // Sorted, so the transcript does not depend on the order discovery happened
   // to return things in. That ordering is itself asserted separately — here it
   // must not be allowed to leak into everything else.
-  const ordered = [...entries].sort((a, b) => `${a.server}/${a.tool.name}`.localeCompare(`${b.server}/${b.tool.name}`));
+  const ordered = entries.toSorted((a, b) => `${a.server}/${a.tool.name}`.localeCompare(`${b.server}/${b.tool.name}`));
 
   for (const { server, tool } of ordered) {
     if (scenario.outOfReach && tool.name in scenario.outOfReach) continue;
@@ -260,7 +260,7 @@ export async function runAgent(gateway: Gateway, client: Client, scenario: Scena
 
   // The catalogue must not have moved underneath the run. It may only change
   // when a child announces one, and no scenario here announces anything.
-  const after = (await door.catalogue()).map(entry => entry.tool.name).sort();
+  const after = (await door.catalogue()).map(entry => entry.tool.name).toSorted();
   requests += 1;
   if (JSON.stringify(after) !== JSON.stringify(catalogue)) {
     throw new Error(`${scenario.name}: discovery is not idempotent.\nbefore: ${catalogue.join(', ')}\nafter:  ${after.join(', ')}`);

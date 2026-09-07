@@ -436,7 +436,9 @@ export class AuthStore {
         this.persistUnlocked();
         return;
       }
-      throw new Error(`cannot reload auth state while holding the mutation lock: ${(error as Error).message}`);
+      throw new Error(`cannot reload auth state while holding the mutation lock: ${(error as Error).message}`, {
+        cause: error
+      });
     }
     const next = AuthStore.normalize(parsed);
     if (!next) throw new Error('cannot mutate unusable auth state');
@@ -543,7 +545,7 @@ export class AuthStore {
       }
       const ids = Object.keys(records);
       if (ids.length > MAX_OIDC_ARTIFACTS_PER_MODEL) {
-        const byAge = ids.sort((a, b) => (records[a]!.expiresAt || Infinity) - (records[b]!.expiresAt || Infinity));
+        const byAge = ids.toSorted((a, b) => (records[a]!.expiresAt || Infinity) - (records[b]!.expiresAt || Infinity));
         for (const id of byAge.slice(0, ids.length - MAX_OIDC_ARTIFACTS_PER_MODEL)) delete records[id];
       }
       // An empty model map is a row that never goes away.
@@ -720,7 +722,7 @@ export class AuthStore {
     if (fits()) return true;
     const evictable = Object.values(this.state.clients)
       .filter(candidate => !this.state.approvals[candidate.client_id] && !this.isOperatorManagedUnderLock(candidate.client_id))
-      .sort((a, b) => (a.client_id_issued_at ?? 0) - (b.client_id_issued_at ?? 0));
+      .toSorted((a, b) => (a.client_id_issued_at ?? 0) - (b.client_id_issued_at ?? 0));
     for (const candidate of evictable) {
       this.forgetClient(candidate.client_id);
       if (fits()) return true;
@@ -882,7 +884,7 @@ export class AuthStore {
   private pruneUnapprovedClients(): void {
     const unapproved = Object.values(this.state.clients)
       .filter(c => !this.state.approvals[c.client_id] && !this.isOperatorManagedUnderLock(c.client_id))
-      .sort((a, b) => (a.client_id_issued_at ?? 0) - (b.client_id_issued_at ?? 0));
+      .toSorted((a, b) => (a.client_id_issued_at ?? 0) - (b.client_id_issued_at ?? 0));
     for (let i = 0; i < unapproved.length - MAX_UNAPPROVED_CLIENTS; i++) {
       this.forgetClient(unapproved[i].client_id);
     }

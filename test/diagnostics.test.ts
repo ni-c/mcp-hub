@@ -57,8 +57,8 @@ async function connect(era: 'legacy' | 'auto', options: { canBeAsked?: boolean }
 }
 
 async function describeConnection(client: Client, args: Record<string, unknown> = {}) {
-  const result = (await client.callTool({ name: 'describe_connection', arguments: args })) as CallToolResult;
-  return result;
+  const reply = (await client.callTool({ name: 'describe_connection', arguments: args })) as CallToolResult;
+  return reply;
 }
 
 beforeAll(async () => {
@@ -107,7 +107,7 @@ describe('the diagnostics switch', () => {
     // asserted in three e2e suites. A seventh tool that appeared by default
     // would make all of them wrong at once.
     const client = await connect('auto');
-    const names = (await client.listTools()).tools.map(tool => tool.name).sort();
+    const names = (await client.listTools()).tools.map(tool => tool.name).toSorted();
     expect(names).toEqual(['call_tool', 'get_tool_schema', 'list_servers', 'list_tools', 'sleep_server', 'wake_server']);
     await client.close();
   });
@@ -136,8 +136,8 @@ describe('describe_connection', () => {
   it('names the era a 2026 client is on, and that it could be asked', async () => {
     process.env.MCP_DIAGNOSTICS = 'true';
     const client = await connect('auto', { canBeAsked: true });
-    const result = await describeConnection(client);
-    expect(result.structuredContent).toMatchObject({
+    const described = await describeConnection(client);
+    expect(described.structuredContent).toMatchObject({
       era: 'modern',
       revision: '2026-07-28',
       caller: { declaresElicitation: true }

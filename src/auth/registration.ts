@@ -59,10 +59,6 @@ export function createRegistrationManagementRoutes(options: RegistrationManageme
   // can register; these routes sit in front of it and need their own. Opening
   // them is safe: the credential is a bearer token in a header, never a cookie,
   // so no browser attaches it to a cross-site request on its own.
-  const allowCrossOrigin = (res: Response): void => {
-    res.set('Access-Control-Allow-Origin', '*');
-  };
-
   router.options(path, limit, (_req, res) => {
     allowCrossOrigin(res);
     res.set({
@@ -163,9 +159,13 @@ export function createRegistrationManagementRoutes(options: RegistrationManageme
   return router;
 }
 
+function allowCrossOrigin(res: Response): void {
+  res.set('Access-Control-Allow-Origin', '*');
+}
+
 /** Order is not part of the meaning of a redirect URI list. */
 function sameUris(before: string[] | undefined, after: string[] | undefined): boolean {
-  const a = [...(before ?? [])].sort();
-  const b = [...(after ?? [])].sort();
+  const a = (before ?? []).toSorted();
+  const b = (after ?? []).toSorted();
   return a.length === b.length && a.every((uri, index) => uri === b[index]);
 }

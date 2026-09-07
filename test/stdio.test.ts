@@ -91,7 +91,7 @@ describe('stdio mode', () => {
     const hub = startHub(writeConfig({}));
     const client = await connect(hub);
     const { tools } = await client.listTools();
-    expect(tools.map(t => t.name).sort()).toEqual([
+    expect(tools.map(t => t.name).toSorted()).toEqual([
       'call_tool',
       'get_tool_schema',
       'list_servers',
@@ -314,22 +314,22 @@ describe('the --stdio entrypoint', () => {
   }, 30_000);
 });
 
-describe('upstream OAuth in stdio mode', () => {
-  /** A config with one remote server that needs an upstream token. */
-  function oauthConfig(): string {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-hub-stdio-oauth-'));
-    const configPath = path.join(dir, 'mcp.json');
-    fs.writeFileSync(
-      configPath,
-      JSON.stringify({
-        mcpServers: {
-          saas: { type: 'http', url: 'https://saas.example/mcp', oauth: { mode: 'dcr', grant: 'authorization_code' } }
-        }
-      })
-    );
-    return configPath;
-  }
+/** A config with one remote server that needs an upstream token. */
+function oauthConfig(): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-hub-stdio-oauth-'));
+  const configPath = path.join(dir, 'mcp.json');
+  fs.writeFileSync(
+    configPath,
+    JSON.stringify({
+      mcpServers: {
+        saas: { type: 'http', url: 'https://saas.example/mcp', oauth: { mode: 'dcr', grant: 'authorization_code' } }
+      }
+    })
+  );
+  return configPath;
+}
 
+describe('upstream OAuth in stdio mode', () => {
   it('says why an OAuth upstream cannot work without a state directory', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {

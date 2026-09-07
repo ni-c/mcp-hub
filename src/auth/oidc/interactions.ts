@@ -24,6 +24,19 @@ export interface OidcInteractionOptions {
   cimd?: CimdResolver;
 }
 
+type AsyncHandler = (req: express.Request, res: express.Response, next: express.NextFunction) => Promise<void>;
+
+/** Express 5 forwards a rejected handler promise on its own; this makes that explicit and typed. */
+const asyncHandler =
+  (handler: AsyncHandler): express.RequestHandler =>
+  (req, res, next) => {
+    handler(req, res, next).catch(next);
+  };
+
+function expired(res: express.Response, status: number, message: string): void {
+  res.status(status).type('html').send(`<p>${message}</p>`);
+}
+
 /**
  * The hub's own login and consent pages, driven by oidc-provider's interaction
  * loop instead of by HubOAuthProvider's hand-rolled one.
@@ -78,50 +91,49 @@ export function createOidcInteractionRoutes(options: OidcInteractionOptions): Ro
     };
   };
 
-  const expired = (res: express.Response, status: number, message: string): void => {
-    res.status(status).type('html').send(`<p>${message}</p>`);
-  };
-
   // The two POSTs below carry a limiter and this GET did not, which is the
   // asymmetry CodeQL noticed and it was right. The page is unauthenticated by
   // construction — the uid is all a caller has — and rendering it costs a
   // provider store lookup, so a flood is cheap to send and not free to serve.
   // The same window as its siblings; a person opening a login page a hundred
   // times in fifteen minutes has a different problem.
-  router.get('/interaction/:uid', earlyRateLimit(15 * 60_000, 100, 500), async (req, res, next) => {
-    try {
-      const details = await provider.interactionDetails(req, res);
-      const params = details.params as { client_id?: string; redirect_uri?: string; resource?: string };
-      const redirectUri = String(params.redirect_uri ?? '');
-      const identity = await identityOf(String(params.client_id), params.resource);
-      allowFormActionTo(res, redirectUri);
+  router.get(
+    '/interaction/:uid',
+    earlyRateLimit(15 * 60_000, 100, 500),
+    asyncHandler(async (req, res) => {
+      try {
+        const details = await provider.interactionDetails(req, res);
+        const params = details.params as { client_id?: string; redirect_uri?: string; resource?: string };
+        const redirectUri = String(params.redirect_uri ?? '');
+        const identity = await identityOf(String(params.client_id), params.resource);
+        allowFormActionTo(res, redirectUri);
 
-      if (details.prompt.name === 'login') {
-        res.status(200).type('html').send(renderLoginPage(details.uid, redirectUri, identity));
-        return;
+        if (details.prompt.name === 'login') {
+          res.status(200).type('html').send(renderLoginPage(details.uid, redirectUri, identity));
+          return;
+        }
+        const session = readSessionCookie(req.headers.cookie, store.cookieSecret);
+        if (!session) {
+          expired(res, 401, 'Session expired. Close this window and connect again.');
+          return;
+        }
+        res
+          .status(200)
+          .type('html')
+          .send(renderConsentPage(details.uid, csrfToken(session, store.cookieSecret), redirectUri, identity));
+      } catch {
+        // interactionDetails throws for an unknown or expired uid, which is not
+        // an error worth a stack trace: the window was left open too long.
+        expired(res, 400, 'Authorization request expired. Close this window and connect again.');
       }
-      const session = readSessionCookie(req.headers.cookie, store.cookieSecret);
-      if (!session) {
-        expired(res, 401, 'Session expired. Close this window and connect again.');
-        return;
-      }
-      res
-        .status(200)
-        .type('html')
-        .send(renderConsentPage(details.uid, csrfToken(session, store.cookieSecret), redirectUri, identity));
-    } catch {
-      // interactionDetails throws for an unknown or expired uid, which is not
-      // an error worth a stack trace: the window was left open too long.
-      expired(res, 400, 'Authorization request expired. Close this window and connect again.');
-      void next;
-    }
-  });
+    })
+  );
 
   router.post(
     '/interaction/:uid/login',
     earlyRateLimit(15 * 60_000, 100, 500),
     express.urlencoded({ extended: false }),
-    async (req, res) => {
+    asyncHandler(async (req, res) => {
       const ip = req.ip ?? 'unknown';
       const { password, request } = req.body as { password?: string; request?: string };
       let details;
@@ -169,14 +181,14 @@ export function createOidcInteractionRoutes(options: OidcInteractionOptions): Ro
         path: '/'
       });
       await provider.interactionFinished(req, res, { login: { accountId: HUB_ACCOUNT_ID } }, { mergeWithLastSubmission: false });
-    }
+    })
   );
 
   router.post(
     '/interaction/:uid/consent',
     earlyRateLimit(15 * 60_000, 100, 500),
     express.urlencoded({ extended: false }),
-    async (req, res) => {
+    asyncHandler(async (req, res) => {
       const { request, csrf, action } = req.body as { request?: string; csrf?: string; action?: string };
       let details;
       try {
@@ -214,7 +226,7 @@ export function createOidcInteractionRoutes(options: OidcInteractionOptions): Ro
       // The grant itself is minted by loadExistingGrant on the resumed request,
       // which is the same code path an already-approved client takes.
       await provider.interactionFinished(req, res, { consent: {} }, { mergeWithLastSubmission: true });
-    }
+    })
   );
 
   return router;

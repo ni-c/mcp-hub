@@ -7,7 +7,7 @@ import { PassThrough } from 'node:stream';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client } from '@modelcontextprotocol/client';
 import type { JSONRPCMessage } from '@modelcontextprotocol/client';
-import { StreamTransport } from '../src/transports/stream.js';
+import { StreamTransport, setTransportHandlers } from '../src/transports/stream.js';
 import { SocketTransport } from '../src/transports/socket.js';
 import { DockerFrameDecoder, DockerTransport } from '../src/transports/docker.js';
 import type { DockerClient } from '../src/sandbox/docker-client.js';
@@ -25,7 +25,7 @@ describe('StreamTransport', () => {
     const stream = new PassThrough();
     const transport = new StreamTransport(stream);
     const received: JSONRPCMessage[] = [];
-    transport.onmessage = message => received.push(message);
+    setTransportHandlers(transport, { onmessage: message => received.push(message) });
     await transport.start();
 
     await transport.send(ping);
@@ -37,7 +37,7 @@ describe('StreamTransport', () => {
   it('reassembles a message split across chunks and reads two from one chunk', () => {
     const transport = new StreamTransport(new PassThrough(), false);
     const received: JSONRPCMessage[] = [];
-    transport.onmessage = message => received.push(message);
+    setTransportHandlers(transport, { onmessage: message => received.push(message) });
 
     const line = `${JSON.stringify(ping)}\n`;
     transport.receive(Buffer.from(line.slice(0, 7)));
@@ -53,8 +53,7 @@ describe('StreamTransport', () => {
     const transport = new StreamTransport(new PassThrough(), false);
     const errors: Error[] = [];
     const received: JSONRPCMessage[] = [];
-    transport.onerror = error => errors.push(error);
-    transport.onmessage = message => received.push(message);
+    setTransportHandlers(transport, { onerror: error => errors.push(error), onmessage: message => received.push(message) });
 
     // A server that prints a stray line to stdout must cost one message, not
     // the whole session.
@@ -68,8 +67,7 @@ describe('StreamTransport', () => {
     const transport = new StreamTransport(new PassThrough(), false);
     const errors: Error[] = [];
     let closed = false;
-    transport.onerror = error => errors.push(error);
-    transport.onclose = () => (closed = true);
+    setTransportHandlers(transport, { onerror: error => errors.push(error), onclose: () => (closed = true) });
     await transport.start();
 
     // The SDK's ReadBuffer throws past 10 MB. That throw happens inside a
@@ -87,7 +85,7 @@ describe('StreamTransport', () => {
     const stream = new PassThrough();
     const transport = new StreamTransport(stream);
     let closes = 0;
-    transport.onclose = () => closes++;
+    setTransportHandlers(transport, { onclose: () => closes++ });
     await transport.start();
 
     await transport.close();
@@ -97,15 +95,15 @@ describe('StreamTransport', () => {
   });
 });
 
-describe('DockerFrameDecoder', () => {
-  const frame = (stream: number, payload: string) => {
-    const body = Buffer.from(payload, 'utf8');
-    const header = Buffer.alloc(8);
-    header[0] = stream;
-    header.writeUInt32BE(body.length, 4);
-    return Buffer.concat([header, body]);
-  };
+const frame = (stream: number, payload: string) => {
+  const body = Buffer.from(payload, 'utf8');
+  const header = Buffer.alloc(8);
+  header[0] = stream;
+  header.writeUInt32BE(body.length, 4);
+  return Buffer.concat([header, body]);
+};
 
+describe('DockerFrameDecoder', () => {
   it('splits stdout from stderr', () => {
     const frames: [number, string][] = [];
     const decoder = new DockerFrameDecoder((stream, payload) => frames.push([stream, payload.toString()]), () => {});
@@ -161,7 +159,7 @@ describe('DockerFrameDecoder', () => {
     };
     const transport = new DockerTransport('broken', config, client, () => {});
     let closes = 0;
-    transport.onclose = () => closes++;
+    setTransportHandlers(transport, { onclose: () => closes++ });
     await transport.start();
     const header = Buffer.alloc(8);
     header[0] = 1;

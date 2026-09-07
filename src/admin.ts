@@ -36,6 +36,11 @@ function usage(): never {
   process.exit(2);
 }
 
+function fail(message: string): never {
+  console.error(message);
+  process.exit(2);
+}
+
 function flag(args: string[], name: string): string | undefined {
   const index = args.indexOf(`--${name}`);
   if (index === -1) return undefined;
@@ -254,11 +259,6 @@ if (group === 'upstream') {
   // value the hub recorded at boot is normally the one that applies.
   const externalUrl = process.env.EXTERNAL_URL ?? store.getExternalUrl();
   const name = rest.find(argument => !argument.startsWith('--'));
-
-  const fail: (message: string) => never = message => {
-    console.error(message);
-    process.exit(2);
-  };
 
   if (action === 'list' || action === 'status') {
     try {

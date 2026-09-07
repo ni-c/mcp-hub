@@ -126,11 +126,11 @@ describe('ManagedServer sleep/wake', () => {
   });
 });
 
-describe('Supervisor on-demand lifecycle', () => {
-  function stdioConfigMap(entries: Record<string, Record<string, unknown>>): HubConfig {
-    return parseConfig(JSON.stringify({ mcpServers: entries }), {});
-  }
+function stdioConfigMap(entries: Record<string, Record<string, unknown>>): HubConfig {
+  return parseConfig(JSON.stringify({ mcpServers: entries }), {});
+}
 
+describe('Supervisor on-demand lifecycle', () => {
   it('boots a cached on-demand server straight into sleeping without spawning it', async () => {
     const config = stdioConfigMap({ everything: { command: process.execPath, args: [EVERYTHING] } });
     const cache = new ToolCache(path.join(tmpDir(), 'tool-cache.json'));

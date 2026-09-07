@@ -199,7 +199,7 @@ export const CATALOGUE = {
   resources: [
     ...Object.keys(DOCUMENTS)
       .map(name => `catalogue://documents/${name}`)
-      .sort(),
+      .toSorted(),
     'catalogue://pixel.png',
     'catalogue://readme'
   ],

@@ -90,8 +90,8 @@ async function authorize(
     .redirects(0);
   const location = started.headers.location as string | undefined;
   if (!location || location.startsWith(redirectUri)) return started;
-  const path = location.startsWith('http') ? new URL(location).pathname : location;
-  return caller.get(path).redirects(0);
+  const pathname = location.startsWith('http') ? new URL(location).pathname : location;
+  return caller.get(pathname).redirects(0);
 }
 
 /** Signs in for real; forging a cookie no longer makes a session. */
@@ -353,8 +353,8 @@ describe('the guarded transport', () => {
 
   // The hostname deliberately does not resolve: reaching the server at all is
   // proof that the pinned address, not DNS, decided where the socket went.
-  const get = (path: string, maxBytes = 5 * 1024, timeoutMs = 5_000) =>
-    guardedRequest(new URL(`http://pinned.invalid:${port}${path}`), {
+  const get = (pathname: string, maxBytes = 5 * 1024, timeoutMs = 5_000) =>
+    guardedRequest(new URL(`http://pinned.invalid:${port}${pathname}`), {
       pinnedAddress: '127.0.0.1',
       headers: { Accept: 'application/json' },
       timeoutMs,

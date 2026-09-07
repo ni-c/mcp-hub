@@ -114,3 +114,17 @@ export class StreamTransport implements Transport {
     this.onclose?.();
   }
 }
+
+/** The callbacks the Transport contract exposes as plain properties. */
+export type TransportHandlers = Pick<Transport, 'onmessage' | 'onerror' | 'onclose'>;
+
+/**
+ * Installs callbacks on a transport. The MCP Transport contract has no
+ * listener API: `onmessage`, `onerror` and `onclose` are properties holding
+ * one handler each, and the SDK's own Protocol class sets them exactly this
+ * way. Keeping that assignment in one place says so once instead of at every
+ * call site.
+ */
+export function setTransportHandlers(transport: Transport, handlers: TransportHandlers): void {
+  Object.assign(transport, handlers);
+}
