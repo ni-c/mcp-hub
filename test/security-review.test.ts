@@ -254,3 +254,56 @@ describe('upstream configuration rotation', () => {
     expect(params.get('client_assertion')).toBeTruthy();
   });
 });
+
+describe('prototype names are not identifiers', () => {
+  const names = ['constructor', '__proto__', 'hasOwnProperty', 'toString', 'valueOf'];
+
+  it('answers undefined for every state lookup by a prototype name', () => {
+    const store = new AuthStore(directory());
+    for (const name of names) {
+      expect(store.getClient(name)).toBeUndefined();
+      expect(store.getApproval(name)).toBeUndefined();
+      expect(store.getRevokedBefore(name)).toBeUndefined();
+      expect(store.isOperatorManaged(name)).toBe(false);
+      expect(store.verifyRegistrationToken(name, 'x')).toBe(false);
+      expect(store.getApiToken(name)).toBeUndefined();
+      expect(store.getUpstreamCredentials(name, 'fp')).toBeUndefined();
+      expect(store.takeUpstreamLogin(name)).toBeUndefined();
+      expect(store.oidcFind('AccessToken', name)).toBeUndefined();
+      expect(store.deleteClient(name)).toBe(false);
+    }
+    expect(store.getRevokedBefore('constructor')).toBeUndefined();
+  });
+
+  it('survives a state file that carries such names, and a client called that way', () => {
+    const dir = directory();
+    const first = new AuthStore(dir);
+    first.saveApproval('constructor', 'https://client.example/cb', 'Named like a prototype');
+    const again = new AuthStore(dir);
+    expect(again.getApproval('constructor')?.clientName).toBe('Named like a prototype');
+    expect(again.getApproval('__proto__')).toBeUndefined();
+    expect(again.getClient('constructor')).toBeUndefined();
+    // The map itself must stay a map: the name did not become a prototype.
+    expect(Object.getPrototypeOf(again.listApprovals())).not.toBeNull();
+    expect(Object.keys(again.listApprovals())).toEqual(['constructor']);
+  });
+
+  it.each(['constructor', 'hasOwnProperty', '__proto__'])('refuses %s as a client_id with 400, not 500', async name => {
+    const hub = await hubWith({ password: 'test-password' });
+    const failed = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const authorize = await request(hub.app).get('/authorize').query({
+      client_id: name, redirect_uri: 'https://x.example/cb', response_type: 'code',
+      code_challenge: 'a'.repeat(43), code_challenge_method: 'S256', resource: 'http://localhost/hub'
+    });
+    expect(authorize.status).toBe(400);
+    expect(authorize.body.error).not.toBe('server_error');
+    const token = await request(hub.app).post('/token').type('form').send({
+      grant_type: 'authorization_code', client_id: name, code: 'x', code_verifier: 'y', redirect_uri: 'https://x.example/cb', client_secret: 's'
+    });
+    // An unknown client at the token endpoint is `invalid_client`, a 401.
+    expect([400, 401]).toContain(token.status);
+    expect(token.body.error).not.toBe('server_error');
+    await request(hub.app).get(`/register/${name}`).set('Authorization', 'Bearer x').expect(401);
+    expect(failed.mock.calls.map(call => String(call[0]))).not.toContainEqual(expect.stringContaining('authorization server failed'));
+  });
+});

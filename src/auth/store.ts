@@ -223,6 +223,24 @@ const LOCK_POLL_MS = 10;
 const lockSleep = new Int32Array(new SharedArrayBuffer(4));
 
 /**
+ * A map keyed by something a caller chose, with nothing inherited to find.
+ *
+ * Every map in the state file is indexed by an identifier from outside — a
+ * `client_id` from a registration or a URL, a token id from a request, a server
+ * name — and `JSON.parse` hands them back as ordinary objects whose prototype
+ * answers to `constructor`, `hasOwnProperty` and `__proto__`. Looked up that
+ * way, `state.clients['constructor']` is `Object` itself: a truthy record that
+ * is not a client, handed to the authorization server as if it were one, which
+ * answered `500 server_error` to `/authorize?client_id=constructor` and logged
+ * a server fault for every such request. A null prototype leaves nothing to
+ * find, so an unknown name is `undefined` on every path without each of the
+ * forty lookups having to remember `Object.hasOwn`.
+ */
+function bare<T>(record?: Record<string, T>): Record<string, T> {
+  return Object.assign(Object.create(null) as Record<string, T>, record ?? {});
+}
+
+/**
  * All persistent auth state lives in two files under DATA_PATH:
  * jwt-key.pem (Ed25519 private key) and state.json (clients, refresh tokens,
  * cookie secret). Losing either invalidates every connector authorization —
@@ -268,19 +286,7 @@ export class AuthStore {
       this.publicKey = crypto.createPublicKey(this.privateKey);
 
       const restored = AuthStore.readState(this.statePath);
-      this.state = restored ?? {
-        cookieSecret: crypto.randomBytes(32).toString('base64url'),
-        clients: {},
-        refreshTokens: {},
-        approvals: {},
-        consumedRefreshTokens: {},
-        revokedBefore: {},
-        apiTokens: {},
-        clientLifecycle: {},
-        upstreamCredentials: {},
-        upstreamLogins: {},
-        oidcArtifacts: {}
-      };
+      this.state = restored ?? AuthStore.normalize({ cookieSecret: crypto.randomBytes(32).toString('base64url') })!;
       if (restored) this.signature = this.fileSignature();
       else this.persistUnlocked();
     } finally {
@@ -453,20 +459,20 @@ export class AuthStore {
    * once instead of being trusted silently.
    */
   private static normalize(parsed: unknown): PersistedState | undefined {
-    const state = parsed as PersistedState | null;
+    const state = parsed as Partial<PersistedState> | null;
     if (!state || typeof state !== 'object' || typeof state.cookieSecret !== 'string') return undefined;
     return {
       cookieSecret: state.cookieSecret,
-      clients: state.clients ?? {},
-      refreshTokens: state.refreshTokens ?? {},
-      approvals: state.approvals ?? {},
-      consumedRefreshTokens: state.consumedRefreshTokens ?? {},
-      revokedBefore: state.revokedBefore ?? {},
-      apiTokens: state.apiTokens ?? {},
-      clientLifecycle: state.clientLifecycle ?? {},
-      upstreamCredentials: state.upstreamCredentials ?? {},
-      upstreamLogins: state.upstreamLogins ?? {},
-      oidcArtifacts: state.oidcArtifacts ?? {},
+      clients: bare(state.clients),
+      refreshTokens: bare(state.refreshTokens),
+      approvals: bare(state.approvals),
+      consumedRefreshTokens: bare(state.consumedRefreshTokens),
+      revokedBefore: bare(state.revokedBefore),
+      apiTokens: bare(state.apiTokens),
+      clientLifecycle: bare(state.clientLifecycle),
+      upstreamCredentials: bare(state.upstreamCredentials),
+      upstreamLogins: bare(state.upstreamLogins),
+      oidcArtifacts: bare(Object.fromEntries(Object.entries(bare(state.oidcArtifacts)).map(([model, records]) => [model, bare(records)]))),
       ...(typeof state.externalUrl === 'string' ? { externalUrl: state.externalUrl } : {})
     };
   }
@@ -1071,7 +1077,7 @@ export class AuthStore {
 
   oidcUpsert(model: string, id: string, payload: Record<string, unknown>, expiresInSeconds?: number): void {
     this.mutate(() => {
-      const records = (this.state.oidcArtifacts[model] ??= {});
+      const records = (this.state.oidcArtifacts[model] ??= bare());
       const key = AuthStore.artifactKey(id);
       const stored = AuthStore.CREDENTIAL_MODELS.has(model) ? { ...payload, jti: undefined } : payload;
       if (AuthStore.CREDENTIAL_MODELS.has(model)) delete (stored as Record<string, unknown>).jti;
