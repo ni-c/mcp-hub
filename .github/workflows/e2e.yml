@@ -35,6 +35,12 @@ on:
       # thing to say so — days after the pull request that did it was green.
       - 'src/hub.ts'
       - '.github/workflows/e2e.yml'
+      # The suite runs on whatever vitest the lockfile pins, so a dependency
+      # bump can break it as surely as an edit to it can — vitest 5 removed
+      # the `vitest/reporters` subpath the budget reporter imported, and the
+      # pull request that bumped it touched only these two files.
+      - 'package.json'
+      - 'package-lock.json'
 
 permissions:
   contents: read

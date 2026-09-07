@@ -1,4 +1,4 @@
-import type { Reporter } from 'vitest/reporters';
+import type { Reporter } from 'vitest/node';
 
 /**
  * Fails the run when the suite got slower than anybody agreed to.
