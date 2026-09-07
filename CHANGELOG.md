@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- #region changelog -->
 
+## [Unreleased]
+
+### Fixed
+
+- **The nightly end-to-end suite had not run since the move to vitest 5.**
+  vitest 5 removed the `vitest/reporters` subpath; the budget reporter imported
+  its `Reporter` type from there, so `typecheck:e2e` failed before a single
+  test started, on every tier (#58). The type now comes from `vitest/node`.
+
+### CI
+
+- **A dependency bump could break the end-to-end suite without any pull
+  request noticing.** The E2E workflow ran on pull requests only for changes
+  under `e2e/` and its configs, and `ci.yml` never type-checked that tree, so
+  the vitest 5 bump was green and the nightly was the first to disagree. The
+  test job now runs `typecheck:e2e` (seconds, once per matrix), and changes to
+  `package.json` or `package-lock.json` trigger the E2E workflow on the pull
+  request itself.
+
 ## [0.11.1] - 2026-09-06
 
 ### Security

@@ -36,6 +36,13 @@ jobs:
       - run: npm run lint
         if: matrix.node-version == 24
       - run: npm run build
+      # The end-to-end tree is type-checked here even though the suite itself
+      # runs elsewhere: it costs seconds, and a dependency bump that removes a
+      # type the harness imports (vitest 5 dropped `vitest/reporters`) would
+      # otherwise be found by the nightly, days after the pull request was
+      # green. Once: the check is independent of the Node version.
+      - run: npm run typecheck:e2e
+        if: matrix.node-version == 24
       - run: npm test
         if: matrix.node-version != 24
       - run: npm run test:coverage
