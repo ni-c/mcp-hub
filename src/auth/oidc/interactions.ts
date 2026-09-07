@@ -72,7 +72,8 @@ export function createOidcInteractionRoutes(options: OidcInteractionOptions): Ro
 
   const checkPassword = (password: string): boolean => {
     if (options.passwordHash) return bcrypt.compareSync(password, options.passwordHash);
-    const expected = Buffer.from(options.password ?? '');
+    if (!options.password) return false;
+    const expected = Buffer.from(options.password);
     const given = Buffer.from(password);
     return expected.length === given.length && crypto.timingSafeEqual(expected, given);
   };

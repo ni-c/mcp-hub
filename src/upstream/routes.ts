@@ -60,27 +60,25 @@ export function createUpstreamRoutes(options: UpstreamRoutesOptions): Router {
    * hot-reloadable, so a server can become `cimd` long after boot, and an
    * Express route cannot be added later.
    */
-  router.get(`/${UPSTREAM_CLIENT_METADATA_PREFIX}/:id.json`, (req, res) => {
-    void (async () => {
-      const wanted = String(req.params.id);
-      for (const [name, server] of watcher.current) {
-        if (server.kind !== 'remote' || server.oauth?.mode !== 'cimd') continue;
-        if (clientDocumentId(name, store.cookieSecret) !== wanted) continue;
-        const identity = { serverName: name, serverUrl: server.url, oauth: server.oauth, externalUrl };
-        const provider = new UpstreamAuthProvider(identity, store);
-        // The document must name itself byte-for-byte or the upstream refuses it.
-        res.json({
-          client_id: clientMetadataUrl(externalUrl, name, store.cookieSecret),
-          ...hubClientMetadata(identity, server.oauth.clientAuth === 'private_key_jwt' ? await provider.publicJwk() : undefined)
-        });
-        return;
-      }
-      res.status(404).json({ error: 'not_found', error_description: 'No upstream publishes a document here' });
-    })();
+  router.get(`/${UPSTREAM_CLIENT_METADATA_PREFIX}/:id.json`, async (req, res) => {
+    const wanted = String(req.params.id);
+    for (const [name, server] of watcher.current) {
+      if (server.kind !== 'remote' || server.oauth?.mode !== 'cimd') continue;
+      if (clientDocumentId(name, store.cookieSecret) !== wanted) continue;
+      const identity = { serverName: name, serverUrl: server.url, oauth: server.oauth, externalUrl };
+      const provider = new UpstreamAuthProvider(identity, store);
+      // The document must name itself byte-for-byte or the upstream refuses it.
+      res.json({
+        client_id: clientMetadataUrl(externalUrl, name, store.cookieSecret),
+        ...hubClientMetadata(identity, server.oauth.clientAuth === 'private_key_jwt' ? await provider.publicJwk() : undefined)
+      });
+      return;
+    }
+    res.status(404).json({ error: 'not_found', error_description: 'No upstream publishes a document here' });
   });
 
   router.get(`/${UPSTREAM_CALLBACK_PATH}`, (req, res) => {
-    void handleCallback(req.query, req.headers.cookie, res);
+    return handleCallback(req.query, req.headers.cookie, res);
   });
 
   async function handleCallback(query: Record<string, unknown>, cookie: string | undefined, res: Response): Promise<void> {

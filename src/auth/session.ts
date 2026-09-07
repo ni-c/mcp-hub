@@ -26,8 +26,14 @@ export function createSessionCookie(secret: string): string {
 export function readSessionCookie(cookieHeader: string | undefined, secret: string): string | undefined {
   const match = cookieHeader?.match(new RegExp(`(?:^|;\\s*)${SESSION_COOKIE}=([^;]+)`));
   if (!match) return undefined;
-  const value = decodeURIComponent(match[1]);
-  const [expires, signature] = value.split('.');
+  let value: string;
+  try {
+    value = decodeURIComponent(match[1]);
+  } catch {
+    return undefined;
+  }
+  const [expires, signature, extra] = value.split('.');
+  if (extra !== undefined) return undefined;
   if (!expires || !signature) return undefined;
   if (!signatureMatches(expires, signature, secret)) return undefined;
   return Number(expires) > Date.now() ? value : undefined;

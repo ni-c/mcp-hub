@@ -69,6 +69,13 @@ export type ClientRegistrationMechanism = 'cimd' | 'dcr';
 export const CLIENT_REGISTRATION_MECHANISMS: ClientRegistrationMechanism[] = ['cimd', 'dcr'];
 
 export async function createHub(options: HubOptions) {
+  // Refuse before creating state, starting children or opening any listener.
+  if (!options.passwordHash && !options.password?.trim()) {
+    throw new Error('PASSWORD_HASH or a non-empty PASSWORD is required for the HTTP hub');
+  }
+  if (options.passwordHash && !/^\$2[aby]\$(?:0[4-9]|[12]\d|3[01])\$[./A-Za-z0-9]{53}$/.test(options.passwordHash)) {
+    throw new Error('PASSWORD_HASH must be a valid bcrypt hash');
+  }
   // Canonical issuer identifier: URL.href form ('https://host/' for a root
   // URL), so JWT iss/aud, AS metadata issuer and PRM authorization_servers all
   // match byte-for-byte — claude.ai compares these strictly.

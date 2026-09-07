@@ -93,6 +93,11 @@ runtime root filesystem read-only.
 approve a client and reach every server the hub exposes. Use a strong one and
 store the bcrypt hash, not the plain text.
 
+The HTTP hub refuses startup when neither a non-empty `PASSWORD` nor a valid
+`PASSWORD_HASH` is configured. An invalid hash is an error even when `PASSWORD`
+is also set. Local `--stdio` mode relies on the operating-system account and
+does not require these credentials.
+
 **Identifying yourself is open, approval is not.** Both ways of obtaining a
 `client_id` — a [Client ID Metadata
 Document](/guide/client-registration#client-id-metadata-documents) or

@@ -237,6 +237,10 @@ USER node
 
 ### Environment
 
+The HTTP hub refuses to start without a non-empty `PASSWORD` or a valid bcrypt
+`PASSWORD_HASH`. A configured hash takes precedence; an invalid hash is a startup
+error. The local `--stdio` mode does not require either variable.
+
 | Variable                        | Required            | Description                                                                                                                   |
 | ------------------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | `EXTERNAL_URL`                  | yes                 | Public base URL, e.g. `https://mcp.example.net` (no path)                                                                     |

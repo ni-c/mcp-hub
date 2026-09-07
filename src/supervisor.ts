@@ -22,7 +22,6 @@ import { setTransportHandlers } from './transports/stream.js';
 import { DockerClient, parseSandboxDockerHost } from './sandbox/docker-client.js';
 import type { AuthStore } from './auth/store.js';
 import { UpstreamAuth, UpstreamLoginRequiredError } from './upstream/auth.js';
-import { credentialFingerprint } from './upstream/provider.js';
 import { ToolCache } from './tool-cache.js';
 import type { ToolCacheEntry } from './tool-cache.js';
 import { filterTools, hasToolFilter, unmatchedPatterns } from './tool-filter.js';
@@ -823,7 +822,10 @@ export class UpstreamAuthRegistry {
   for(name: string, config: RemoteServerConfig): UpstreamAuth | undefined {
     if (!config.oauth) return undefined;
     const auth = new UpstreamAuth(name, config, this.store, this.externalUrl);
-    const fingerprint = credentialFingerprint(auth.identity);
+    // Manager identity includes live headers and authentication settings. The
+    // persisted credential fingerprint intentionally survives secret rotation;
+    // it must not keep the old in-memory configuration alive as well.
+    const fingerprint = JSON.stringify(config);
     const existing = this.managers.get(name);
     if (existing?.fingerprint === fingerprint) return existing.auth;
     this.managers.set(name, { fingerprint, auth });

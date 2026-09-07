@@ -107,10 +107,10 @@ improvises around it, and improvisation is not an assertion.
 
 Recorded here because they are the argument for the tier that found them.
 
-- **A hub with no `PASSWORD` and no `PASSWORD_HASH` starts, says nothing, and
-  accepts an empty password.** `EXTERNAL_URL` is checked at boot; the password
-  is not, and the comparison then reduces to two empty buffers.
-  `suites/no-password.e2e.ts`.
+- **Missing operator credentials used to allow an empty-password login.**
+  The HTTP hub now refuses startup without a non-empty password or valid bcrypt
+  hash, before starting children or a listener. `suites/no-password.e2e.ts`
+  verifies the missing and blank environment cases.
 - **Malformed JSON is answered `500` / `-32603` "Internal error"** rather than
   the `-32700` the specification reserves for a parse error — telling a client
   the server broke, when what broke was the request. Pinned in
