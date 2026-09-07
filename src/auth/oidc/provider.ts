@@ -197,6 +197,19 @@ export function buildOidcProvider(store: AuthStore, options: OidcProviderOptions
      */
     clientAuthMethods: ['client_secret_post', 'none', 'private_key_jwt'],
 
+    /**
+     * PKCE for every client, not only the public ones.
+     *
+     * oidc-provider's default requires it when `token_endpoint_auth_method`
+     * is `none` and lets a confidential client skip it. OAuth 2.1 and the MCP
+     * authorization specification require it of all clients, the discovery
+     * document and docs/reference/standards.md have said "S256 required"
+     * since the first release — and a confidential client's secret proves who
+     * redeems a code, not that the redeemer is the one who asked for it. The
+     * challenge is what binds the two halves of the flow.
+     */
+    pkce: { required: () => true },
+
     // The set the hub advertised before. oidc-provider's default is narrower
     // (one algorithm per family), which would refuse a private_key_jwt client
     // that signs with RS384 -- something the old document promised to accept.
