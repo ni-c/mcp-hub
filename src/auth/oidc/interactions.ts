@@ -8,7 +8,7 @@ import { renderLoginPage } from '../login-page.js';
 import { earlyRateLimit, LoginRateLimiter } from '../rate-limit.js';
 import { operatorCredential } from '../password.js';
 import { isLoopbackOnly } from '../redirect-uri.js';
-import { createSessionCookie, csrfToken, readSessionCookie, SESSION_COOKIE, SESSION_TTL_MS, verifyCsrfToken } from '../session.js';
+import { createSessionCookie, csrfToken, readSessionCookie, SESSION_TTL_MS, sessionCookieName, verifyCsrfToken } from '../session.js';
 import type { AuthStore } from '../store.js';
 import { logSafe } from '../text.js';
 import { HUB_ACCOUNT_ID } from './provider.js';
@@ -112,7 +112,7 @@ export function createOidcInteractionRoutes(options: OidcInteractionOptions): Ro
             .send(renderLoginPage(details.uid, redirectUri, identity, credential.enabled ? undefined : disabledNotice));
           return;
         }
-        const session = readSessionCookie(req.headers.cookie, store.cookieSecret);
+        const session = readSessionCookie(req.headers.cookie, store.cookieSecret, secure);
         if (!session) {
           expired(res, 401, 'Session expired. Close this window and connect again.');
           return;
@@ -181,7 +181,11 @@ export function createOidcInteractionRoutes(options: OidcInteractionOptions): Ro
       store.saveApproval(clientId, redirectUri, typeof clientName === 'string' ? clientName : undefined);
       console.log(`mcp-hub: approved OAuth client ${logSafe(clientId)} for ${logSafe(redirectUri)}`);
 
-      res.cookie(SESSION_COOKIE, createSessionCookie(store.cookieSecret), {
+      // `__Host-` behind HTTPS: the browser then refuses the cookie from any
+      // other origin, path or domain, so nobody can fix a session into this
+      // browser from a sibling host. No `domain`, and `path: '/'`, are what the
+      // prefix requires.
+      res.cookie(sessionCookieName(secure), createSessionCookie(store.cookieSecret), {
         httpOnly: true,
         secure,
         sameSite: 'lax',
@@ -209,7 +213,7 @@ export function createOidcInteractionRoutes(options: OidcInteractionOptions): Ro
         expired(res, 400, 'Authorization request expired. Close this window and connect again.');
         return;
       }
-      const session = readSessionCookie(req.headers.cookie, store.cookieSecret);
+      const session = readSessionCookie(req.headers.cookie, store.cookieSecret, secure);
       if (!session) {
         expired(res, 401, 'Session expired. Close this window and connect again.');
         return;

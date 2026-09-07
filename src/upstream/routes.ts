@@ -52,6 +52,7 @@ const page = (res: Response, status: number, title: string, body: string): void 
 export function createUpstreamRoutes(options: UpstreamRoutesOptions): Router {
   const { store, registry, supervisor, watcher, externalUrl } = options;
   const router = Router();
+  const secure = new URL(externalUrl).protocol === 'https:';
 
   /**
    * One document per upstream, addressed by a derived identifier.
@@ -92,7 +93,7 @@ export function createUpstreamRoutes(options: UpstreamRoutesOptions): Router {
     // Proving the browser belongs to the operator, not just to whoever ended up
     // holding the redirect. The session cookie rides along because the upstream
     // sends a top-level navigation and the cookie is SameSite=Lax.
-    if (readSessionCookie(cookie, store.cookieSecret) === undefined) {
+    if (readSessionCookie(cookie, store.cookieSecret, secure) === undefined) {
       page(res, 401, 'Not signed in', 'Sign in to this hub in the same browser, then run the login again.');
       return;
     }

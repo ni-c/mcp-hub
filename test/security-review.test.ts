@@ -6,7 +6,9 @@ import bcrypt from 'bcryptjs';
 import request from 'supertest';
 import fc from 'fast-check';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import express from 'express';
 import { createHub } from '../src/index.js';
+import { createOidcInteractionRoutes } from '../src/auth/oidc/interactions.js';
 import { operatorCredential } from '../src/auth/password.js';
 import { parseEnvFile } from '../src/docker-proxy/secrets.js';
 import { sanitiseInputRequests } from '../src/elicitation.js';
@@ -15,7 +17,7 @@ import { authorizeInBrowser, registerPublicClient } from './auth-flow.js';
 const REDIRECT_URI = 'https://client.example/cb';
 import { AuthStore } from '../src/auth/store.js';
 import { boundedResponse } from '../src/auth/pinned-fetch.js';
-import { createSessionCookie, readSessionCookie } from '../src/auth/session.js';
+import { createSessionCookie, readSessionCookie, sessionCookieName } from '../src/auth/session.js';
 import { readSignedPayload, signPayload, signatureMatches } from '../src/auth/signed-token.js';
 import { UpstreamAuth } from '../src/upstream/auth.js';
 import { UpstreamAuthRegistry } from '../src/supervisor.js';
@@ -361,5 +363,75 @@ describe('a URL-mode elicitation names a page the hub can vouch for', () => {
     const forwarded = (requests as Record<string, { params: Record<string, unknown> }>).open.params;
     expect(forwarded.url).toBe('https://idp.example/login?x=1');
     expect(forwarded.message).toBe('Server "srv" asks:\n\nSign in');
+  });
+});
+
+describe('the session cookie behind HTTPS', () => {
+  /** The interaction routes over a provider stub: oidc-provider's own cookies
+   *  are Secure behind an https issuer, which supertest's plain-http agent
+   *  cannot carry, so the real provider cannot be driven to the login here. */
+  async function loginBehind(externalUrl: string) {
+    const store = new AuthStore(directory());
+    const provider = {
+      interactionDetails: async () => ({ uid: 'u1', prompt: { name: 'login' }, params: { client_id: 'c', redirect_uri: REDIRECT_URI } }),
+      Client: { find: async () => undefined },
+      interactionFinished: async (_req: unknown, res: express.Response) => {
+        res.status(204).end();
+      }
+    };
+    const app = express();
+    app.use(createOidcInteractionRoutes({ provider: provider as never, store, externalUrl, password: 'test-password' }));
+    const res = await request(app).post('/interaction/u1/login').type('form').send({ request: 'u1', password: 'test-password' });
+    expect(res.status).toBe(204);
+    const header = ([] as string[]).concat(res.headers['set-cookie'] ?? []).find(line => line.includes('mcp_hub_session'))!;
+    return { header, store };
+  }
+
+  it('carries the __Host- prefix, Secure, Path=/ and no Domain', async () => {
+    const { header, store } = await loginBehind('https://hub.example/');
+    expect(header).toMatch(/^__Host-mcp_hub_session=/);
+    expect(header).toMatch(/; Secure/);
+    expect(header).toMatch(/; Path=\//);
+    expect(header).toMatch(/; HttpOnly/);
+    expect(header).not.toMatch(/Domain=/i);
+    const value = createSessionCookie(store.cookieSecret);
+    // Only the prefixed name is the session behind HTTPS.
+    expect(readSessionCookie(`__Host-mcp_hub_session=${value}`, store.cookieSecret, true)).toBe(value);
+    expect(readSessionCookie(`mcp_hub_session=${value}`, store.cookieSecret, true)).toBeUndefined();
+  });
+
+  it('uses the bare name behind plain http, where the prefix cannot be set', async () => {
+    const { header, store } = await loginBehind('http://localhost/');
+    expect(header).toMatch(/^mcp_hub_session=/);
+    expect(header).not.toMatch(/; Secure/);
+    const value = createSessionCookie(store.cookieSecret);
+    expect(readSessionCookie(`mcp_hub_session=${value}`, store.cookieSecret, false)).toBe(value);
+    expect(readSessionCookie(`__Host-mcp_hub_session=${value}`, store.cookieSecret, false)).toBeUndefined();
+    expect(sessionCookieName(true)).toBe('__Host-mcp_hub_session');
+  });
+});
+
+describe('PKCE is required of every client', () => {
+  it('refuses a confidential client that asks for a code without a code_challenge', async () => {
+    const hub = await hubWith({ password: 'test-password' });
+    const registration = await request(hub.app)
+      .post('/register')
+      .send({ redirect_uris: [REDIRECT_URI], token_endpoint_auth_method: 'client_secret_post', client_name: 'confidential' })
+      .expect(201);
+    const clientId = registration.body.client_id as string;
+    expect(registration.body.client_secret).toBeTruthy();
+    const query = new URLSearchParams({ client_id: clientId, redirect_uri: REDIRECT_URI, response_type: 'code', state: 'xyz', resource: 'http://localhost/hub' });
+    const res = await request(hub.app).get(`/authorize?${query}`).redirects(0);
+    expect(res.status).toBe(303);
+    const location = new URL(res.headers.location as string);
+    expect(location.origin + location.pathname).toBe(REDIRECT_URI);
+    expect(location.searchParams.get('error')).toBe('invalid_request');
+    expect(location.searchParams.get('error_description')).toMatch(/PKCE/);
+    // With a challenge the same client is asked to sign in as before.
+    const withChallenge = await request(hub.app)
+      .get(`/authorize?${query}&code_challenge=${'a'.repeat(43)}&code_challenge_method=S256`)
+      .redirects(0);
+    expect(withChallenge.status).toBe(303);
+    expect(withChallenge.headers.location).toMatch(/\/interaction\//);
   });
 });
