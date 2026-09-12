@@ -55,9 +55,18 @@ RUN npm install -g npm@12.0.2 \
 # So CI passes today's date here (see ci.yml) and the layer expires once a day.
 # The value MUST appear in the command: BuildKit keys a RUN on its expanded
 # command line, and a declared-but-unused ARG invalidates nothing.
+#
+# The `upgrade` is the other half of that, and it is not optional: `install`
+# only ever touches the packages named after it and whatever they pull in, so
+# a package that came with the base image and is a dependency of nothing
+# installed here is never reconsidered, however often the layer is rebuilt.
+# libpcre2-8-0 is exactly that case — the base image ships 10.42-1 while
+# bookworm-security has carried 10.42-1+deb12u1 for CVE-2026-86145 and
+# CVE-2026-89161 — and no cache buster reaches it without this line.
 ARG APT_SECURITY_EPOCH=0
 RUN echo "apt index epoch: $APT_SECURITY_EPOCH" \
     && apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
     && apt-get install -y --no-install-recommends git python3 python3-pip ca-certificates tini \
     && rm -rf /var/lib/apt/lists/*
 
