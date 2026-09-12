@@ -11,7 +11,7 @@
 # below, Node 24.20.0.
 # Refresh the digest and re-run that comparison together — a stale tag is
 # invisible if only the digest is re-resolved.
-FROM node:24-bookworm-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e AS build
+FROM node:24-bookworm-slim@sha256:2fe369e969550cde8e867afc3fe370b260140cab4a23d467074295b42163d553 AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts
@@ -21,7 +21,7 @@ RUN npm run build && npm prune --omit=dev --ignore-scripts
 
 # Runtime: node + npx for JS servers, uv/uvx + python3 for Python servers,
 # git for servers installed straight from a repository.
-FROM node:24-bookworm-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e
+FROM node:24-bookworm-slim@sha256:2fe369e969550cde8e867afc3fe370b260140cab4a23d467074295b42163d553
 COPY --from=ghcr.io/astral-sh/uv:0.12.3@sha256:2d890623d310b57771ce840f0da5eed5fc6d657da05ffaa45d82797b53fa3abc /uv /uvx /usr/local/bin/
 # The base image bundles npm 11, whose vendored deps (tar, brace-expansion,
 # sigstore, ...) carry known HIGH/CRITICAL CVEs; replace it wholesale. Even
