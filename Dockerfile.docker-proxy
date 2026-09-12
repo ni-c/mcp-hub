@@ -22,9 +22,13 @@ FROM node:24-bookworm-slim@sha256:2fe369e969550cde8e867afc3fe370b260140cab4a23d4
 # `Dockerfile`: without it a pinned base digest plus a constant apt command means
 # the layer is never rebuilt, and a Debian security fix can never get in. This
 # image installs one package, but its dependencies rot exactly like any other.
+# The `upgrade` covers what `install` structurally cannot: a base-image package
+# that nothing named below depends on is never reconsidered, however often the
+# layer is rebuilt. See the longer note in ./Dockerfile.
 ARG APT_SECURITY_EPOCH=0
 RUN echo "apt index epoch: $APT_SECURITY_EPOCH" \
     && apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
     && apt-get install -y --no-install-recommends tini \
     && rm -rf /var/lib/apt/lists/*
 # The base image bundles npm 10, whose vendored dependencies carry known
