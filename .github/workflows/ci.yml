@@ -92,6 +92,12 @@ jobs:
       # provenance, so what builds it is part of what ships.
       - run: npm audit --audit-level=high
 
+      # The base image pin and the note above it are one fact written twice,
+      # and a bump only ever rewrites one of them. This asserts the note still
+      # describes the pin, that both Dockerfiles sit on the same image, and
+      # that the major tag is still the LTS tag.
+      - run: .github/scripts/check-base-image-note.sh Dockerfile Dockerfile.docker-proxy
+
   codeql:
     runs-on: ubuntu-latest
     permissions:
