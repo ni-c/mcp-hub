@@ -22,6 +22,7 @@ import { setTransportHandlers } from './transports/stream.js';
 import { DockerClient, parseSandboxDockerHost } from './sandbox/docker-client.js';
 import type { AuthStore } from './auth/store.js';
 import { UpstreamAuth, UpstreamLoginRequiredError } from './upstream/auth.js';
+import { boundedRedirectFetch } from './upstream/redirects.js';
 import { ToolCache } from './tool-cache.js';
 import type { ToolCacheEntry } from './tool-cache.js';
 import { filterTools, hasToolFilter, unmatchedPatterns } from './tool-filter.js';
@@ -64,6 +65,10 @@ function eraHasPing(client: Client): boolean {
 /**
  * Remote upstreams get their configured headers on EVERY request via a fetch
  * wrapper — requestInit alone does not cover the SSE stream GET.
+ *
+ * Both wrappers follow a redirect only within the configured origin, and at
+ * most three: the platform would otherwise follow a `Location` anywhere,
+ * headers and body included. See `boundedRedirectFetch`.
  */
 function buildRemoteTransport(config: RemoteServerConfig, auth?: UpstreamAuth): Transport {
   const url = new URL(config.url);
@@ -79,13 +84,14 @@ function buildRemoteTransport(config: RemoteServerConfig, auth?: UpstreamAuth): 
       ? new SSEClientTransport(url, { authProvider: auth.provider(), fetch: guarded })
       : new StreamableHTTPClientTransport(url, { authProvider: auth.provider(), fetch: guarded });
   }
-  const fetchWithHeaders: typeof fetch = (input, init) => {
+  // The headers go on inside the redirect wrapper, so every hop carries them.
+  const fetchWithHeaders = boundedRedirectFetch(url.origin, (input, init) => {
     const merged = new Headers(init?.headers);
     for (const [key, value] of Object.entries(headers)) {
       if (!merged.has(key)) merged.set(key, value);
     }
     return fetch(input, { ...init, headers: merged });
-  };
+  });
   if (config.transport === 'sse') {
     return new SSEClientTransport(url, { requestInit: { headers }, fetch: fetchWithHeaders });
   }
@@ -252,6 +258,8 @@ export class ManagedServer {
    * kill the new child.
    */
   private generation = 0;
+  /** True while client.connect() is in flight; see start(). */
+  private connecting = false;
   /** The one upstream listen stream carrying this route's whole demand (modern era). */
   private upstream?: McpSubscription;
   private upstreamFilter?: SubscriptionFilter;
@@ -426,12 +434,23 @@ export class ManagedServer {
       }
     );
     setTransportHandlers(transport, { onclose: () => this.onExit(this.exitReason(), generation) });
+    // While the opening exchange runs, a close of the transport is not
+    // reported by onclose: the SDK closes the transport *before* connect()
+    // rejects, so the generic "connection closed" used to win the race and the
+    // rejection — which names the cause, and may carry a verdict no restart
+    // can fix — was thrown away by onExit's state guard. A refused redirect,
+    // a TLS failure or an unauthorized upstream all read as "connection
+    // closed" in the log. connect() always rejects once its transport is
+    // gone, so the catch below is the one place that reports this exit.
+    this.connecting = true;
     try {
       await client.connect(transport);
     } catch (error) {
+      this.connecting = false;
       this.onExit(`failed to start: ${(error as Error).message}`, generation, classifyAuthFailure(error));
       return;
     }
+    this.connecting = false;
     if (generation !== this.generation) {
       // sleep()/stop() ran while we were connecting; it already set the final
       // state, so this child is surplus and only needs to go away again.
@@ -683,6 +702,9 @@ export class ManagedServer {
     // A callback from a transport that sleep()/stop()/a newer start() already
     // left behind must not touch the current child.
     if (generation !== this.generation) return;
+    // A close during the opening exchange is reported by start()'s catch, with
+    // the reason connect() gives — see the note there.
+    if (this.connecting && reason === this.exitReason()) return;
     // A failed start reports twice: transport.onclose fires and start()'s catch
     // calls us as well. Without this guard the second call would overwrite
     // restartTimer without clearing it, so two children would be spawned and

@@ -97,6 +97,10 @@ A server that already speaks HTTP does not need a child process. Give it a
 Remote servers get the same treatment as children: connected at boot, pinged,
 reconnected with backoff, reloaded on config change.
 
+A redirect from the upstream is followed only within the origin of `url` (same
+scheme, host and port) and at most three times; a `Location` anywhere else
+fails the request and is logged. See [security](/guide/security#authentication-and-authorization).
+
 ### Upstreams that speak OAuth
 
 Where a static header is not enough, the hub can be an OAuth client in its own

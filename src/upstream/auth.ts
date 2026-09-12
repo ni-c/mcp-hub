@@ -8,6 +8,7 @@ import { isPrivateAddress, resolvePublicAddress } from '../auth/address.js';
 import { boundedResponse, guardedRequest } from '../auth/pinned-fetch.js';
 import { logSafe } from '../auth/text.js';
 import { UpstreamAuthProvider, callbackUrl, credentialFingerprint, hubClientMetadata } from './provider.js';
+import { boundedRedirectFetch } from './redirects.js';
 import type { UpstreamIdentity } from './provider.js';
 
 /**
@@ -418,6 +419,9 @@ export class UpstreamAuth {
    */
   createFetch(): typeof fetch {
     const upstreamOrigin = new URL(this.identity.serverUrl).origin;
+    // Data-plane redirects stay within the upstream's origin, three at most;
+    // the control plane refuses them outright in asFetch.
+    const dataPlane = boundedRedirectFetch(upstreamOrigin);
     return async (input, init) => {
       const url = new URL(input instanceof Request ? input.url : String(input));
       const isControlPlane = url.origin !== upstreamOrigin || url.pathname.startsWith('/.well-known/');
@@ -430,7 +434,7 @@ export class UpstreamAuth {
         for (const [key, value] of Object.entries(this.config.headers)) {
           if (!headers.has(key)) headers.set(key, value);
         }
-        return { response: await fetch(url, { ...init, headers }), token };
+        return { response: await dataPlane(url, { ...init, headers }), token };
       };
 
       const first = await send();
