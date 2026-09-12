@@ -7,8 +7,8 @@
 # What keeps this honest is a comparison, not a version number written down here:
 # `node:lts-bookworm-slim` and `node:24-bookworm-slim` MUST resolve to the same
 # digest. The day 24 leaves LTS they diverge, and that is visible; a hardcoded
-# version in a comment is not. Verified 2026-09-01: both resolve to the digest
-# below, Node 24.20.0.
+# version in a comment is not. Verified 2026-09-12: both resolve to the digest
+# below, Node 24.21.0.
 # Refresh the digest and re-run that comparison together — a stale tag is
 # invisible if only the digest is re-resolved.
 FROM node:24-bookworm-slim@sha256:2fe369e969550cde8e867afc3fe370b260140cab4a23d467074295b42163d553 AS build
