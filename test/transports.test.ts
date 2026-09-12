@@ -4,6 +4,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
+import fc from 'fast-check';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client } from '@modelcontextprotocol/client';
 import type { JSONRPCMessage } from '@modelcontextprotocol/client';
@@ -171,6 +172,100 @@ describe('DockerFrameDecoder', () => {
     expect(stream.destroyed).toBe(true);
     expect(closes).toBe(1);
     expect(removals).toBeGreaterThanOrEqual(2); // stale cleanup plus corrupt-stream cleanup
+  });
+});
+
+/**
+ * What a peer can make the hub spend by pacing its writes.
+ *
+ * Both decoders used to append every chunk to one growing buffer, which copies
+ * the buffer each time: a ten-megabyte line in 4 KiB pieces cost close to a
+ * second of the event loop, a 16 MiB docker frame two and a half, and a peer
+ * behind `type: "unix"` or `"tcp"` — the servers the sandbox modes exist for —
+ * chooses its own piece size. The bounds below are loose for CI; the old code
+ * misses them by an order of magnitude.
+ */
+describe('byte-stream decoders are linear in the input', () => {
+  const PIECE = 4096;
+
+  it('a 10 MiB line delivered in 4 KiB pieces costs milliseconds, not a second', () => {
+    const transport = new StreamTransport(new PassThrough(), false);
+    setTransportHandlers(transport, { onerror: () => {}, onmessage: () => {} });
+    const piece = Buffer.alloc(PIECE, 0x61);
+    const total = 10 * 1024 * 1024 - PIECE;
+    const started = performance.now();
+    for (let sent = 0; sent < total; sent += PIECE) transport.receive(piece);
+    expect(performance.now() - started).toBeLessThan(250);
+  });
+
+  it('a 16 MiB docker frame delivered in 4 KiB pieces costs milliseconds, not seconds', () => {
+    let frames = 0;
+    const decoder = new DockerFrameDecoder(() => frames++, () => {});
+    const size = 16 * 1024 * 1024 - 1;
+    const header = Buffer.alloc(8);
+    header[0] = 1;
+    header.writeUInt32BE(size, 4);
+    const piece = Buffer.alloc(PIECE, 0x61);
+    const started = performance.now();
+    decoder.push(header);
+    for (let sent = 0; sent < size; sent += PIECE) decoder.push(sent + PIECE > size ? piece.subarray(0, size - sent) : piece);
+    expect(performance.now() - started).toBeLessThan(250);
+    expect(frames).toBe(1);
+  });
+});
+
+/** Every way of cutting a byte sequence into pieces: cut points, sorted. */
+const cuts = (length: number) => fc.uniqueArray(fc.integer({ min: 0, max: length }), { maxLength: 12 }).map(points => points.toSorted((a, b) => a - b));
+
+function pieces(whole: Buffer, points: number[]): Buffer[] {
+  const out: Buffer[] = [];
+  let from = 0;
+  for (const point of [...points, whole.length]) {
+    out.push(whole.subarray(from, point));
+    from = point;
+  }
+  return out;
+}
+
+describe('chunking is invisible to the decoders', () => {
+  const messages = fc.array(fc.record({ jsonrpc: fc.constant('2.0' as const), id: fc.nat(), method: fc.string({ minLength: 1, maxLength: 40 }) }), {
+    maxLength: 8
+  });
+
+  it('the stream transport reads the same messages however the bytes were cut', () => {
+    fc.assert(
+      fc.property(
+        messages.chain(list => {
+          const whole = Buffer.from(list.map(message => `${JSON.stringify(message)}\n`).join(''));
+          return fc.tuple(fc.constant(list), fc.constant(whole), cuts(whole.length));
+        }),
+        ([list, whole, points]) => {
+          const transport = new StreamTransport(new PassThrough(), false);
+          const received: JSONRPCMessage[] = [];
+          setTransportHandlers(transport, { onmessage: message => received.push(message), onerror: () => {} });
+          for (const piece of pieces(whole, points)) transport.receive(piece);
+          expect(received).toEqual(list);
+        }
+      )
+    );
+  });
+
+  it('the docker decoder yields the same frames however the bytes were cut, headers included', () => {
+    const frames = fc.array(fc.tuple(fc.constantFrom(1, 2), fc.string({ maxLength: 64 })), { maxLength: 6 });
+    fc.assert(
+      fc.property(
+        frames.chain(list => {
+          const whole = Buffer.concat(list.map(([stream, payload]) => frame(stream, payload)));
+          return fc.tuple(fc.constant(list), fc.constant(whole), cuts(whole.length));
+        }),
+        ([list, whole, points]) => {
+          const decoded: [number, string][] = [];
+          const decoder = new DockerFrameDecoder((stream, payload) => decoded.push([stream, payload.toString('utf8')]), () => {});
+          for (const piece of pieces(whole, points)) decoder.push(piece);
+          expect(decoded).toEqual(list);
+        }
+      )
+    );
   });
 });
 
