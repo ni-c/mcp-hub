@@ -20,7 +20,17 @@ export class StreamTransport implements Transport {
   onerror?: (error: Error) => void;
   onmessage?: (message: JSONRPCMessage) => void;
 
-  private buffer: Buffer = Buffer.alloc(0);
+  /**
+   * Bytes received since the last newline, as the chunks they arrived in.
+   *
+   * A list rather than one growing buffer: appending a chunk to a buffer copies
+   * the whole buffer, so a peer that sends a long line in small pieces makes
+   * the hub copy quadratically — ten megabytes in 4 KiB chunks cost a second
+   * of the event loop, on every restart the peer cared to provoke. The pieces
+   * are joined once, when a newline arrives, which is linear.
+   */
+  private pending: Buffer[] = [];
+  private pendingBytes = 0;
   private started = false;
   private closed = false;
   private reportedClose = false;
@@ -58,24 +68,40 @@ export class StreamTransport implements Transport {
    * own codec still does the parsing; only the policy is local.
    */
   receive(chunk: Buffer): void {
-    if (this.buffer.length + chunk.length > STDIO_DEFAULT_MAX_BUFFER_SIZE) {
+    if (this.pendingBytes + chunk.length > STDIO_DEFAULT_MAX_BUFFER_SIZE) {
       // A peer that keeps sending without ever writing a newline. This runs
       // inside a 'data' handler, so a throw here would reach
       // process.on('uncaughtException') and take the entire hub down — every
       // other server with it — because one sandboxed server misbehaved. The
       // stream is desynchronised anyway: report it, end this connection, let
       // the supervisor restart it.
-      this.buffer = Buffer.alloc(0);
+      this.pending = [];
+      this.pendingBytes = 0;
       this.onerror?.(new Error(`ReadBuffer exceeded maximum size of ${STDIO_DEFAULT_MAX_BUFFER_SIZE} bytes`));
       void this.close();
       return;
     }
-    this.buffer = this.buffer.length === 0 ? chunk : Buffer.concat([this.buffer, chunk]);
+    // Only the new chunk can hold the newline that completes a line; the
+    // pending pieces were already searched when they arrived.
+    if (chunk.indexOf('\n') === -1) {
+      this.pending.push(chunk);
+      this.pendingBytes += chunk.length;
+      return;
+    }
+    let buffer = this.pending.length === 0 ? chunk : Buffer.concat([...this.pending, chunk]);
+    this.pending = [];
+    this.pendingBytes = 0;
     for (;;) {
-      const newline = this.buffer.indexOf('\n');
-      if (newline === -1) return;
-      const line = this.buffer.toString('utf8', 0, newline).replace(/\r$/, '');
-      this.buffer = this.buffer.subarray(newline + 1);
+      const newline = buffer.indexOf('\n');
+      if (newline === -1) {
+        if (buffer.length > 0) {
+          this.pending.push(buffer);
+          this.pendingBytes = buffer.length;
+        }
+        return;
+      }
+      const line = buffer.toString('utf8', 0, newline).replace(/\r$/, '');
+      buffer = buffer.subarray(newline + 1);
       let message: JSONRPCMessage;
       try {
         message = deserializeMessage(line);
@@ -110,7 +136,8 @@ export class StreamTransport implements Transport {
     if (this.reportedClose) return;
     this.reportedClose = true;
     this.closed = true;
-    this.buffer = Buffer.alloc(0);
+    this.pending = [];
+    this.pendingBytes = 0;
     this.onclose?.();
   }
 }

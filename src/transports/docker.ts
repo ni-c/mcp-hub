@@ -19,7 +19,16 @@ const STDERR = 2;
  * clean protocol channel while the server's log lines still reach the operator.
  */
 export class DockerFrameDecoder {
-  private buffer: Buffer = Buffer.alloc(0);
+  /**
+   * The bytes of the frame in progress, as the chunks they arrived in, joined
+   * once the whole frame is here. One growing buffer would copy itself on every
+   * chunk — quadratic in the frame size, on the hub's event loop, for a size
+   * the peer chooses.
+   */
+  private pending: Buffer[] = [];
+  private pendingBytes = 0;
+  /** The header of the frame in progress, once eight bytes have arrived. */
+  private header?: { stream: number; size: number };
   private failed = false;
 
   constructor(
@@ -29,22 +38,42 @@ export class DockerFrameDecoder {
 
   push(chunk: Buffer): void {
     if (this.failed) return;
-    this.buffer = this.buffer.length === 0 ? chunk : Buffer.concat([this.buffer, chunk]);
+    if (chunk.length === 0) return;
+    this.pending.push(chunk);
+    this.pendingBytes += chunk.length;
     for (;;) {
-      if (this.buffer.length < 8) return;
-      const size = this.buffer.readUInt32BE(4);
-      if (size > MAX_FRAME_BYTES) {
-        this.failed = true;
-        this.onError(new Error(`docker frame of ${size} bytes exceeds the ${MAX_FRAME_BYTES} byte limit`));
-        this.buffer = Buffer.alloc(0);
-        return;
+      if (this.header === undefined) {
+        if (this.pendingBytes < 8) return;
+        // Joining here is cheap: the pending pieces hold at most a header's
+        // worth of bytes plus whatever one chunk brought with it.
+        const joined = this.join();
+        const size = joined.readUInt32BE(4);
+        if (size > MAX_FRAME_BYTES) {
+          this.failed = true;
+          this.onError(new Error(`docker frame of ${size} bytes exceeds the ${MAX_FRAME_BYTES} byte limit`));
+          this.pending = [];
+          this.pendingBytes = 0;
+          return;
+        }
+        this.header = { stream: joined[0], size };
+        this.replace(joined.subarray(8));
       }
-      if (this.buffer.length < 8 + size) return;
-      const stream = this.buffer[0];
-      const payload = this.buffer.subarray(8, 8 + size);
-      this.buffer = this.buffer.subarray(8 + size);
-      this.onFrame(stream, payload);
+      if (this.pendingBytes < this.header.size) return;
+      const joined = this.join();
+      const { stream, size } = this.header;
+      this.header = undefined;
+      this.replace(joined.subarray(size));
+      this.onFrame(stream, joined.subarray(0, size));
     }
+  }
+
+  private join(): Buffer {
+    return this.pending.length === 1 ? this.pending[0] : Buffer.concat(this.pending);
+  }
+
+  private replace(rest: Buffer): void {
+    this.pending = rest.length > 0 ? [rest] : [];
+    this.pendingBytes = rest.length;
   }
 }
 

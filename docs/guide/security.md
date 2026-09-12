@@ -153,6 +153,17 @@ point the hub at a private address. And the configured `headers` are never sent
 to the authorization server, nor is an upstream token — the two request paths
 are kept apart deliberately, because the SDK hands the same fetch to both.
 
+**A redirect from an upstream stays on the upstream.** That guard covers the
+authorization server; the MCP requests themselves — every remote server, with
+or without `oauth` — have their own rule. A `Location` is followed only when it
+points at the same origin as the configured `url` (the same scheme, host and
+port; `/mcp` to `/mcp/` is the case that has to work), and at most three times.
+Anything else fails the request with a logged reason that names the origin
+refused and nothing more. Before 0.11.3 the platform default applied: an
+upstream could redirect a `tools/call` or the event stream to an internal
+address, and the hub would connect there with the request body and every
+configured header except `Authorization` and `Cookie`.
+
 **Nothing a client chooses can forge a log line.** A `client_id` may contain
 newlines — the URL parser strips them, so such a value passes every structural
 check while the raw string still reaches the log, where each line is given a
