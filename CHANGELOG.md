@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- #region changelog -->
 
+## [0.11.3] - 2026-09-12
+
+### Security
+
+- **A remote upstream could redirect the hub anywhere.** The MCP requests to
+  a remote server — `tools/call`, the event stream, `subscriptions/listen` —
+  went out with the platform's default of following every redirect, and
+  neither the SDK's transports nor the hub's own fetch wrappers said
+  otherwise. An upstream answering with a `Location` on an internal address
+  had the hub connect there, send the JSON-RPC body and every configured
+  header except `Authorization` and `Cookie`, and read the answer as MCP. The
+  guard the authorization server always had now covers the data plane too: a
+  redirect is followed only within the origin of the configured `url` (same
+  scheme, host and port — `/mcp` to `/mcp/` keeps working), at most three
+  times, with the platform's method and body rules; anything else fails the
+  request with a reason that names the refused origin and nothing more.
+  Reported by the 2026-09-12 internal review.
+
+### Fixed
+
+- **A peer could make the hub copy its input quadratically.** The byte-stream
+  transports — `type: "unix"`, `"tcp"` and the docker attach stream — appended
+  every chunk to one growing buffer, so a line or a frame delivered in small
+  pieces cost the event loop a copy of everything so far, per piece: ten
+  megabytes in 4 KiB pieces took close to a second, a 16 MiB docker frame two
+  and a half, and a peer chooses its piece size. Both decoders now collect the
+  pieces and join them once, which is linear; the existing caps (10 MiB per
+  line, 16 MiB per frame) are unchanged, and a property test holds the framing
+  identical however the bytes are cut.
+- **A remote server that failed to connect was logged as "connection closed".**
+  The SDK closes the transport before `connect()` rejects, so the generic
+  close reason won the race and the rejection — which names the cause and may
+  carry a verdict no restart can fix — was thrown away. The exit is now
+  reported once, from the rejection, so a refused redirect, a TLS failure or
+  an unauthorized upstream reads as what it is.
+
 ## [0.11.2] - 2026-09-07
 
 ### Security
