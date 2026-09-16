@@ -4,13 +4,12 @@
 # line the CI test matrix covers. Node 26 is still Current, and libraries check:
 # oidc-provider warns "Unsupported runtime" on any build where process.release.lts
 # is unset, which is every non-LTS build.
-# What keeps this honest is a comparison, not a version number written down here:
-# `node:lts-bookworm-slim` and `node:24-bookworm-slim` MUST resolve to the same
-# digest. The day 24 leaves LTS they diverge, and that is visible; a hardcoded
-# version in a comment is not. Verified 2026-09-12: both resolve to the digest
-# below, Node 24.21.0.
-# Refresh the digest and re-run that comparison together — a stale tag is
-# invisible if only the digest is re-resolved.
+# Only the major belongs in this note. A patch version written here would be
+# falsified by the next digest bump, which would arrive red for a reason nobody
+# needs to act on. CI checks the claim instead, on every run
+# (.github/scripts/check-base-image-pin.sh): `node:lts-bookworm-slim` and
+# `node:24-bookworm-slim` must resolve to the same digest, and the digest
+# pinned below must be a Node 24 image. The day 24 leaves LTS, that fails.
 FROM node:24-bookworm-slim@sha256:2fe369e969550cde8e867afc3fe370b260140cab4a23d467074295b42163d553 AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
