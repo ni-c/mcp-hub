@@ -4,7 +4,7 @@
 
 [![CI](https://img.shields.io/github/actions/workflow/status/ni-c/mcp-hub/ci.yml?branch=main&label=CI)](https://github.com/ni-c/mcp-hub/actions/workflows/ci.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/ni-c/mcp-hub/badge)](https://scorecard.dev/viewer/?uri=github.com/ni-c/mcp-hub)
-<a href="https://socket.dev/npm/package/@ni-c/mcp-hub"><img src="https://socket.dev/api/badge/npm/package/@ni-c/mcp-hub" alt="Socket supply-chain report" height="20"></a>
+[![Socket Badge](https://badge.socket.dev/npm/package/@ni-c/mcp-hub)](https://socket.dev/npm/package/@ni-c/mcp-hub)
 [![Glama score](https://glama.ai/mcp/servers/ni-c/mcp-hub/badges/score.svg)](https://glama.ai/mcp/servers/ni-c/mcp-hub)
 <br>
 [![npm version](https://img.shields.io/npm/v/%40ni-c%2Fmcp-hub)](https://www.npmjs.com/package/@ni-c/mcp-hub)
