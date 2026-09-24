@@ -10,7 +10,7 @@
 # (.github/scripts/check-base-image-pin.sh): `node:lts-bookworm-slim` and
 # `node:24-bookworm-slim` must resolve to the same digest, and the digest
 # pinned below must be a Node 24 image. The day 24 leaves LTS, that fails.
-FROM node:24-bookworm-slim@sha256:2fe369e969550cde8e867afc3fe370b260140cab4a23d467074295b42163d553 AS build
+FROM node:24-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6 AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts
@@ -20,7 +20,7 @@ RUN npm run build && npm prune --omit=dev --ignore-scripts
 
 # Runtime: node + npx for JS servers, uv/uvx + python3 for Python servers,
 # git for servers installed straight from a repository.
-FROM node:24-bookworm-slim@sha256:2fe369e969550cde8e867afc3fe370b260140cab4a23d467074295b42163d553
+FROM node:24-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6
 COPY --from=ghcr.io/astral-sh/uv:0.12.3@sha256:2d890623d310b57771ce840f0da5eed5fc6d657da05ffaa45d82797b53fa3abc /uv /uvx /usr/local/bin/
 # The base image bundles npm 11, whose vendored deps (tar, brace-expansion,
 # sigstore, ...) carry known HIGH/CRITICAL CVEs; replace it wholesale. Even
