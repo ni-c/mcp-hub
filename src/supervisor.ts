@@ -248,8 +248,16 @@ export class ManagedServer {
   private restartTimer?: NodeJS.Timeout;
   private pingTimer?: NodeJS.Timeout;
   private stopping = false;
-  /** Failed restarts since the last real use; wake() and markUsed() reset it. */
+  /** Failed restarts since the server was last up or used; a start that
+   *  reaches 'up' and markUsed() reset it, wake() does not. */
   private restartsSinceUse = 0;
+  /**
+   * When a request last revived a server that had given up. The first request
+   * after a give-up retries at once; another one within the current backoff is
+   * refused, so a caller repeating it cannot restart the server faster than its
+   * own crashes allow. Cleared by a start that reaches 'up'.
+   */
+  private lastGiveUpRetryAt = 0;
   private wakeWaiters: WakeWaiter[] = [];
   /**
    * Invalidates callbacks of an abandoned transport: sleep() and stop() tear a
@@ -318,6 +326,15 @@ export class ManagedServer {
     if (this.state === 'unauthorized') {
       return Promise.reject(new Error(`Server "${this.name}" needs an upstream login`));
     }
+    // A server that gave up revives on request, but no faster than its backoff.
+    // A request inside the window fails fast with the error the give-up
+    // reported, rather than queueing behind an attempt that is not coming.
+    if (this.state === 'sleeping' && this.restartsSinceUse > 0) {
+      if (Date.now() - this.lastGiveUpRetryAt < this.backoffMs) {
+        return Promise.reject(new Error(`Server "${this.name}" failed to start: ${this.lastError}`));
+      }
+      this.lastGiveUpRetryAt = Date.now();
+    }
     const timeoutMs = this.options.wakeTimeoutMs ?? WAKE_TIMEOUT_MS;
     const promise = new Promise<void>((resolve, reject) => {
       const waiter: WakeWaiter = {
@@ -332,15 +349,19 @@ export class ManagedServer {
       waiter.timer.unref();
       this.wakeWaiters.push(waiter);
     });
-    if (this.state === 'sleeping') {
-      this.restartsSinceUse = 0;
+    if (this.state === 'sleeping' && this.restartsSinceUse === 0) {
+      // Idle sleep or a cache-hydrated boot: no crash history, wake at once.
       this.backoffMs = this.options.backoffInitialMs ?? BACKOFF_INITIAL_MS;
       void this.start();
-    } else if (this.state === 'down') {
-      // Someone is asking — no point in sitting out the rest of the backoff.
-      clearTimeout(this.restartTimer);
+    } else if (this.state === 'sleeping') {
+      // Given up earlier: this is the one attempt the window above allows.
+      // The backoff and the give-up count carry on from where the crashes
+      // left them instead of starting over.
       void this.start();
     }
+    // 'down': a restart is already scheduled by the backoff. The caller waits
+    // for it; cancelling the timer to start now would let requests set the
+    // pace of a crash loop.
     // 'starting': the in-flight start resolves the waiter.
     return promise;
   }
@@ -465,6 +486,9 @@ export class ManagedServer {
     // The start itself opens a full idle window, so a pre-warmed server is not
     // swept away just before the tool call it was warmed for.
     this.lastUsedAt = this.startedAt;
+    // Coming up is what clears the crash history — being asked for does not.
+    this.restartsSinceUse = 0;
+    this.lastGiveUpRetryAt = 0;
     // The child's declared identity, on its way into a file LOG_FILE mirrors
     // and fail2ban reads: escaped and bounded like any other stranger's text.
     console.log(`[${this.name}] up (${logSafe(this.serverInfo?.name ?? 'unknown', 100)} ${logSafe(this.serverInfo?.version ?? '', 40)})`.trim());
@@ -737,6 +761,9 @@ export class ManagedServer {
       // forever. Give up until the next wake, which starts fresh.
       console.error(`[${this.name}] down (${logSafe(reason, 500)}), giving up until next use after ${this.restartsSinceUse - 1} failed restarts`);
       this.state = 'sleeping';
+      // lastGiveUpRetryAt stays as it is: zero after a first give-up, so the
+      // next request retries at once; the time of that retry when the retry
+      // is what failed, so the one after it waits for the backoff.
       this.rejectWakeWaiters(new Error(`Server "${this.name}" failed to start: ${reason}`));
       return;
     }

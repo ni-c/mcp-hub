@@ -1,5 +1,7 @@
+import { StringDecoder } from 'node:string_decoder';
 import type { Duplex } from 'node:stream';
 import type { Transport, JSONRPCMessage } from '@modelcontextprotocol/server';
+import { logSafe } from '../auth/text.js';
 import type { DockerServerConfig } from '../config.js';
 import { buildCreateRequest, containerName } from '../sandbox/container-spec.js';
 import { DockerClient } from '../sandbox/docker-client.js';
@@ -98,6 +100,9 @@ export class DockerTransport implements Transport {
   private stream?: Duplex;
   private closing = false;
   private stderrTail = '';
+  // A frame boundary can split a multi-byte UTF-8 character; the decoder
+  // carries the partial bytes into the next frame.
+  private readonly stderrDecoder = new StringDecoder('utf8');
 
   constructor(
     private readonly server: string,
@@ -169,6 +174,11 @@ export class DockerTransport implements Transport {
     this.closing = true;
     await this.inner?.close();
     this.stream?.destroy();
+    // A last line without a newline, or a character cut off by the exit, would
+    // otherwise go down with the container — and it is often the reason.
+    const rest = this.stderrTail + this.stderrDecoder.end();
+    this.stderrTail = '';
+    if (rest) this.writeStderr(`[${this.server}] ${logSafe(rest, Infinity)}\n`);
     await this.client.removeContainer(containerName(this.server)).catch(() => {});
   }
 
@@ -185,14 +195,19 @@ export class DockerTransport implements Transport {
    * to the process's stderr rather than through console: stdio children use
    * `stderr: 'inherit'` and bypass console too, which is what keeps LOG_FILE
    * (read by fail2ban) free of server chatter.
+   *
+   * The container is untrusted, so each line is escaped like any other text
+   * from a child: an ESC or a bare CR would otherwise reach the terminal of
+   * whoever watches `docker logs -f`. No length cap from logSafe — the 64 KiB
+   * tail flush below already bounds a line.
    */
   private logStderr(payload: Buffer): void {
-    this.stderrTail += payload.toString('utf8');
+    this.stderrTail += this.stderrDecoder.write(payload);
     const lines = this.stderrTail.split('\n');
     this.stderrTail = lines.pop() ?? '';
-    for (const line of lines) this.writeStderr(`[${this.server}] ${line}\n`);
+    for (const line of lines) this.writeStderr(`[${this.server}] ${logSafe(line, Infinity)}\n`);
     if (this.stderrTail.length > 64 * 1024) {
-      this.writeStderr(`[${this.server}] ${this.stderrTail}\n`);
+      this.writeStderr(`[${this.server}] ${logSafe(this.stderrTail, Infinity)}\n`);
       this.stderrTail = '';
     }
   }

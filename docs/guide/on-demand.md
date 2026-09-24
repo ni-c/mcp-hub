@@ -111,8 +111,16 @@ While a server is being used, a crash is handled as always: restart with
 exponential backoff. But a server that keeps failing **without anyone asking
 for it** stops being restarted after five attempts — it goes back to `sleeping`
 with its `lastError` kept visible in `list_servers` and `/health`, and the next
-tool call simply tries a fresh start. A broken npm package cannot occupy the
-machine in an endless restart loop overnight.
+tool call tries again. A broken npm package cannot occupy the machine in an
+endless restart loop overnight.
+
+Asking does not speed a crashing server up. A request that arrives while a
+restart is scheduled waits for it; after the server has given up, the first
+request retries at once, and another one within the current backoff interval
+gets the last error instead of a new attempt. Only a start that comes up clears
+the crash history. (Before 0.11.4 every request cancelled the backoff, so a
+client repeating a call could restart a crashing sandbox container as fast as
+it liked.)
 
 ## What it costs
 

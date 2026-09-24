@@ -7,6 +7,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- #region changelog -->
 
+## [0.11.4] - 2026-09-24
+
+### Security
+
+- **An approval for one server was an approval for all of them.** The login
+  and consent pages name the resource a client asks for under *Requested
+  access*, but the approval was stored for the client and its redirect URI
+  only. While the operator's session lasted, a client approved for
+  `/paperless/mcp` could ask for `/hub` and receive a code without any page —
+  a token for every server. The approval now records the resources the page
+  showed, and a request for any other one brings the page back: *Approve /
+  Deny* within a live session, the sign-in page otherwise. Approvals written
+  by an older version name no resource, so each connector sees the page once
+  more the next time it authorizes; refresh tokens are unaffected.
+  `mcp-hub-admin clients list` shows `approvedResources`.
+- **A remote upstream's reply had no size limit.** The control plane to an
+  upstream's authorization server has capped every response since August; the
+  MCP requests themselves read whatever came back, so one `tools/call` answered
+  with 300 MiB cost the hub 630 MB of heap, and an event without a line end
+  grew without bound in the SDK's SSE parser. Replies are now held to 10 MiB,
+  the limit the byte-stream transports apply to one message — a JSON reply as a
+  whole, an event stream per event, and a declared `content-length` above it is
+  refused before reading. `resources/updated` URIs longer than
+  `MCP_SUBSCRIPTION_MAX_URI_BYTES` (8 KiB) are dropped.
+- **The consent page could be made to show a different address.** A redirect
+  URI such as `https://claude.ai@attacker.example/cb` connects to
+  `attacker.example`, and a bidi override or zero-width character in a
+  redirect URI or metadata document URL could reorder or hide the host in the
+  line the operator reads. Both are refused now, for every scheme and both
+  registration mechanisms; percent-encoded bytes are still accepted, and
+  values stored earlier are shown with such characters as visible escapes.
+- **`/revoke` was not rate-limited.** It runs the same client authentication as
+  `/token`, `private_key_jwt` signature checks included, and a client can
+  register itself; it now has the same budget as `/token`, counted
+  separately so a flood of one cannot starve the other.
+- **Requests could drive a crashing server's restarts.** Every request to an
+  on-demand server cancelled its crash backoff and reset the give-up count, so
+  a client repeating a call restarted a crashing sandbox container at its own
+  pace — 30 attempts in 12 seconds instead of 4. A request now waits for the
+  scheduled restart; after a give-up the first request retries and further
+  ones within the backoff get the last error.
+- **DPoP was offered but never checked.** oidc-provider enables it by default,
+  so a client that sent a proof received a `DPoP` token that the hub then
+  accepted as a plain bearer. It is switched off, which is what the standards
+  page already said.
+- **Text from a sandbox or an upstream reached the terminal unescaped.** A
+  sandbox container's stderr and an upstream authorization server's error text
+  in `mcp-hub-admin upstream …` now go through the same escaping as every other
+  stranger's text, so an escape sequence or a bare CR can no longer rewrite
+  what the operator sees. `LOG_FILE` was not affected.
+- **An upstream token with a line break broke its server for good.** A token
+  containing CR or LF was stored and then made every request to that server
+  fail in `Headers.set()`, while `/health` kept showing it up. Tokens, and the
+  RFC 7592 registration token, must now be printable ASCII of at most 16 KiB;
+  a malformed one fails the server's authorization instead of being stored,
+  and its value is never logged.
+
+Reported by the 2026-09-24 internal review.
+
+### Fixed
+
+- **A wrongly signed JWT cost a signature check.** A bearer shaped like an
+  API token is now decoded first and only verified when its algorithm,
+  subject and `jti` match a live token, which makes rejecting garbage about
+  twenty times cheaper. A valid token is still verified in full, and
+  revocation is still checked after verification.
+- **`clients revoke` reported 0 refresh tokens.** It counted a map nothing
+  writes any more; it now counts the live ones it invalidates. The revocation
+  itself was always effective.
+- **A character split across two docker frames was garbled** in the sandbox's
+  stderr; the stream is now decoded across frame boundaries, and a last line
+  without a newline is written out when the container stops instead of being
+  dropped.
+
 ## [0.11.3] - 2026-09-12
 
 ### Security

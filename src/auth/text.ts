@@ -37,6 +37,16 @@ export function logSafe(value: unknown, maxLength = MAX_LOGGED_LENGTH): string {
 }
 
 /**
+ * Control, format and line/paragraph-separator characters rewritten as a
+ * literal `\u{XXXX}`, so they print instead of acting: a bidi override no
+ * longer reorders the text around it, a zero-width character no longer hides.
+ * For text shown on the login and consent pages, before `escapeHtml`.
+ */
+export function escapeInvisibles(value: string): string {
+  return value.replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, character => `\\u{${(character.codePointAt(0) ?? 0).toString(16)}}`);
+}
+
+/**
  * A self-declared client name the login and consent pages can show without the
  * name becoming the page. Escaping alone is not enough: the text is still
  * rendered, and a name carrying newlines and a few hundred characters of

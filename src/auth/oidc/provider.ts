@@ -3,6 +3,7 @@ import Provider, { errors } from 'oidc-provider';
 
 import type { CimdResolver } from '../cimd.js';
 import { isSafeRedirectUri, redirectUriMatches } from '../redirect-uri.js';
+import { approvalResourceKey } from '../resource.js';
 import { clampDisplayName } from '../text.js';
 import type { AuthStore } from '../store.js';
 import { createOidcAdapter } from './adapter.js';
@@ -144,6 +145,11 @@ export function buildOidcProvider(store: AuthStore, options: OidcProviderOptions
         ack: 'draft-02',
         allowFetch: () => false
       },
+      // On by default in oidc-provider. The resource server never checks a
+      // proof, so a `token_type: "DPoP"` token would promise a sender
+      // constraint nothing enforces. Off, clients get the bearer token they
+      // actually hold.
+      dPoP: { enabled: false },
       resourceIndicators: {
         enabled: true,
         useGrantedResource: () => true,
@@ -406,9 +412,23 @@ export function buildOidcProvider(store: AuthStore, options: OidcProviderOptions
         .filter(Boolean);
       if (scopes.length > 0) grant.addOIDCScope(scopes.join(' '));
 
+      /**
+       * The resource gets the same discipline as the redirect URI: the page
+       * named it under "Requested access", so the approval covers that
+       * resource and no other. One the operator has not approved is left off
+       * the grant, and oidc-provider's own `rs_scopes_missing` check then asks
+       * — the consent page with a live session, the login page without — and
+       * approving adds it before this runs again for the resumed request.
+       *
+       * Matched in raw and canonical form, since the interaction routes may
+       * run without a canonicaliser; added in raw form, because that is the
+       * key `rs_scopes_missing` looks the resource up by.
+       */
+      const approvedResources = approval?.resources ?? [];
       const requested = ctx.oidc.params?.resource;
-      for (const resource of [requested ?? []].flat()) {
-        grant.addResourceScope(String(resource), HUB_SCOPE);
+      for (const resource of [requested ?? []].flat().map(String)) {
+        const key = approvalResourceKey(resource, options.externalUrl, options.resolveResource);
+        if (approvedResources.includes(resource) || approvedResources.includes(key)) grant.addResourceScope(resource, HUB_SCOPE);
       }
       await grant.save();
       return grant;

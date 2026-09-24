@@ -119,6 +119,7 @@ What a client may watch, and how much of it the hub will hold open. See
 | `MCP_SUBSCRIPTION_KEEPALIVE_MS` | `15000` | SSE keepalive on a listen stream; `0` disables it. |
 | `MCP_SUBSCRIPTION_DEBOUNCE_MS` | `250` | Coalescing window. Within it, repeats of the same event collapse to one — which is what the notification means anyway: read it again, not here is what changed. `0` delivers each event as it arrives. |
 | `MCP_SUBSCRIPTION_MAX_MS` | `1800000` | How long one stream may stay open before the hub closes it; `0` means as long as the socket lives. A reaper for clients that go away without closing anything. |
+| `MCP_SUBSCRIPTION_MAX_URI_BYTES` | `8192` | Longest URI a `resources/updated` notification may carry. A URI names what to re-read; a longer one is dropped with a warning (at most one a minute per route) instead of being held and forwarded. |
 
 These six are read by the request path as well, with the same fallback
 behaviour. A listen stream is charged to `MCP_MAX_CONCURRENT_STREAMS`, not

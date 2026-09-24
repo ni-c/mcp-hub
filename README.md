@@ -386,10 +386,11 @@ and log in once with the password. Claude Code:
 (OpenAI Responses API, xAI, Gemini API) use an admin-minted token instead —
 see [client compatibility](https://mcp-hub.ni-c.de/guide/client-compatibility).
 
-Each client is confirmed once. Entering the password approves the client that
-asked; while a login session is still valid, a client you have not seen before
-gets an explicit _Approve / Deny_ page instead of a code. Approved clients
-reconnect silently from then on.
+Each client is confirmed once per server it asks for. Entering the password
+approves the client that asked, for the server shown on the page; while a login
+session is still valid, a client you have not seen before — or one asking for
+another server — gets an explicit _Approve / Deny_ page instead of a code.
+Approved clients reconnect silently from then on.
 
 List clients or revoke one. The CLI shares `/data` with the running hub and
 both sides re-read the state file before they touch it, so this works against a
