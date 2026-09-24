@@ -237,7 +237,10 @@ export async function createHub(options: HubOptions) {
       externalUrl,
       password: options.password,
       passwordHash: options.passwordHash,
-      cimd
+      cimd,
+      // Same canonicaliser as buildOidcProvider, so an approval is stored
+      // under the key the provider looks up.
+      resolveResource: resource => canonicalResourceUrl(resource, origin, watcher.current)
     })
   );
   // Ahead of the mount, so the hub's stricter RFC 7592 handlers win the

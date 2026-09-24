@@ -15,6 +15,13 @@ export interface RefreshTokenRecord {
 /** One recorded "yes, this client may have codes" decision. */
 export interface ClientApproval {
   redirectUris: string[];
+  /**
+   * The resources the page named under "Requested access" when the operator
+   * approved. Empty in an approval written by 0.11.3 or earlier: that
+   * decision was never about a resource, so the next authorization for each
+   * one asks again.
+   */
+  resources: string[];
   clientName?: string;
   approvedAt: number; // epoch seconds
 }
@@ -453,6 +460,18 @@ export class AuthStore {
     this.signature = this.fileSignature();
   }
 
+  /** An approval as a state file may hold it: a missing or malformed field
+   *  becomes empty — approved for nothing — rather than stopping the load. */
+  private static normalizeApproval(approval: unknown): ClientApproval {
+    const source = (approval && typeof approval === 'object' ? approval : {}) as Partial<ClientApproval>;
+    return {
+      redirectUris: Array.isArray(source.redirectUris) ? source.redirectUris.filter((uri): uri is string => typeof uri === 'string') : [],
+      resources: Array.isArray(source.resources) ? source.resources.filter((r): r is string => typeof r === 'string') : [],
+      ...(typeof source.clientName === 'string' ? { clientName: source.clientName } : {}),
+      approvedAt: typeof source.approvedAt === 'number' ? source.approvedAt : Math.floor(Date.now() / 1000)
+    };
+  }
+
   /**
    * Shapes a parsed state file, or undefined when it is unusable. Fields added
    * later default to empty: a state.json written before client approvals
@@ -466,7 +485,9 @@ export class AuthStore {
       cookieSecret: state.cookieSecret,
       clients: bare(state.clients),
       refreshTokens: bare(state.refreshTokens),
-      approvals: bare(state.approvals),
+      approvals: bare(
+        Object.fromEntries(Object.entries(bare(state.approvals)).map(([id, approval]) => [id, AuthStore.normalizeApproval(approval)]))
+      ),
       consumedRefreshTokens: bare(state.consumedRefreshTokens),
       revokedBefore: bare(state.revokedBefore),
       apiTokens: bare(state.apiTokens),
@@ -902,14 +923,20 @@ export class AuthStore {
     return this.state.approvals[clientId];
   }
 
-  /** Records consent for one client; a client may legitimately use several
-   *  redirect URIs, so they accumulate rather than replace each other. */
-  saveApproval(clientId: string, redirectUri: string, clientName?: string): void {
+  /**
+   * Records consent for one client. A client may use several redirect URIs
+   * and be approved for several resources over time, so both accumulate.
+   * `resources` are the ones the page showed; `mcp-hub-admin clients add`
+   * has no page and passes none, so it approves the redirect target only.
+   */
+  saveApproval(clientId: string, redirectUri: string, clientName?: string, resources: string[] = []): void {
     this.mutate(() => {
       const existing = this.state.approvals[clientId];
       const redirectUris = existing ? [...new Set([...existing.redirectUris, redirectUri])] : [redirectUri];
+      const mergedResources = [...new Set([...(existing?.resources ?? []), ...resources])];
       this.state.approvals[clientId] = {
         redirectUris,
+        resources: mergedResources,
         clientName: clientName ?? existing?.clientName,
         approvedAt: existing?.approvedAt ?? Math.floor(Date.now() / 1000)
       };
@@ -938,12 +965,23 @@ export class AuthStore {
   revokeClientAccess(clientId: string): { refreshTokens: number; revokedBefore: number } {
     return this.mutate(() => {
       delete this.state.approvals[clientId];
+      // Only a state file from before the oidc-provider migration still has
+      // entries here; nothing writes this map any more.
       let refreshTokens = 0;
       for (const [hash, record] of Object.entries(this.state.refreshTokens)) {
         if (record.clientId === clientId) {
           delete this.state.refreshTokens[hash];
           refreshTokens++;
         }
+      }
+      // The live refresh tokens are oidc-provider artifacts. revokedBefore
+      // below is what makes them unusable; this only counts them for the
+      // operator reading the command's output.
+      const now = Math.floor(Date.now() / 1000);
+      for (const record of Object.values(this.state.oidcArtifacts.RefreshToken ?? {})) {
+        if (record.consumedAt !== undefined) continue;
+        if (record.expiresAt !== 0 && record.expiresAt < now) continue;
+        if (record.payload.clientId === clientId) refreshTokens++;
       }
       const revokedBefore = Date.now();
       this.state.revokedBefore[clientId] = revokedBefore;

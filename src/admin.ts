@@ -2,7 +2,7 @@
 import crypto from 'node:crypto';
 import { AuthStore, clientLimitsFromEnv } from './auth/store.js';
 import { isSafeRedirectUri } from './auth/redirect-uri.js';
-import { clampDisplayName } from './auth/text.js';
+import { clampDisplayName, logSafe } from './auth/text.js';
 import { isClientIdMetadataUrl } from './auth/cimd.js';
 import { mintApiToken } from './auth/api-tokens.js';
 import { loadConfig } from './config.js';
@@ -36,8 +36,10 @@ function usage(): never {
   process.exit(2);
 }
 
+/** Messages here can carry an upstream authorization server's own error
+ *  text, so they are escaped before they reach the operator's terminal. */
 function fail(message: string): never {
-  console.error(message);
+  console.error(logSafe(message));
   process.exit(2);
 }
 
@@ -72,6 +74,7 @@ if (group === 'clients' && action === 'list') {
     via: clientOrigin(id),
     registeredRedirectUris: client.redirect_uris,
     approvedRedirectUris: approvals[id]?.redirectUris ?? [],
+    approvedResources: approvals[id]?.resources ?? [],
     approvedAt: approvals[id] ? new Date(approvals[id].approvedAt * 1000).toISOString() : null
   }));
   // Metadata-document clients are never stored — the document is fetched fresh
@@ -86,6 +89,7 @@ if (group === 'clients' && action === 'list') {
       via: clientOrigin(id),
       registeredRedirectUris: [],
       approvedRedirectUris: approval.redirectUris,
+      approvedResources: approval.resources,
       approvedAt: new Date(approval.approvedAt * 1000).toISOString()
     });
   }
@@ -346,7 +350,8 @@ if (group === 'upstream') {
     // unreachable must never leave a credential behind here.
     const problems = await auth.revokeRemotely().catch(error => [(error as Error).message]);
     const forgotten = store.forgetUpstreamCredentials(name);
-    for (const problem of problems) console.error(`Upstream revocation: ${problem}`);
+    // A revocation failure can carry the authorization server's own text.
+    for (const problem of problems) console.error(`Upstream revocation: ${logSafe(problem)}`);
     console.log(JSON.stringify({ server: name, forgotten, revokedAtUpstream: problems.length === 0 }, null, 2));
     process.exit(problems.length > 0 ? 1 : 0);
   }

@@ -1,6 +1,6 @@
 import { OAuthError, OAuthErrorCode } from '@modelcontextprotocol/server';
 import type { AuthInfo } from '@modelcontextprotocol/server';
-import { jwtVerify } from 'jose';
+import { decodeJwt, decodeProtectedHeader, jwtVerify } from 'jose';
 
 import { API_TOKEN_SUBJECT } from '../api-tokens.js';
 import type { AuthStore } from '../store.js';
@@ -45,9 +45,11 @@ function invalidToken(message: string): OAuthError {
  * which is what `tokens revoke` deletes.
  *
  * Order matters. Opaque is tried first because it is the common case and needs
- * no cryptography; a value that is not a stored token then gets exactly one
- * signature check. Neither branch may report why it failed — an attacker must
- * not be able to tell "unknown" from "revoked" from "wrong audience".
+ * no cryptography; a value that is not a stored token then reaches at most one
+ * signature check, and only if its decoded claims name a live API token.
+ * Neither branch may report why it failed — an
+ * attacker must not be able to tell "unknown" from "revoked" from "wrong
+ * audience".
  */
 export class OidcTokenVerifier {
   constructor(
@@ -89,6 +91,12 @@ export class OidcTokenVerifier {
   }
 
   private async fromApiToken(token: string): Promise<AuthInfo> {
+    // Anyone can send a well-formed, wrongly signed JWT for free, and an EdDSA
+    // verification costs about twenty times a decode. The decode proves
+    // nothing, so it can only reject early: a token naming a live jti still
+    // has its signature checked below before anything is trusted.
+    if (!this.mayBeLiveApiToken(token)) throw invalidToken('Invalid or expired access token');
+
     let payload;
     try {
       ({ payload } = await jwtVerify(token, this.store.publicKey, {
@@ -104,6 +112,9 @@ export class OidcTokenVerifier {
     // authorize once against the new one instead of silently keeping a
     // credential nothing can revoke.
     if (payload.sub !== API_TOKEN_SUBJECT) throw invalidToken('Invalid access token claims');
+    // Checked again after verification, not only in the pre-check: a
+    // `tokens revoke` that lands while the signature is being verified must
+    // still refuse this request.
     if (typeof payload.jti !== 'string' || !this.store.getApiToken(payload.jti)) {
       throw invalidToken('Access token has been revoked');
     }
@@ -118,6 +129,25 @@ export class OidcTokenVerifier {
       ...(payload.exp !== undefined ? { expiresAt: payload.exp } : {}),
       resource
     };
+  }
+
+  /**
+   * Whether a token's unverified claims could belong to a live API token. The
+   * checks mirror what `fromApiToken` requires after verification —
+   * algorithm, subject, a live jti — so this never rejects a token that would
+   * otherwise pass.
+   */
+  private mayBeLiveApiToken(token: string): boolean {
+    let header: { alg?: unknown };
+    let payload: { sub?: unknown; jti?: unknown };
+    try {
+      header = decodeProtectedHeader(token);
+      payload = decodeJwt(token);
+    } catch {
+      return false;
+    }
+    if (header.alg !== 'EdDSA' || payload.sub !== API_TOKEN_SUBJECT || typeof payload.jti !== 'string') return false;
+    return this.store.getApiToken(payload.jti) !== undefined;
   }
 
   private resolve(audience: string): URL | undefined {

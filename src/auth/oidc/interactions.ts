@@ -8,6 +8,7 @@ import { renderLoginPage } from '../login-page.js';
 import { earlyRateLimit, LoginRateLimiter } from '../rate-limit.js';
 import { operatorCredential } from '../password.js';
 import { isLoopbackOnly } from '../redirect-uri.js';
+import { approvalResourceKey } from '../resource.js';
 import { createSessionCookie, csrfToken, readSessionCookie, SESSION_TTL_MS, sessionCookieName, verifyCsrfToken } from '../session.js';
 import type { AuthStore } from '../store.js';
 import { logSafe } from '../text.js';
@@ -20,6 +21,20 @@ export interface OidcInteractionOptions {
   password?: string;
   passwordHash?: string;
   cimd?: CimdResolver;
+  /**
+   * The canonicalisation buildOidcProvider uses, so an approval is recorded
+   * under the key loadExistingGrant looks up. Without it the raw resource is
+   * stored, which still matches, but `/x` and `/x/mcp` count as two.
+   */
+  resolveResource?: (resource: URL) => URL | undefined;
+}
+
+/** The resources the page showed under "Requested access", in the form
+ *  loadExistingGrant looks an approval up by. */
+function canonicalizeRequestedResources(resource: unknown, options: OidcInteractionOptions): string[] {
+  return [resource ?? []]
+    .flat()
+    .map(value => approvalResourceKey(String(value), options.externalUrl, options.resolveResource));
 }
 
 type AsyncHandler = (req: express.Request, res: express.Response, next: express.NextFunction) => Promise<void>;
@@ -174,11 +189,13 @@ export function createOidcInteractionRoutes(options: OidcInteractionOptions): Ro
 
       rateLimiter.reset(ip);
       console.log(`mcp-hub: successful login from ${logSafe(ip)}`);
-      // Typing the password is the consent for the client that triggered it.
+      // Typing the password is the consent for the client that triggered it:
+      // for its redirect target and for the resource the page showed.
       const clientId = String(params.client_id);
       const client = await provider.Client.find(clientId);
       const clientName = (client?.metadata() as Record<string, unknown> | undefined)?.client_name;
-      store.saveApproval(clientId, redirectUri, typeof clientName === 'string' ? clientName : undefined);
+      const resources = canonicalizeRequestedResources(params.resource, options);
+      store.saveApproval(clientId, redirectUri, typeof clientName === 'string' ? clientName : undefined, resources);
       console.log(`mcp-hub: approved OAuth client ${logSafe(clientId)} for ${logSafe(redirectUri)}`);
 
       // `__Host-` behind HTTPS: the browser then refuses the cookie from any
@@ -229,11 +246,12 @@ export function createOidcInteractionRoutes(options: OidcInteractionOptions): Ro
         return;
       }
 
-      const params = details.params as { client_id?: string; redirect_uri?: string };
+      const params = details.params as { client_id?: string; redirect_uri?: string; resource?: string | string[] };
       const clientId = String(params.client_id);
       const client = await provider.Client.find(clientId);
       const clientName = (client?.metadata() as Record<string, unknown> | undefined)?.client_name;
-      store.saveApproval(clientId, String(params.redirect_uri ?? ''), typeof clientName === 'string' ? clientName : undefined);
+      const resources = canonicalizeRequestedResources(params.resource, options);
+      store.saveApproval(clientId, String(params.redirect_uri ?? ''), typeof clientName === 'string' ? clientName : undefined, resources);
       console.log(`mcp-hub: approved OAuth client ${logSafe(clientId)} for ${logSafe(String(params.redirect_uri ?? ''))}`);
       // The grant itself is minted by loadExistingGrant on the resumed request,
       // which is the same code path an already-approved client takes.

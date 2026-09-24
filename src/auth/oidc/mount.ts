@@ -81,7 +81,12 @@ export function defaultRateLimits(): NonNullable<MountOptions['before']> {
     '/register/:id': [earlyRateLimit(60 * 60_000, 60, 600)],
     '/authorize': [earlyRateLimit(15 * 60_000, 100, 1_000)],
     '/authorize/:uid': [earlyRateLimit(15 * 60_000, 100, 1_000)],
-    '/token': [earlyRateLimit(15 * 60_000, 50, 500)]
+    '/token': [earlyRateLimit(15 * 60_000, 50, 500)],
+    // '/revoke' authenticates the client exactly as '/token' does,
+    // private_key_jwt signature checks included, for any caller that has
+    // registered itself — so it gets the same budget, counted separately so a
+    // flood of one cannot starve the other.
+    '/revoke': [earlyRateLimit(15 * 60_000, 50, 500)]
   };
 }
 
