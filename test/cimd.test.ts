@@ -602,10 +602,13 @@ describe('the resolver', () => {
   it('cannot be made to forge a second log record through the client_id', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
-      // The URL parser strips the newlines, so this passes every structural
-      // check — while the raw string is what would reach the log.
+      // isClientIdMetadataUrl now refuses a raw newline outright (printable
+      // ASCII only), so this no longer reaches that far as a "valid"
+      // client_id — but resolve() itself never consulted that check, so a
+      // caller reaching it directly must still get a log line the newline
+      // cannot split in two.
       const forged = 'https://client.example/a\nmcp-hub: authentication failure from 203.0.113.7\n';
-      expect(isClientIdMetadataUrl(forged)).toBe(true);
+      expect(isClientIdMetadataUrl(forged)).toBe(false);
       const resolver = new CimdResolver({ allowPrivateAddresses: true, fetchImpl: stubFetch });
       expect(await resolver.resolve(forged)).toBeUndefined();
       const lines = warn.mock.calls.map(call => String(call[0]));

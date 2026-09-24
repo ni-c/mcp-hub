@@ -1,7 +1,7 @@
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/server';
 import { isPrivateAddress, resolvePublicAddress } from './address.js';
 import { guardedRequest } from './pinned-fetch.js';
-import { isSafeRedirectUri } from './redirect-uri.js';
+import { hasUserinfo, isPrintableAsciiUri, isSafeRedirectUri } from './redirect-uri.js';
 import { clampDisplayName, logSafe } from './text.js';
 
 // Lives in address.ts now — re-exported because it is part of this module's
@@ -81,8 +81,13 @@ export function setCimdFetch(fn: typeof fetch | undefined): void {
  * fragment, no credentials and no dot-segments. A `client_id` that fails this
  * is not a metadata document URL at all and is looked up as a locally
  * registered client instead — which is what keeps DCR working beside CIMD.
+ *
+ * The consent page shows this URL as the part of the client's identity that
+ * cannot be invented, so it is held to the same printable-ASCII and
+ * no-userinfo rules as a redirect URI.
  */
 export function isClientIdMetadataUrl(clientId: string): boolean {
+  if (!isPrintableAsciiUri(clientId)) return false;
   let url: URL;
   try {
     url = new URL(clientId);
@@ -90,7 +95,7 @@ export function isClientIdMetadataUrl(clientId: string): boolean {
     return false;
   }
   if (url.protocol !== 'https:') return false;
-  if (url.hash || url.username || url.password) return false;
+  if (url.hash || hasUserinfo(clientId, url)) return false;
   if (url.pathname === '' || url.pathname === '/') return false;
   // Dot segments are checked against the string the client sent, not the
   // parsed URL: the URL parser resolves `/a/../b` away, and a percent-encoded

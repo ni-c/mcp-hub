@@ -1,3 +1,5 @@
+import { escapeInvisibles } from './text.js';
+
 export function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
 }
@@ -20,16 +22,21 @@ export interface ClientIdentity {
  * identity that cannot be invented, which is why the specification asks for it
  * to be shown; a client whose redirect URIs are all local cannot be attributed
  * to anything at all, so that gets said outright.
+ *
+ * Each field also goes through `escapeInvisibles`: registration refuses bidi
+ * and zero-width characters now, but a client stored before that must not be
+ * able to reorder the line the operator judges it by. (`clientName` is
+ * cleaned by `clampDisplayName` before it gets here.)
  */
 export function renderIdentity(redirectUri: string, identity: ClientIdentity): string {
   const lines = [
     '  <p class="label">Requested access</p>',
-    `  <code class="target">${escapeHtml(identity.resource ?? 'Every server on this hub')}</code>`
+    `  <code class="target">${escapeHtml(escapeInvisibles(identity.resource ?? 'Every server on this hub'))}</code>`
   ];
   if (identity.clientId) {
-    lines.push('  <p class="label">Identified by</p>', `  <code class="target">${escapeHtml(identity.clientId)}</code>`);
+    lines.push('  <p class="label">Identified by</p>', `  <code class="target">${escapeHtml(escapeInvisibles(identity.clientId))}</code>`);
   }
-  lines.push('  <p class="label">Codes will be sent to</p>', `  <code class="target">${escapeHtml(redirectUri)}</code>`);
+  lines.push('  <p class="label">Codes will be sent to</p>', `  <code class="target">${escapeHtml(escapeInvisibles(redirectUri))}</code>`);
   if (identity.loopbackOnly) {
     lines.push('  <p class="error">This client only accepts codes on this machine, so any program running here could be the one asking.</p>');
   }

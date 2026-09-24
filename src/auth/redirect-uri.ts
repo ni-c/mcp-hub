@@ -18,6 +18,39 @@ function isLoopbackHostname(hostname: string): boolean {
   return LOOPBACK_HOSTNAMES.has(hostname);
 }
 
+/**
+ * Printable ASCII, 0x21 `!` through 0x7E `~`. A URI is an ASCII string by
+ * definition (RFC 3986): a control character, a space or any non-ASCII code
+ * point — a bidi override or a zero-width character included — belongs in one
+ * only as `%XX`, and that encoding is itself inside this range.
+ */
+const PRINTABLE_ASCII_ONLY = /^[\x21-\x7E]+$/;
+
+export function isPrintableAsciiUri(value: string): boolean {
+  return PRINTABLE_ASCII_ONLY.test(value);
+}
+
+/**
+ * Whether a URI names a user before its host, `https://claude.ai@evil.example`
+ * being the reason: the reader's eye lands on the part before the `@`, the
+ * browser connects to the part after it.
+ *
+ * Two checks, because each misses a spelling the other catches. The raw string
+ * is needed for an empty userinfo, which the WHATWG parser drops without a
+ * trace (`https://:@host` parses to an empty username and password). The parsed
+ * URL is needed for authorities the parser finds by another spelling, such as
+ * a backslash in place of a slash (`https:/\user@host`). An `@` in the path
+ * or query, or percent-encoded, is not userinfo and stays allowed.
+ */
+export function hasUserinfo(uri: string, parsed: URL): boolean {
+  if (parsed.username || parsed.password) return true;
+  const marker = uri.indexOf('://');
+  if (marker === -1) return false;
+  const afterMarker = uri.slice(marker + 3);
+  const authorityEnd = afterMarker.search(/[/?#\\]/);
+  return (authorityEnd === -1 ? afterMarker : afterMarker.slice(0, authorityEnd)).includes('@');
+}
+
 export interface RedirectUriPolicy {
   /**
    * Whether an application-specific scheme such as `com.example.app:/callback`
@@ -35,14 +68,20 @@ export interface RedirectUriPolicy {
  * The point of refusing remote `http://` is that the code travels in the clear
  * on the final redirect: anyone on the path between the browser and the client
  * reads it, and a public client has nothing else to prove itself with.
+ *
+ * Every scheme is held to printable ASCII and refused with a userinfo part:
+ * this is the address the login and consent pages show as the one thing "not
+ * chosen by the application", so it must read as what it is.
  */
 export function isSafeRedirectUri(uri: string, policy: RedirectUriPolicy): boolean {
+  if (!PRINTABLE_ASCII_ONLY.test(uri)) return false;
   let parsed: URL;
   try {
     parsed = new URL(uri);
   } catch {
     return false;
   }
+  if (hasUserinfo(uri, parsed)) return false;
   if (DANGEROUS_SCHEMES.has(parsed.protocol)) return false;
   if (parsed.protocol === 'https:') return true;
   if (parsed.protocol === 'http:') return isLoopbackHostname(parsed.hostname);
