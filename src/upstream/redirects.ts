@@ -1,3 +1,4 @@
+import { STDIO_DEFAULT_MAX_BUFFER_SIZE } from '@modelcontextprotocol/server';
 import { logSafe } from '../auth/text.js';
 
 /**
@@ -25,14 +26,108 @@ export const MAX_REDIRECT_HOPS = 3;
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
 /**
- * Wraps a fetch so that every redirect it would follow is checked first.
+ * Ceiling on one message from a remote upstream: the same limit the
+ * byte-stream transports apply (`src/transports/stream.ts`), because a remote
+ * server is no more trusted than a sandboxed one. It bounds a JSON reply as a
+ * whole and an event stream per event, so a long-lived stream is never cut
+ * off for its length.
+ */
+export const MAX_UPSTREAM_RESPONSE_BYTES = STDIO_DEFAULT_MAX_BUFFER_SIZE;
+
+function isEventStream(response: Response): boolean {
+  const contentType = response.headers.get('content-type');
+  return contentType !== null && contentType.split(';')[0]!.trim().toLowerCase() === 'text/event-stream';
+}
+
+/**
+ * Passes bytes through until more than `maxBytes` have gone by, then errors
+ * the stream, so `.json()` or the SDK's SSE reader fails instead of buffering
+ * without end. For an event stream the count restarts at every blank line —
+ * the event separator, in any mix of CR, LF and CRLF. A CR at the end of a
+ * chunk may be the first half of a CRLF, so `sawCR` carries it into the next.
+ */
+function budgetedStream(maxBytes: number, sse: boolean): TransformStream<Uint8Array, Uint8Array> {
+  let sinceBoundary = 0;
+  let sawCR = false;
+  let terminatorRun = 0;
+
+  // One line terminator (`\r`, `\n` or `\r\n`) completed. Two in a row with no
+  // content byte between them is a blank line — the event boundary.
+  const closeTerminator = (): void => {
+    if (++terminatorRun < 2) return;
+    sinceBoundary = 0;
+    terminatorRun = 0;
+  };
+
+  return new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      if (!sse) {
+        sinceBoundary += chunk.byteLength;
+        if (sinceBoundary > maxBytes) {
+          controller.error(new Error(`upstream response exceeds the ${maxBytes} byte limit`));
+          return;
+        }
+        controller.enqueue(chunk);
+        return;
+      }
+      for (let i = 0; i < chunk.byteLength; i++) {
+        sinceBoundary++;
+        if (sinceBoundary > maxBytes) {
+          controller.error(new Error(`upstream SSE event exceeds the ${maxBytes} byte limit`));
+          return;
+        }
+        const byte = chunk[i]!;
+        if (byte === 0x0d) {
+          if (sawCR) closeTerminator();
+          sawCR = true;
+        } else if (byte === 0x0a) {
+          closeTerminator();
+          sawCR = false;
+        } else {
+          if (sawCR) closeTerminator();
+          sawCR = false;
+          terminatorRun = 0;
+        }
+      }
+      controller.enqueue(chunk);
+    }
+  });
+}
+
+/**
+ * Puts the final response's body under the budget above. A JSON reply that
+ * declares more than the limit in `content-length` is refused before reading;
+ * an event stream's length describes the connection, not one event, so it is
+ * not consulted there.
+ */
+function capResponseBody(response: Response, maxBytes: number): Response {
+  if (!response.body) return response;
+  const sse = isEventStream(response);
+  if (!sse) {
+    const declared = Number(response.headers.get('content-length'));
+    if (Number.isFinite(declared) && declared > maxBytes) {
+      void response.body.cancel().catch(() => {});
+      throw new Error(`upstream declared a ${declared} byte response, exceeding the ${maxBytes} byte limit`);
+    }
+  }
+  return new Response(response.body.pipeThrough(budgetedStream(maxBytes, sse)), {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers
+  });
+}
+
+/**
+ * Wraps a fetch so that every redirect it would follow is checked first and
+ * the response it returns is byte-budgeted.
  *
  * `origin` is the configured upstream's origin (`new URL(config.url).origin`).
  * The returned function has the platform's shape and can be handed to the SDK
  * transports as their `fetch`; every hop goes through `fetchImpl`, so a wrapper
- * that adds headers still adds them on each hop.
+ * that adds headers still adds them on each hop. `maxBytes` is a parameter so
+ * tests can exercise the budget without megabytes of fixtures.
  */
-export function boundedRedirectFetch(origin: string, fetchImpl: typeof fetch = fetch): typeof fetch {
+export function boundedRedirectFetch(origin: string, fetchImpl: typeof fetch = fetch, maxBytes: number = MAX_UPSTREAM_RESPONSE_BYTES): typeof fetch {
   return async (input, init) => {
     let url = new URL(input instanceof Request ? input.url : String(input));
     let request: RequestInit = { ...init, redirect: 'manual' };
@@ -40,9 +135,9 @@ export function boundedRedirectFetch(origin: string, fetchImpl: typeof fetch = f
       // A caller that built a Request keeps it on the first hop — its body
       // lives there. Nothing in the hub does, but the shape is the platform's.
       const response = await fetchImpl(hop === 0 && input instanceof Request ? new Request(input, request) : url, request);
-      if (!REDIRECT_STATUSES.has(response.status)) return response;
+      if (!REDIRECT_STATUSES.has(response.status)) return capResponseBody(response, maxBytes);
       const location = response.headers.get('location');
-      if (location === null) return response;
+      if (location === null) return capResponseBody(response, maxBytes);
       // Nothing of the redirect's body is wanted, and holding the stream open
       // would keep the connection with it.
       await response.body?.cancel().catch(() => {});

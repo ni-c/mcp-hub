@@ -1,5 +1,6 @@
 import type { ServerEvent, ServerNotifier } from '@modelcontextprotocol/server';
 
+import { logSafe } from './auth/text.js';
 import { booleanEnv, nonNegativeIntegerEnv, positiveIntegerEnv } from './mcp-limits.js';
 
 /**
@@ -81,6 +82,17 @@ export const MAX_STREAM_MS = nonNegativeIntegerEnv('MCP_SUBSCRIPTION_MAX_MS', 30
  * window would otherwise be a million map entries the hub holds for it.
  */
 const MAX_PENDING_EVENTS = 1024;
+
+/**
+ * Longest `resources/updated` URI the hub holds or forwards; a longer one is
+ * dropped. A URI names what to re-read — nothing legitimate comes near this.
+ * `MAX_PENDING_EVENTS` bounds how many one window holds, this how large each
+ * may be, whichever transport the child sends it over.
+ */
+export const MAX_RESOURCE_URI_BYTES = positiveIntegerEnv('MCP_SUBSCRIPTION_MAX_URI_BYTES', 8 * 1024);
+
+/** At most one log line a minute per registry about dropped URIs. */
+const OVERSIZED_URI_WARNING_INTERVAL_MS = 60_000;
 
 /**
  * Per-server switch, the sibling of `passthrough`.
@@ -201,6 +213,7 @@ export class SubscriptionRegistry {
   private nextId = 1;
   private timer?: NodeJS.Timeout;
   private closed = false;
+  private lastOversizedUriWarningAt = 0;
 
   constructor(
     private readonly notifier: ServerNotifier,
@@ -244,6 +257,10 @@ export class SubscriptionRegistry {
   /** Hand one upstream change event to every stream that opted in. */
   publish(event: ServerEvent): void {
     if (this.closed) return;
+    if (event.kind === 'resource_updated' && Buffer.byteLength(event.uri, 'utf8') > MAX_RESOURCE_URI_BYTES) {
+      this.warnOversizedUri(event.uri);
+      return;
+    }
     const debounceMs = this.options.debounceMs ?? DEBOUNCE_MS;
     if (debounceMs <= 0) {
       this.deliver(event);
@@ -302,6 +319,14 @@ export class SubscriptionRegistry {
         this.notifier.resourceUpdated(event.uri);
         return;
     }
+  }
+
+  /** The URI is the child's own text, so it is escaped and truncated. */
+  private warnOversizedUri(uri: string): void {
+    const now = Date.now();
+    if (now - this.lastOversizedUriWarningAt < OVERSIZED_URI_WARNING_INTERVAL_MS) return;
+    this.lastOversizedUriWarningAt = now;
+    console.error(`mcp-hub: dropped a resources/updated notification whose uri exceeded ${MAX_RESOURCE_URI_BYTES} bytes: ${logSafe(uri)}`);
   }
 
   close(): void {

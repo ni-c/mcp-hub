@@ -7,7 +7,7 @@ import type { AuthStore, UpstreamCredentials, UpstreamLogin } from '../auth/stor
 import { isPrivateAddress, resolvePublicAddress } from '../auth/address.js';
 import { boundedResponse, guardedRequest } from '../auth/pinned-fetch.js';
 import { logSafe } from '../auth/text.js';
-import { UpstreamAuthProvider, callbackUrl, credentialFingerprint, hubClientMetadata } from './provider.js';
+import { UpstreamAuthProvider, callbackUrl, credentialFingerprint, hubClientMetadata, wellFormedOrUndefined } from './provider.js';
 import { boundedRedirectFetch } from './redirects.js';
 import type { UpstreamIdentity } from './provider.js';
 
@@ -88,10 +88,18 @@ export class UpstreamAuth {
     return this.store.getUpstreamCredentials(this.identity.serverName, this.fingerprint);
   }
 
-  /** The full pair including the refresh token: this class is the only thing
-   *  allowed to spend it, which is why the provider withholds it. */
+  /**
+   * The full pair including the refresh token: this class is the only thing
+   * allowed to spend it, which is why the provider withholds it.
+   *
+   * A stored record may predate `saveTokens()`'s validation, or have been
+   * written by another process — `wellFormedOrUndefined` treats a malformed
+   * one as though nothing were stored, so it can never reach `send()`'s
+   * `headers.set()` below and throw with the token embedded in its own
+   * message.
+   */
   private tokens(): OAuthTokens | undefined {
-    return this.record?.tokens as OAuthTokens | undefined;
+    return wellFormedOrUndefined(this.record?.tokens as OAuthTokens | undefined);
   }
 
   /** The public key the upstream needs, but only when we sign assertions. */
@@ -262,7 +270,14 @@ export class UpstreamAuth {
 
     if (this.identity.oauth.grant === 'client_credentials') {
       const tokens = await this.fetchClientCredentialsTokens(discovery, clientInformation, resource);
-      this.provider().saveTokens(tokens);
+      try {
+        this.provider().saveTokens(tokens);
+      } catch (error) {
+        // Same failure class as a refused refresh below: a human has to act,
+        // and restarting on a timer would only ask the same broken
+        // authorization server the same question forever.
+        throw new UpstreamLoginRequiredError(this.identity.serverName, (error as Error).message);
+      }
       return;
     }
 

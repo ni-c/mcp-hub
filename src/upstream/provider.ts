@@ -102,6 +102,56 @@ export function hubClientMetadata(identity: UpstreamIdentity, publicJwk?: JWK): 
 /** RFC 7523 §2.2: assertions are single-use and short-lived. */
 const ASSERTION_LIFETIME_S = 300;
 
+/**
+ * The shape every token from an upstream has to fit before the hub stores it:
+ * printable ASCII without whitespace, at most 16 KiB.
+ *
+ * RFC 6749 leaves a token's format to the authorization server, but every real
+ * one issues an opaque printable string. The hub sends it back as a header
+ * value, and `Headers.set()` throws on CR or LF, quoting the value in its
+ * message. Stored anyway, such a token would break every later request to that
+ * server rather than this one, and put the value into whatever error reached a
+ * caller. Past 16 KiB a token is a payload, not an identifier.
+ */
+const MAX_TOKEN_BYTES = 16 * 1024;
+const TOKEN_PATTERN = /^[\x21-\x7e]+$/;
+
+function isWellFormedToken(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= MAX_TOKEN_BYTES && TOKEN_PATTERN.test(value);
+}
+
+/**
+ * Refuses a token pair the upstream cannot have meant, before anything reaches
+ * the state file. Neither the log line nor the thrown message carries the
+ * value: a malformed token can still be somebody's secret.
+ */
+function assertWellFormedTokens(tokens: OAuthTokens): void {
+  const fields: Array<[string, unknown]> = [
+    ['access_token', tokens.access_token],
+    ['refresh_token', tokens.refresh_token]
+  ];
+  for (const [field, value] of fields) {
+    if (field === 'refresh_token' && value === undefined) continue;
+    if (isWellFormedToken(value)) continue;
+    const length = typeof value === 'string' ? value.length : 0;
+    console.error(`mcp-hub: rejected a malformed ${field} from an upstream authorization server (${length} characters)`);
+    throw new Error(`upstream returned a malformed ${field}`);
+  }
+}
+
+/**
+ * A stored token pair, or undefined when it does not pass the same check. A
+ * record may predate the check or come from another process; treating it as
+ * absent means the next request refreshes or asks for a login instead of
+ * building a header that throws.
+ */
+export function wellFormedOrUndefined(tokens: OAuthTokens | undefined): OAuthTokens | undefined {
+  if (!tokens) return undefined;
+  if (!isWellFormedToken(tokens.access_token)) return undefined;
+  if (tokens.refresh_token !== undefined && !isWellFormedToken(tokens.refresh_token)) return undefined;
+  return tokens;
+}
+
 export interface UpstreamProviderOptions {
   /** Set while finishing a login: the verifier that was saved when it started. */
   pendingCodeVerifier?: string;
@@ -183,7 +233,9 @@ export class UpstreamAuthProvider implements OAuthClientProvider {
       ...(typeof information.client_secret === 'string' ? { clientSecret: information.client_secret } : {}),
       // RFC 7592 credentials, when the upstream issued them — what `upstream
       // logout` needs to delete the registration again.
-      ...(typeof information.registration_access_token === 'string'
+      // It goes out as a bearer header later, so it has to fit the same shape
+      // as any other token; a malformed one is dropped rather than stored.
+      ...(isWellFormedToken(information.registration_access_token)
         ? { registrationAccessToken: information.registration_access_token }
         : {}),
       ...(typeof information.registration_client_uri === 'string'
@@ -201,7 +253,7 @@ export class UpstreamAuthProvider implements OAuthClientProvider {
    * the whole family. Refresh belongs to UpstreamAuth, which serializes it.
    */
   tokens(): OAuthTokens | undefined {
-    const stored = this.record?.tokens as OAuthTokens | undefined;
+    const stored = wellFormedOrUndefined(this.record?.tokens as OAuthTokens | undefined);
     if (!stored) return undefined;
     const { refresh_token: _withheld, ...rest } = stored;
     return rest as OAuthTokens;
@@ -209,10 +261,11 @@ export class UpstreamAuthProvider implements OAuthClientProvider {
 
   /** The full pair, for the one caller that is allowed to spend it. */
   storedTokens(): OAuthTokens | undefined {
-    return this.record?.tokens as OAuthTokens | undefined;
+    return wellFormedOrUndefined(this.record?.tokens as OAuthTokens | undefined);
   }
 
   saveTokens(tokens: OAuthTokens): void {
+    assertWellFormedTokens(tokens);
     const expiresIn = typeof tokens.expires_in === 'number' ? tokens.expires_in : undefined;
     this.patch({
       tokens: tokens as unknown as Record<string, unknown>,
