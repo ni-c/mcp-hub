@@ -296,7 +296,8 @@ redirect URI is held to the same rule as everywhere else: `https`, a loopback
 address, or a private-use scheme for a native client.
 
 Such a client differs from a self-registered one in two ways. It counts as
-approved for the redirect URI you named — you created it deliberately, so being
+approved for the redirect URI you named — for no server yet: the first request
+for each one still shows a page — you created it deliberately, so being
 sent to a browser to confirm your own typing would be theatre — and it is exempt
 from every lifecycle rule above. Nothing removes it but
 `mcp-hub-admin clients delete`.
@@ -368,6 +369,7 @@ docker exec -it mcp-hub mcp-hub-admin clients list
     "via": "cimd",
     "registeredRedirectUris": [],
     "approvedRedirectUris": ["http://127.0.0.1:3000/callback"],
+    "approvedResources": ["https://mcp.example.net/hub"],
     "approvedAt": "2026-08-25T09:12:44.000Z"
   }
 ]
@@ -376,6 +378,8 @@ docker exec -it mcp-hub mcp-hub-admin clients list
 `via` says which mechanism the client came in through. A CIMD client has no
 stored registration — the document is fetched fresh — so
 `registeredRedirectUris` is empty and the approval is the whole record.
+`approvedResources` lists the servers (or `/hub`) the client was approved for;
+asking for another one shows the consent page again.
 Revoking works the same for both:
 
 ```sh

@@ -126,6 +126,7 @@ is withheld too, so nothing is announced that will not arrive.
 | `MCP_SUBSCRIPTION_KEEPALIVE_MS` | `15000` | SSE keepalive; `0` disables it. |
 | `MCP_SUBSCRIPTION_DEBOUNCE_MS` | `250` | Coalescing window; `0` delivers every event as it arrives. |
 | `MCP_SUBSCRIPTION_MAX_MS` | `1800000` | How long one stream may stay open; `0` means as long as the socket. |
+| `MCP_SUBSCRIPTION_MAX_URI_BYTES` | `8192` | Longest `resources/updated` URI forwarded; a longer one is dropped with a warning. |
 
 A listen stream is counted against `MCP_MAX_CONCURRENT_STREAMS`, not
 `MCP_MAX_CONCURRENT_REQUESTS` — it is the standing channel by another name, and

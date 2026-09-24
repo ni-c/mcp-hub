@@ -164,6 +164,16 @@ upstream could redirect a `tools/call` or the event stream to an internal
 address, and the hub would connect there with the request body and every
 configured header except `Authorization` and `Cookie`.
 
+**A reply from an upstream is bounded like a line from a child.** A remote
+server's answer may be at most 10 MiB, the limit the byte-stream transports
+apply to one message: a JSON reply as a whole, an event stream per event, so a
+long-lived stream is never cut off for its length. A reply that declares more
+is refused before it is read. Before 0.11.4 a remote upstream could answer one
+`tools/call` with as much as it liked and the hub buffered all of it. Tokens an
+upstream authorization server issues are held to printable ASCII and 16 KiB; a
+malformed one fails that server's authorization instead of being stored, and
+is never logged.
+
 **Nothing a client chooses can forge a log line.** A `client_id` may contain
 newlines — the URL parser strips them, so such a value passes every structural
 check while the raw string still reaches the log, where each line is given a
@@ -200,6 +210,24 @@ for it. While a login session is still valid, a client the hub has not seen
 before gets a CSRF-protected *Approve / Deny* page rather than a silent code.
 This is what stops a page in another tab from riding your session to obtain a
 token.
+
+**An approval covers the server it named.** Both pages show what the client
+asks for under *Requested access*, and approving covers that resource: one
+server, or `/hub` for all of them. When the same client later asks for another
+one, the page comes back — within a live session as *Approve / Deny*, otherwise
+as the sign-in page. Before 0.11.4 an approval was recorded for the client and
+its redirect URI only, so a client approved for one server received a code for
+any other, `/hub` included, without a page, while the session lasted.
+Approvals written by an older version name no resource and ask once more;
+refresh tokens are unaffected.
+
+**The address on the page is the address.** A redirect URI or metadata document
+URL with a user part (`https://claude.ai@attacker.example/cb`, which connects
+to `attacker.example`) is refused, and so is one containing anything but
+printable ASCII — a bidi override or a zero-width character could reorder or
+hide the host in the line you read. Such bytes belong in a URI percent-encoded,
+and that form is accepted. Values stored before 0.11.4 are rendered with those
+characters shown as `\u{…}` escapes.
 
 **Tokens are short-lived and bound.** Access tokens are opaque and valid for
 15 minutes. Opaque rather than self-contained on purpose: the value is a
@@ -241,6 +269,7 @@ password scoped to one resource.
 | `/register` | 20 per hour | 200 per hour |
 | `/authorize` | 100 per 15 min | 1000 per 15 min |
 | `/token` | 50 per 15 min | 500 per 15 min |
+| `/revoke` | 50 per 15 min | 500 per 15 min |
 | `/login` | 100 per 15 min | 500 per 15 min |
 | `/consent` | 100 per 15 min | 500 per 15 min |
 | Failed logins | 10 per 15 min | 100 per 15 min |

@@ -45,6 +45,8 @@ mcp-hub-admin clients prune [--dry-run]
 **`list`** prints every client, including ones approved without ever being
 registered. `via` says how each arrived: `cimd` for a metadata document,
 `dcr` for dynamic registration, `static` for one you created yourself.
+`approvedRedirectUris` and `approvedResources` are what you approved: where
+codes may go, and which servers (or `/hub`) they may be for.
 
 **`add`** issues a `client_id` and secret for a client that can do neither
 dynamic registration nor a metadata document. The secret is printed once and
@@ -53,7 +55,8 @@ private-use scheme, and `--public` creates a client without a secret.
 
 Two things make it different from a self-registered client: it counts as
 approved for the redirect URI you named, so nobody has to click through a
-browser to confirm what you just typed, and it is exempt from every
+browser to confirm what you just typed (the first request for each server
+still shows the page, since `add` names none), and it is exempt from every
 [lifecycle rule](/guide/client-registration#registrations-do-not-accumulate) —
 neither the ceiling nor the inactivity window can remove it.
 
