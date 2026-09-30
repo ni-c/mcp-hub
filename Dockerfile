@@ -24,21 +24,22 @@ FROM node:24-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35
 COPY --from=ghcr.io/astral-sh/uv:0.12.3@sha256:2d890623d310b57771ce840f0da5eed5fc6d657da05ffaa45d82797b53fa3abc /uv /uvx /usr/local/bin/
 # The base image bundles npm 11, whose vendored deps (tar, brace-expansion,
 # sigstore, ...) carry known HIGH/CRITICAL CVEs; replace it wholesale. Even
-# current npm still pins three vendored packages to vulnerable releases, so
+# current npm still pins four vendored packages to vulnerable releases, so
 # overwrite those in place with the fixed same-major versions (identical
 # dependency footprint, verified against the registry).
-# This sits *before* the apt layer on purpose: it is the expensive one (three
+# This sits *before* the apt layer on purpose: it is the expensive one (four
 # packages fetched and unpacked, under QEMU on arm64), it does not rot with
 # time — only with the pins written here — and everything below the cache
 # buster is rebuilt daily. Nothing here needs apt: `tar` is essential in the
 # base image, and npm reaches the registry over Node's built-in CA store, not
 # the system one (which the base image purges).
 RUN npm install -g npm@12.0.2 \
-    && npm pack brace-expansion@5.0.9 ip-address@10.3.1 tar@7.5.22 --pack-destination /tmp > /dev/null \
-    && tar -xzf /tmp/brace-expansion-5.0.9.tgz --strip-components=1 -C /usr/local/lib/node_modules/npm/node_modules/brace-expansion \
+    && npm pack brace-expansion@5.0.11 ip-address@10.3.1 tar@7.5.22 undici@6.28.1 --pack-destination /tmp > /dev/null \
+    && tar -xzf /tmp/brace-expansion-5.0.11.tgz --strip-components=1 -C /usr/local/lib/node_modules/npm/node_modules/brace-expansion \
     && tar -xzf /tmp/ip-address-10.3.1.tgz --strip-components=1 -C /usr/local/lib/node_modules/npm/node_modules/ip-address \
     && tar -xzf /tmp/tar-7.5.22.tgz --strip-components=1 -C /usr/local/lib/node_modules/npm/node_modules/tar \
-    && rm -f /tmp/brace-expansion-5.0.9.tgz /tmp/ip-address-10.3.1.tgz /tmp/tar-7.5.22.tgz \
+    && tar -xzf /tmp/undici-6.28.1.tgz --strip-components=1 -C /usr/local/lib/node_modules/npm/node_modules/undici \
+    && rm -f /tmp/brace-expansion-5.0.11.tgz /tmp/ip-address-10.3.1.tgz /tmp/tar-7.5.22.tgz /tmp/undici-6.28.1.tgz \
     # Nothing here runs yarn or corepack, and each is a package manager with
     # its own dependency tree for the scanner to find something in one day.
     && rm -rf /opt/yarn-v* /usr/local/bin/yarn /usr/local/bin/yarnpkg /usr/local/lib/node_modules/corepack /usr/local/bin/corepack
