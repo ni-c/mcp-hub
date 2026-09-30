@@ -7,6 +7,7 @@ import { stdio } from '../fixtures/fleets.js';
 import { startGateway, E2E_PASSWORD, type Gateway } from '../harness/gateway.js';
 import { runToCompletion } from '../harness/run.js';
 import { tierEnabled } from '../harness/tiers.js';
+import { waitFor } from '../harness/wait.js';
 import { assertBuildIsFresh, DIST_ENTRY, makeWorkspace, REPO_ROOT, type Workspace } from '../harness/workspace.js';
 
 /**
@@ -142,9 +143,16 @@ describe.runIf(RUNS_HERE)('what a running hub announces about itself', () => {
     });
     try {
       expect(logged.stderr()).toContain('mirroring log output to');
-      const contents = fs.readFileSync(logFile, 'utf8');
+      // The console gets each line synchronously and the file through a write
+      // stream, so the file may trail the line startGateway() settled on.
+      const contents = await waitFor(
+        () => {
+          const text = fs.readFileSync(logFile, 'utf8');
+          return text.includes('[ok] up') ? text : undefined;
+        },
+        { what: `"[ok] up" in ${logFile}` }
+      );
       expect(contents).toMatch(/^\d{4}-\d{2}-\d{2}T/);
-      expect(contents).toContain('[ok] up');
     } finally {
       await logged.stop();
     }
