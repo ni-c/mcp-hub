@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- #region changelog -->
 
+## [Unreleased]
+
+### Security
+
+- The image overwrites npm's vendored `brace-expansion` with 5.0.11 instead of
+  5.0.9 and now also its vendored `undici`, with 6.28.1. npm 12.0.2 pins
+  `undici` 6.27.0, and the latest npm, 12.1.0, still ships 6.28.0 and
+  `brace-expansion` 5.0.9, which CVE-2026-19534 (`undici`) and CVE-2026-102276
+  and CVE-2026-102278 (`brace-expansion`) apply to. Only the npm CLI inside the
+  image uses these copies; the hub's own dependencies were not affected.
+
 ## [0.11.4] - 2026-09-24
 
 ### Security
