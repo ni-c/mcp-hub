@@ -55,6 +55,11 @@ describe('splitImageRef', () => {
   });
 });
 
+const sendBody = (response: http.ServerResponse, status: number, body: string, contentType = 'application/json') => {
+  response.writeHead(status, { 'Content-Type': contentType, 'Content-Length': Buffer.byteLength(body) });
+  response.end(body);
+};
+
 describe('DockerClient against a scripted daemon', () => {
   let dir: string;
   let socketPath: string;
@@ -72,25 +77,21 @@ describe('DockerClient against a scripted daemon', () => {
       request.on('end', () => {
         const url = request.url ?? '';
         seen.push(`${request.method} ${url}`);
-        const send = (status: number, body: string, contentType = 'application/json') => {
-          response.writeHead(status, { 'Content-Type': contentType, 'Content-Length': Buffer.byteLength(body) });
-          response.end(body);
-        };
         if (url === DOCKER_POLICY_PATH) {
-          return send(200, JSON.stringify({ name: DOCKER_POLICY_NAME, policyVersion, daemon: 'ok' }));
+          return sendBody(response, 200, JSON.stringify({ name: DOCKER_POLICY_NAME, policyVersion, daemon: 'ok' }));
         }
-        if (url === '/version') return send(200, JSON.stringify({ ApiVersion: apiVersion }));
-        if (url.includes('/images/absent%3A1.0/json')) return send(404, JSON.stringify({ message: 'no such image' }));
-        if (url.includes('/images/present/json')) return send(200, '{}');
+        if (url === '/version') return sendBody(response, 200, JSON.stringify({ ApiVersion: apiVersion }));
+        if (url.includes('/images/absent%3A1.0/json')) return sendBody(response, 404, JSON.stringify({ message: 'no such image' }));
+        if (url.includes('/images/present/json')) return sendBody(response, 200, '{}');
         if (url.includes('/images/create')) {
           // A pull reports its failures inside a 200 response body.
-          return send(200, '{"status":"Pulling"}\n{"errorDetail":{"message":"nope"},"error":"manifest unknown"}\n');
+          return sendBody(response, 200, '{"status":"Pulling"}\n{"errorDetail":{"message":"nope"},"error":"manifest unknown"}\n');
         }
-        if (request.method === 'DELETE' && url.includes('conflict')) return send(409, JSON.stringify({ message: 'removal in progress' }));
-        if (request.method === 'DELETE') return send(404, JSON.stringify({ message: 'no such container' }));
-        if (url.includes('/containers/json')) return send(200, JSON.stringify([{ Id: 'abc', Names: ['/mcp-sandbox-scraper'] }, { Id: 'def', Names: ['/stray'] }]));
-        if (url.includes('/containers/create')) return send(400, JSON.stringify({ message: 'invalid reference format' }));
-        return send(500, 'not json at all', 'text/plain');
+        if (request.method === 'DELETE' && url.includes('conflict')) return sendBody(response, 409, JSON.stringify({ message: 'removal in progress' }));
+        if (request.method === 'DELETE') return sendBody(response, 404, JSON.stringify({ message: 'no such container' }));
+        if (url.includes('/containers/json')) return sendBody(response, 200, JSON.stringify([{ Id: 'abc', Names: ['/mcp-sandbox-scraper'] }, { Id: 'def', Names: ['/stray'] }]));
+        if (url.includes('/containers/create')) return sendBody(response, 400, JSON.stringify({ message: 'invalid reference format' }));
+        return sendBody(response, 500, 'not json at all', 'text/plain');
       });
     });
     await new Promise<void>(resolve => daemon.listen(socketPath, resolve));

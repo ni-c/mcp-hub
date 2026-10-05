@@ -183,6 +183,28 @@ function formFields(html: string): { request: string; csrf?: string; action: str
   };
 }
 
+/** GETs /authorize and follows to whichever page the flow lands on. */
+async function authPage(agent: ReturnType<typeof request.agent>, clientId: string, redirectUri = REDIRECT_URI) {
+  const { challenge } = pkcePair();
+  const started = await agent
+    .get('/authorize')
+    .query({
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      response_type: 'code',
+      code_challenge: challenge,
+      code_challenge_method: 'S256',
+      state: 'xyz'
+    })
+    .redirects(0);
+  if (started.status !== 303 && started.status !== 302) return started;
+  const location = started.headers.location as string;
+  // Straight back to the client means no page was needed: already approved.
+  if (location.startsWith(redirectUri)) return started;
+  const pathname = location.startsWith('http') ? new URL(location).pathname : location;
+  return agent.get(pathname).redirects(0);
+}
+
 describe('OAuth', () => {
   it('serves AS metadata at root and path-scoped PRM documents', async () => {
     const as = await request(hub.app).get('/.well-known/oauth-authorization-server').expect(200);
@@ -215,28 +237,6 @@ describe('OAuth', () => {
       sharedSession = agent;
     }
     return sharedSession;
-  }
-
-  /** GETs /authorize and follows to whichever page the flow lands on. */
-  async function authPage(agent: ReturnType<typeof request.agent>, clientId: string, redirectUri = REDIRECT_URI) {
-    const { challenge } = pkcePair();
-    const started = await agent
-      .get('/authorize')
-      .query({
-        client_id: clientId,
-        redirect_uri: redirectUri,
-        response_type: 'code',
-        code_challenge: challenge,
-        code_challenge_method: 'S256',
-        state: 'xyz'
-      })
-      .redirects(0);
-    if (started.status !== 303 && started.status !== 302) return started;
-    const location = started.headers.location as string;
-    // Straight back to the client means no page was needed: already approved.
-    if (location.startsWith(redirectUri)) return started;
-    const pathname = location.startsWith('http') ? new URL(location).pathname : location;
-    return agent.get(pathname).redirects(0);
   }
 
   it('sets anti-clickjacking and browser hardening headers on interactive auth pages', async () => {

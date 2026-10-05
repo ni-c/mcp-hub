@@ -107,18 +107,18 @@ describe('reading a registration', () => {
   });
 });
 
-describe('updating a registration', () => {
-  const put = (registration: Registration, body: Record<string, unknown>) =>
-    request(hub.app)
-      .put(managementPath(registration))
-      .set('Authorization', `Bearer ${registration.registration_access_token}`)
-      .send(body);
+const putRegistration = (registration: Registration, body: Record<string, unknown>) =>
+  request(hub.app)
+    .put(managementPath(registration))
+    .set('Authorization', `Bearer ${registration.registration_access_token}`)
+    .send(body);
 
+describe('updating a registration', () => {
   it('changes metadata and leaves an existing approval alone', async () => {
     const registration = await registerClient({ client_name: 'before' });
     hub.store.saveApproval(registration.client_id, REDIRECT, 'before');
 
-    const response = await put(registration, {
+    const response = await putRegistration(registration, {
       client_id: registration.client_id,
       redirect_uris: [REDIRECT],
       client_name: 'after'
@@ -133,7 +133,7 @@ describe('updating a registration', () => {
     const registration = await registerClient();
     hub.store.saveApproval(registration.client_id, REDIRECT, 'vitest');
 
-    await put(registration, {
+    await putRegistration(registration, {
       client_id: registration.client_id,
       redirect_uris: ['https://app.example.com/somewhere-else']
     }).expect(200);
@@ -148,7 +148,7 @@ describe('updating a registration', () => {
     const registration = await registerClient({ redirect_uris: [REDIRECT, 'https://app.example.com/second'] });
     hub.store.saveApproval(registration.client_id, REDIRECT, 'vitest');
 
-    await put(registration, {
+    await putRegistration(registration, {
       client_id: registration.client_id,
       redirect_uris: ['https://app.example.com/second', REDIRECT]
     }).expect(200);
@@ -158,13 +158,13 @@ describe('updating a registration', () => {
 
   it('refuses a body that names a different client', async () => {
     const registration = await registerClient();
-    const response = await put(registration, { client_id: 'someone-else', redirect_uris: [REDIRECT] }).expect(400);
+    const response = await putRegistration(registration, { client_id: 'someone-else', redirect_uris: [REDIRECT] }).expect(400);
     expect(response.body.error).toBe('invalid_client_metadata');
   });
 
   it('holds the new redirect URIs to the same rule as registration', async () => {
     const registration = await registerClient();
-    await put(registration, { client_id: registration.client_id, redirect_uris: ['http://app.example.com/cb'] }).expect(400);
+    await putRegistration(registration, { client_id: registration.client_id, redirect_uris: ['http://app.example.com/cb'] }).expect(400);
     // The stored registration is untouched by a rejected update.
     expect(hub.store.getClient(registration.client_id)?.redirect_uris).toEqual([REDIRECT]);
   });
@@ -172,7 +172,7 @@ describe('updating a registration', () => {
   it('will not let a confidential client change its own secret', async () => {
     const registration = await registerClient({ token_endpoint_auth_method: 'client_secret_post' });
     expect(registration.client_secret).toBeTruthy();
-    const response = await put(registration, {
+    const response = await putRegistration(registration, {
       client_id: registration.client_id,
       redirect_uris: [REDIRECT],
       client_secret: 'a-secret-i-picked'
@@ -187,7 +187,7 @@ describe('updating a registration', () => {
     // change anything.
     const registration = await registerClient();
     expect(registration.client_secret).toBeTruthy();
-    await put(registration, {
+    await putRegistration(registration, {
       client_id: registration.client_id,
       redirect_uris: [REDIRECT],
       client_secret: registration.client_secret
@@ -197,7 +197,7 @@ describe('updating a registration', () => {
 
   it('shortens a client name the same way registration does', async () => {
     const registration = await registerClient();
-    const response = await put(registration, {
+    const response = await putRegistration(registration, {
       client_id: registration.client_id,
       redirect_uris: [REDIRECT],
       client_name: `A\n\nB${'x'.repeat(300)}`

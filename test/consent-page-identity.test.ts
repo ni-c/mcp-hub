@@ -245,29 +245,29 @@ describe('validateDocument: CIMD document validation shares the same redirect_ur
   });
 });
 
-describe('POST /register (DCR create) refuses and accepts through the real path', () => {
-  const register = (redirectUri: string) =>
-    request(hub.app)
-      .post('/register')
-      .send({ redirect_uris: [redirectUri], client_name: 'consent-identity', token_endpoint_auth_method: 'none' });
+const registerRedirectUri = (redirectUri: string) =>
+  request(hub.app)
+    .post('/register')
+    .send({ redirect_uris: [redirectUri], client_name: 'consent-identity', token_endpoint_auth_method: 'none' });
 
+describe('POST /register (DCR create) refuses and accepts through the real path', () => {
   it('refuses a redirect_uri with userinfo, including the empty ":@" form', async () => {
     for (const uri of ['https://claude.ai@attacker.example/cb', 'https://:@attacker.example/cb']) {
-      const response = await register(uri).expect(400);
+      const response = await registerRedirectUri(uri).expect(400);
       expect(response.body.error, uri).toBe('invalid_redirect_uri');
     }
   });
 
   it('refuses a redirect_uri with a bidi override or a control character', async () => {
     for (const uri of [`https://app.example.com/cb${RLO}x`, 'https://app.example.com/cb\x00x']) {
-      const response = await register(uri).expect(400);
+      const response = await registerRedirectUri(uri).expect(400);
       expect(response.body.error, uri).toBe('invalid_redirect_uri');
     }
   });
 
   it('still accepts an ordinary https redirect_uri, a loopback address on an arbitrary port, a private-use scheme, and an "@" in the path', async () => {
     for (const uri of ['https://app.example.com/cb-ok', 'http://127.0.0.1:58211/cb', 'com.example.app:/cb', 'https://app.example.com/@handle/cb']) {
-      const response = await register(uri).expect(201);
+      const response = await registerRedirectUri(uri).expect(201);
       expect(response.body.redirect_uris, uri).toEqual([uri]);
     }
   });

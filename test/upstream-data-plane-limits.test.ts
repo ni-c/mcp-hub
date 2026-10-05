@@ -97,6 +97,12 @@ async function drain(response: Response): Promise<number> {
   }
 }
 
+const oversizedLengthFetch: typeof fetch = async () =>
+  new Response(chunkStream([new Uint8Array(1)]), {
+    status: 200,
+    headers: { 'content-type': 'application/json', 'content-length': String(MAX_UPSTREAM_RESPONSE_BYTES + 1) }
+  });
+
 describe('boundedRedirectFetch: a byte ceiling on the remote data plane', () => {
   const CAP = 2048;
 
@@ -197,14 +203,9 @@ describe('boundedRedirectFetch: a byte ceiling on the remote data plane', () => 
   });
 
   it('applies the default cap when none is passed, rejecting early on a declared oversized content-length', async () => {
-    const impl: typeof fetch = async () =>
-      new Response(chunkStream([new Uint8Array(1)]), {
-        status: 200,
-        headers: { 'content-type': 'application/json', 'content-length': String(MAX_UPSTREAM_RESPONSE_BYTES + 1) }
-      });
     // No third argument: proves the wiring, not just the mechanism — cheap
     // because content-length rejection never reads a body.
-    await expect(boundedRedirectFetch('https://upstream.example', impl)(UPSTREAM)).rejects.toThrow(/exceeding the \d+ byte limit/);
+    await expect(boundedRedirectFetch('https://upstream.example', oversizedLengthFetch)(UPSTREAM)).rejects.toThrow(/exceeding the \d+ byte limit/);
   });
 
   describe('wired into the remote transports, a failed size check is a failed connection, not a crash', () => {

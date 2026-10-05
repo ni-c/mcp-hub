@@ -58,6 +58,12 @@ function frame(stream: number, payload: Buffer): Buffer {
   return Buffer.concat([header, payload]);
 }
 
+const sendJson = (response: http.ServerResponse, status: number, body: unknown) => {
+  const payload = JSON.stringify(body);
+  response.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) });
+  response.end(payload);
+};
+
 function startFakeDaemon(): http.Server {
   const server = http.createServer((request, response) => {
     const chunks: Buffer[] = [];
@@ -69,29 +75,24 @@ function startFakeDaemon(): http.Server {
         url: request.url ?? '',
         body: raw.length > 0 ? (JSON.parse(raw) as Record<string, unknown>) : undefined
       });
-      const send = (status: number, body: unknown) => {
-        const payload = JSON.stringify(body);
-        response.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) });
-        response.end(payload);
-      };
       const url = (request.url ?? '').split('?')[0].replace(/^\/v\d+\.\d+/, '');
       if (url === '/_ping') {
         response.writeHead(200, { 'Content-Type': 'text/plain', 'Content-Length': '2' });
         response.end('OK');
         return;
       }
-      if (url === '/version') return send(200, { ApiVersion: '1.44' });
-      if (url.endsWith('/json') && url.startsWith('/images/')) return send(200, { Id: 'sha256:1' });
+      if (url === '/version') return sendJson(response, 200, { ApiVersion: '1.44' });
+      if (url.endsWith('/json') && url.startsWith('/images/')) return sendJson(response, 200, { Id: 'sha256:1' });
       if (url.startsWith('/containers/') && url.endsWith('/json')) {
-        return send(200, {
+        return sendJson(response, 200, {
           Config: { Labels: { [OWNER_LABEL]: labelsOwned ? OWNER_VALUE : 'foreign', [SERVER_LABEL]: 'everything' } }
         });
       }
-      if (url === '/containers/create') return send(201, { Id: 'container-1' });
-      if (url.endsWith('/start')) return send(204, {});
-      if (url === '/containers/json') return send(200, []);
-      if (request.method === 'DELETE') return send(404, { message: 'no such container' });
-      return send(500, { message: `fake daemon has no route for ${url}` });
+      if (url === '/containers/create') return sendJson(response, 201, { Id: 'container-1' });
+      if (url.endsWith('/start')) return sendJson(response, 204, {});
+      if (url === '/containers/json') return sendJson(response, 200, []);
+      if (request.method === 'DELETE') return sendJson(response, 404, { message: 'no such container' });
+      return sendJson(response, 500, { message: `fake daemon has no route for ${url}` });
     });
   });
 

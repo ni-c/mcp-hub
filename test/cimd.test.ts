@@ -841,6 +841,14 @@ describe('the authorization flow with a metadata document', () => {
   });
 });
 
+const assertionJwtBase = (clientId: string) =>
+  new SignJWT({})
+    .setProtectedHeader({ alg: 'ES256', kid: 'test-key' })
+    .setIssuer(clientId)
+    .setSubject(clientId)
+    .setAudience('http://localhost:3000/token')
+    .setIssuedAt();
+
 describe('private_key_jwt client authentication', () => {
   let privateKey: CryptoKey;
   let jwks: { keys: JWK[] };
@@ -1175,14 +1183,7 @@ describe('private_key_jwt client authentication', () => {
   });
 
   it('refuses an assertion with no jti and one with no exp', async () => {
-    const base = () =>
-      new SignJWT({})
-        .setProtectedHeader({ alg: 'ES256', kid: 'test-key' })
-        .setIssuer(clientId)
-        .setSubject(clientId)
-        .setAudience('http://localhost:3000/token')
-        .setIssuedAt();
-    for (const assertionJwt of [await base().setExpirationTime('120s').sign(privateKey), await base().setJti('x').sign(privateKey)]) {
+    for (const assertionJwt of [await assertionJwtBase(clientId).setExpirationTime('120s').sign(privateKey), await assertionJwtBase(clientId).setJti('x').sign(privateKey)]) {
       const response = await request(hub.app)
         .post('/token')
         .type('form')
@@ -1228,32 +1229,32 @@ describe('private_key_jwt client authentication', () => {
   });
 });
 
-describe('dynamic registration holds redirect URIs to the same rule', () => {
-  const register = (redirectUris: string[], clientName = 'vitest') =>
-    request(hub.app).post('/register').send({ redirect_uris: redirectUris, client_name: clientName, token_endpoint_auth_method: 'none' });
+const registerRedirectUris = (redirectUris: string[], clientName = 'vitest') =>
+  request(hub.app).post('/register').send({ redirect_uris: redirectUris, client_name: clientName, token_endpoint_auth_method: 'none' });
 
+describe('dynamic registration holds redirect URIs to the same rule', () => {
   it('refuses a plaintext callback on a remote host', async () => {
     // The SDK only keeps javascript:, data: and vbscript: out, so this used to
     // register happily and have the code delivered in the clear.
     // Refused with the more specific code than the hub used to send; the
     // property under test is that it is refused at all.
-    const response = await register(['http://app.example.com/cb']).expect(400);
+    const response = await registerRedirectUris(['http://app.example.com/cb']).expect(400);
     expect(response.body.error).toBe('invalid_redirect_uri');
   });
 
   it('refuses a file:// callback', async () => {
-    await register(['file:///tmp/cb']).expect(400);
+    await registerRedirectUris(['file:///tmp/cb']).expect(400);
   });
 
   it('accepts https, loopback and the private-use scheme a native client needs', async () => {
     for (const uri of ['https://app.example.com/cb', 'http://127.0.0.1:5000/cb', 'com.example.app:/cb']) {
-      const response = await register([uri]).expect(201);
+      const response = await registerRedirectUris([uri]).expect(201);
       expect(response.body.redirect_uris, uri).toEqual([uri]);
     }
   });
 
   it('shortens a client name that would take over the consent page', async () => {
-    const response = await register(['https://app.example.com/cb'], `A\n\nB${'x'.repeat(300)}`).expect(201);
+    const response = await registerRedirectUris(['https://app.example.com/cb'], `A\n\nB${'x'.repeat(300)}`).expect(201);
     expect(response.body.client_name).not.toContain('\n');
     expect(response.body.client_name.length).toBeLessThanOrEqual(65);
   });

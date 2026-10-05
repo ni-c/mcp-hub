@@ -43,6 +43,15 @@ function refuse(response: http.ServerResponse, status: number, reason: string, c
   response.end(body);
 }
 
+/**
+ * An upgrade is answered on the raw socket, and a refused one must not leave
+ * the caller holding a half-open connection: write, then destroy.
+ */
+const hangUp = (clientSocket: Duplex, status: number, reason: string) =>
+  clientSocket.end(`HTTP/1.1 ${status} ${status === 403 ? 'Forbidden' : 'Bad Gateway'}\r\nConnection: close\r\nContent-Length: ${Buffer.byteLength(reason)}\r\n\r\n${reason}`, () =>
+    clientSocket.destroy()
+  );
+
 function readBody(request: http.IncomingMessage): Promise<Buffer | { tooLarge: true }> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -275,19 +284,13 @@ export function createDockerProxy(options: ProxyOptions): http.Server {
   server.on('upgrade', (request, clientSocket: Duplex, head: Buffer) => {
     void (async () => {
     const decision = decide(request.method ?? 'GET', request.url ?? '/', undefined);
-    // An upgrade is answered on the raw socket, and a refused one must not
-    // leave the caller holding a half-open connection: write, then destroy.
-    const hangUp = (status: number, reason: string) =>
-      clientSocket.end(`HTTP/1.1 ${status} ${status === 403 ? 'Forbidden' : 'Bad Gateway'}\r\nConnection: close\r\nContent-Length: ${Buffer.byteLength(reason)}\r\n\r\n${reason}`, () =>
-        clientSocket.destroy()
-      );
     if (!decision.allow || !decision.upgrade) {
-      hangUp(decision.allow ? 403 : decision.status, decision.allow ? 'this endpoint does not support upgrades' : decision.reason);
+      hangUp(clientSocket, decision.allow ? 403 : decision.status, decision.allow ? 'this endpoint does not support upgrades' : decision.reason);
       return;
     }
     const ownershipError = await verifyContainer(options, decision);
     if (ownershipError) {
-      hangUp(ownershipError.status, ownershipError.reason);
+      hangUp(clientSocket, ownershipError.status, ownershipError.reason);
       return;
     }
     const upstream = http.request({
@@ -322,11 +325,11 @@ export function createDockerProxy(options: ProxyOptions): http.Server {
     });
     upstream.on('response', upstreamResponse => {
       upstreamResponse.resume();
-      hangUp(502, `docker daemon answered ${upstreamResponse.statusCode} instead of upgrading`);
+      hangUp(clientSocket, 502, `docker daemon answered ${upstreamResponse.statusCode} instead of upgrading`);
     });
     upstream.on('error', error => {
       console.error(`docker-proxy: upstream error on attach: ${(error as Error).message}`);
-      hangUp(502, `docker daemon unreachable: ${(error as Error).message}`);
+      hangUp(clientSocket, 502, `docker daemon unreachable: ${(error as Error).message}`);
     });
     upstream.end();
     })().catch(error => {

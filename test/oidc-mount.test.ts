@@ -185,32 +185,32 @@ describe('the mount boundary', () => {
   });
 });
 
-describe('the client quirks', () => {
-  async function register(overrides: Record<string, unknown> = {}): Promise<Record<string, string>> {
-    const res = await request(app)
-      .post('/register')
-      .send({
-        client_name: 'vitest',
-        redirect_uris: [REDIRECT_URI],
-        token_endpoint_auth_method: 'none',
-        grant_types: ['authorization_code'],
-        response_types: ['code'],
-        ...overrides
-      })
-      .expect(201);
-    return res.body;
-  }
+async function registerWithOverrides(overrides: Record<string, unknown> = {}): Promise<Record<string, string>> {
+  const res = await request(app)
+    .post('/register')
+    .send({
+      client_name: 'vitest',
+      redirect_uris: [REDIRECT_URI],
+      token_endpoint_auth_method: 'none',
+      grant_types: ['authorization_code'],
+      response_types: ['code'],
+      ...overrides
+    })
+    .expect(201);
+  return res.body;
+}
 
+describe('the client quirks', () => {
   it('never expires a client secret', async () => {
     // ChatGPT registers once per connector and never re-registers.
-    const client = await register();
+    const client = await registerWithOverrides();
     expect(client.client_secret_expires_at).toBe(0);
   });
 
   it('returns a throwaway secret to a public client but stores none', async () => {
     // ChatGPT refuses its own registration without one; Claude is correct and
     // would break if the stored client then demanded it.
-    const client = await register();
+    const client = await registerWithOverrides();
     expect(typeof client.client_secret).toBe('string');
     expect(client.client_secret!.length).toBeGreaterThan(20);
 
@@ -224,57 +224,57 @@ describe('the client quirks', () => {
     // clients and the activity stamps all work on AuthStore.clients. A client
     // model kept in the generic artifact slot would leave the CLI reporting an
     // empty hub while the authorization server served a full one.
-    const client = await register();
+    const client = await registerWithOverrides();
     expect(Object.keys(store.listClients())).toContain(client.client_id);
     expect(store.planClientPrune()).toBeDefined();
   });
 
   it('forces refresh_token into grant_types the client did not ask for', async () => {
-    const client = await register({ grant_types: ['authorization_code'] });
+    const client = await registerWithOverrides({ grant_types: ['authorization_code'] });
     const stored = store.getClient(client.client_id!);
     expect(stored!.grant_types).toContain('refresh_token');
   });
 });
 
+async function authorizeFreshClient(): Promise<{ tokens: Record<string, string>; clientId: string; agent: ReturnType<typeof request.agent> }> {
+  const registration = await request(app)
+    .post('/register')
+    .send({ client_name: 'vitest', redirect_uris: [REDIRECT_URI], token_endpoint_auth_method: 'none', response_types: ['code'] })
+    .expect(201);
+  const clientId = registration.body.client_id as string;
+
+  // No `scope` parameter anywhere, which is what real MCP clients send.
+  const { code, agent, verifier } = await authorize(app, clientId);
+  const tokens = await agent
+    .post('/token')
+    .type('form')
+    .send({ grant_type: 'authorization_code', code, redirect_uri: REDIRECT_URI, client_id: clientId, code_verifier: verifier })
+    .expect(200);
+  return { tokens: tokens.body, clientId, agent };
+}
+
 describe('a full authorization, the way MCP clients actually do it', () => {
-  async function flow(): Promise<{ tokens: Record<string, string>; clientId: string; agent: ReturnType<typeof request.agent> }> {
-    const registration = await request(app)
-      .post('/register')
-      .send({ client_name: 'vitest', redirect_uris: [REDIRECT_URI], token_endpoint_auth_method: 'none', response_types: ['code'] })
-      .expect(201);
-    const clientId = registration.body.client_id as string;
-
-    // No `scope` parameter anywhere, which is what real MCP clients send.
-    const { code, agent, verifier } = await authorize(app, clientId);
-    const tokens = await agent
-      .post('/token')
-      .type('form')
-      .send({ grant_type: 'authorization_code', code, redirect_uri: REDIRECT_URI, client_id: clientId, code_verifier: verifier })
-      .expect(200);
-    return { tokens: tokens.body, clientId, agent };
-  }
-
   it('completes without a scope parameter', async () => {
     // oidc-provider filters granted scopes by requested ones and refuses an
     // empty intersection, so this only works because the mount defaults it.
-    const { tokens } = await flow();
+    const { tokens } = await authorizeFreshClient();
     expect(tokens.access_token).toBeTruthy();
   });
 
   it('keeps expires_in at the value clients cached', async () => {
-    const { tokens } = await flow();
+    const { tokens } = await authorizeFreshClient();
     expect(tokens.expires_in).toBe(15 * 60);
   });
 
   it('issues a refresh token without offline_access', async () => {
-    const { tokens } = await flow();
+    const { tokens } = await authorizeFreshClient();
     expect(typeof tokens.refresh_token).toBe('string');
   });
 
   it('issues an opaque access token, not a JWT', async () => {
     // The whole revocation story depends on this: oidc-provider never persists
     // a JWT access token, so a JWT could not be revoked before it expires.
-    const { tokens } = await flow();
+    const { tokens } = await authorizeFreshClient();
     expect(tokens.access_token.split('.')).toHaveLength(1);
     // An opaque token's value IS its jti (formats/opaque.js), so the record has
     // to be reachable in the store — that reachability is what makes immediate
@@ -305,7 +305,7 @@ describe('a full authorization, the way MCP clients actually do it', () => {
   });
 
   it('revokes every existing token of a client immediately', async () => {
-    const { tokens, clientId, agent } = await flow();
+    const { tokens, clientId, agent } = await authorizeFreshClient();
 
     // Control: without the cutoff the token works, so a later failure cannot be
     // blamed on refresh rotation.
@@ -515,43 +515,43 @@ describe('client ID metadata documents and private_key_jwt', () => {
   });
 });
 
+async function registerClientId(): Promise<string> {
+  const res = await request(app)
+    .post('/register')
+    .send({ client_name: 'vitest', redirect_uris: [REDIRECT_URI], token_endpoint_auth_method: 'none', response_types: ['code'] })
+    .expect(201);
+  return res.body.client_id as string;
+}
+
+/**
+ * Submits the password AND follows the resume redirect. The session is only
+ * established when the authorization request is resumed and consumes the
+ * login result, so stopping at the POST leaves the operator signed out.
+ */
+async function signIn(agent: ReturnType<typeof request.agent>, uid: string): Promise<void> {
+  const submitted = await agent.post(`/interaction/${uid}/login`).type('form').send({ password: PASSWORD, request: uid }).redirects(0);
+  await agent.get(toPath(submitted.headers.location as string)).redirects(0);
+}
+
+/** Walks to the interaction page and returns it, without submitting. */
+async function reachInteraction(agent: ReturnType<typeof request.agent>, clientId: string) {
+  const query = new URLSearchParams({
+    client_id: clientId,
+    response_type: 'code',
+    redirect_uri: REDIRECT_URI,
+    code_challenge: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
+    code_challenge_method: 'S256',
+    state: 'xyz'
+  });
+  const started = await agent.get(`/authorize?${query.toString()}`).redirects(0);
+  if (!started.headers.location) throw new Error(`authorize: ${started.status} ${started.text.slice(0, 300)}`);
+  const location = toPath(started.headers.location as string);
+  return { page: await agent.get(location).redirects(0), path: location };
+}
+
 describe('the login and consent pages', () => {
-  async function register(): Promise<string> {
-    const res = await request(app)
-      .post('/register')
-      .send({ client_name: 'vitest', redirect_uris: [REDIRECT_URI], token_endpoint_auth_method: 'none', response_types: ['code'] })
-      .expect(201);
-    return res.body.client_id as string;
-  }
-
-  /**
-   * Submits the password AND follows the resume redirect. The session is only
-   * established when the authorization request is resumed and consumes the
-   * login result, so stopping at the POST leaves the operator signed out.
-   */
-  async function signIn(agent: ReturnType<typeof request.agent>, uid: string): Promise<void> {
-    const submitted = await agent.post(`/interaction/${uid}/login`).type('form').send({ password: PASSWORD, request: uid }).redirects(0);
-    await agent.get(toPath(submitted.headers.location as string)).redirects(0);
-  }
-
-  /** Walks to the interaction page and returns it, without submitting. */
-  async function reachInteraction(agent: ReturnType<typeof request.agent>, clientId: string) {
-    const query = new URLSearchParams({
-      client_id: clientId,
-      response_type: 'code',
-      redirect_uri: REDIRECT_URI,
-      code_challenge: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
-      code_challenge_method: 'S256',
-      state: 'xyz'
-    });
-    const started = await agent.get(`/authorize?${query.toString()}`).redirects(0);
-    if (!started.headers.location) throw new Error(`authorize: ${started.status} ${started.text.slice(0, 300)}`);
-    const location = toPath(started.headers.location as string);
-    return { page: await agent.get(location).redirects(0), path: location };
-  }
-
   it('refuses a wrong password and says so on the same form', async () => {
-    const clientId = await register();
+    const clientId = await registerClientId();
     const agent = request.agent(app);
     const { page } = await reachInteraction(agent, clientId);
     const uid = /name="request" value="([^"]+)"/.exec(page.text)![1];
@@ -567,7 +567,7 @@ describe('the login and consent pages', () => {
     // hasValidSession() is used outside the auth layer, by the upstream OAuth
     // callback. If only oidc-provider's own cookie were set, the operator would
     // have to log in a second time for something that looks unrelated.
-    const clientId = await register();
+    const clientId = await registerClientId();
     const agent = request.agent(app);
     const { page } = await reachInteraction(agent, clientId);
     const uid = /name="request" value="([^"]+)"/.exec(page.text)![1];
@@ -580,24 +580,24 @@ describe('the login and consent pages', () => {
     // Typing the password approves the client that triggered it, and only that
     // one. A second client has to be shown, or a page that exists to ask "did
     // you start this?" would never appear again.
-    const first = await register();
+    const first = await registerClientId();
     const agent = request.agent(app);
     const { page } = await reachInteraction(agent, first);
     await signIn(agent, /name="request" value="([^"]+)"/.exec(page.text)![1]);
 
-    const second = await register();
+    const second = await registerClientId();
     const { page: consent } = await reachInteraction(agent, second);
     expect(consent.text).toContain('Authorize access?');
     expect(consent.text).toContain('name="csrf"');
   });
 
   it('refuses a consent submission with a bad CSRF token', async () => {
-    const first = await register();
+    const first = await registerClientId();
     const agent = request.agent(app);
     const { page } = await reachInteraction(agent, first);
     await signIn(agent, /name="request" value="([^"]+)"/.exec(page.text)![1]);
 
-    const second = await register();
+    const second = await registerClientId();
     const { page: consent } = await reachInteraction(agent, second);
     const consentUid = /name="request" value="([^"]+)"/.exec(consent.text)![1];
     const refused = await agent
@@ -608,12 +608,12 @@ describe('the login and consent pages', () => {
   });
 
   it('completes the flow when consent is approved', async () => {
-    const first = await register();
+    const first = await registerClientId();
     const agent = request.agent(app);
     const { page } = await reachInteraction(agent, first);
     await signIn(agent, /name="request" value="([^"]+)"/.exec(page.text)![1]);
 
-    const second = await register();
+    const second = await registerClientId();
     const { page: consent } = await reachInteraction(agent, second);
     const consentUid = /name="request" value="([^"]+)"/.exec(consent.text)![1];
     const csrf = /name="csrf" value="([^"]+)"/.exec(consent.text)![1];
@@ -635,7 +635,7 @@ describe('the login and consent pages', () => {
   });
 
   it('blocks after repeated wrong passwords', async () => {
-    const clientId = await register();
+    const clientId = await registerClientId();
     const agent = request.agent(app);
     const { page } = await reachInteraction(agent, clientId);
     const uid = /name="request" value="([^"]+)"/.exec(page.text)![1];
@@ -648,12 +648,12 @@ describe('the login and consent pages', () => {
   });
 
   it('sends the client away when consent is denied', async () => {
-    const first = await register();
+    const first = await registerClientId();
     const agent = request.agent(app);
     const { page } = await reachInteraction(agent, first);
     await signIn(agent, /name="request" value="([^"]+)"/.exec(page.text)![1]);
 
-    const second = await register();
+    const second = await registerClientId();
     const { page: consent } = await reachInteraction(agent, second);
     const consentUid = /name="request" value="([^"]+)"/.exec(consent.text)![1];
     const csrf = /name="csrf" value="([^"]+)"/.exec(consent.text)![1];
@@ -669,22 +669,22 @@ describe('the login and consent pages', () => {
   });
 });
 
-describe('bearer authentication with both token shapes', () => {
-  /** A protected route standing in for /hub, using the SDK middleware the hub
-   *  uses, so the verifier is exercised exactly as it will be in production. */
-  function protectedApp(authStore: AuthStore, resource: URL) {
-    const guarded = express();
-    const verifier = new OidcTokenVerifier(authStore, {
-      externalUrl: EXTERNAL_URL,
-      requireResource: true,
-      resolveResource: url => (url.href === resource.href ? resource : undefined)
-    });
-    guarded.get('/hub', requireBearerAuth({ verifier }), (_req, res) => {
-      res.json({ ok: true });
-    });
-    return guarded;
-  }
+/** A protected route standing in for /hub, using the SDK middleware the hub
+ *  uses, so the verifier is exercised exactly as it will be in production. */
+function protectedApp(authStore: AuthStore, resource: URL) {
+  const guarded = express();
+  const verifier = new OidcTokenVerifier(authStore, {
+    externalUrl: EXTERNAL_URL,
+    requireResource: true,
+    resolveResource: url => (url.href === resource.href ? resource : undefined)
+  });
+  guarded.get('/hub', requireBearerAuth({ verifier }), (_req, res) => {
+    res.json({ ok: true });
+  });
+  return guarded;
+}
 
+describe('bearer authentication with both token shapes', () => {
   it('accepts an opaque OAuth token and refuses it again once revoked', async () => {
     const registration = await request(app)
       .post('/register')
@@ -729,17 +729,17 @@ describe('bearer authentication with both token shapes', () => {
   });
 });
 
-describe('RFC 7592 registration management', () => {
-  async function register() {
-    const res = await request(app)
-      .post('/register')
-      .send({ client_name: 'vitest', redirect_uris: [REDIRECT_URI], token_endpoint_auth_method: 'none', response_types: ['code'] })
-      .expect(201);
-    return res.body as { client_id: string; registration_access_token: string; registration_client_uri: string };
-  }
+async function registerManagedClient() {
+  const res = await request(app)
+    .post('/register')
+    .send({ client_name: 'vitest', redirect_uris: [REDIRECT_URI], token_endpoint_auth_method: 'none', response_types: ['code'] })
+    .expect(201);
+  return res.body as { client_id: string; registration_access_token: string; registration_client_uri: string };
+}
 
+describe('RFC 7592 registration management', () => {
   it('hands out a management URI and a token that reads the registration back', async () => {
-    const client = await register();
+    const client = await registerManagedClient();
     expect(client.registration_client_uri).toBe(`${new URL(EXTERNAL_URL).origin}/register/${client.client_id}`);
     const read = await request(app)
       .get(`/register/${client.client_id}`)
@@ -749,13 +749,13 @@ describe('RFC 7592 registration management', () => {
   });
 
   it('refuses management without the registration token', async () => {
-    const client = await register();
+    const client = await registerManagedClient();
     await request(app).get(`/register/${client.client_id}`).expect(401);
     await request(app).get(`/register/${client.client_id}`).set('Authorization', 'Bearer wrong').expect(401);
   });
 
   it('updates and then deletes the registration, and the client is gone from the store', async () => {
-    const client = await register();
+    const client = await registerManagedClient();
     const updated = await request(app)
       .put(`/register/${client.client_id}`)
       .set('Authorization', `Bearer ${client.registration_access_token}`)
@@ -812,14 +812,6 @@ describe('the password check', () => {
 });
 
 describe('resource binding', () => {
-  async function register(): Promise<string> {
-    const res = await request(app)
-      .post('/register')
-      .send({ client_name: 'vitest', redirect_uris: [REDIRECT_URI], token_endpoint_auth_method: 'none', response_types: ['code'] })
-      .expect(201);
-    return res.body.client_id as string;
-  }
-
   it('canonicalises the requested resource the way the resource server does', async () => {
     // A client may ask for /hub/mcp; the hub serves that resource under /hub.
     // A token minted for the uncanonicalised form would be refused by the very
@@ -883,7 +875,7 @@ describe('resource binding', () => {
   });
 
   it('binds to the default resource when the client names none', async () => {
-    const clientId = await register();
+    const clientId = await registerClientId();
     const { code, agent, verifier } = await authorize(app, clientId);
     const tokens = await agent
       .post('/token')
