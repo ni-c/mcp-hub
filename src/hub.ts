@@ -203,6 +203,39 @@ const requireAllowedTool = (managed: ManagedServer, tool: string, server: string
 };
 
 /**
+ * `hub: false` hides a server's TOOLS from the aggregate — those are meant
+ * to be used through the server's own endpoint. Its lifecycle is a different
+ * matter: wake_server/sleep_server manage hidden servers too, so the error
+ * points at the right door instead of pretending the server does not exist
+ * (/health names every server to the same token anyway).
+ */
+const requireExposed = (managed: ManagedServer): CallToolResult | undefined => {
+  if (managed.config.hub) return undefined;
+  return toolError(`Server "${managed.name}" is not exposed through /hub — connect to its own endpoint /${managed.name}/mcp instead.`);
+};
+
+/**
+ * Asking about an on-demand server's tools is the strongest hint that a
+ * call follows, so a sleeping server is pre-warmed in the background while
+ * the cached snapshot answers. Only a server with nothing cached yet (first
+ * ever run) blocks on the start — there is nothing truthful to answer from.
+ * Always-running servers pass through untouched.
+ */
+const prepare = async (managed: ManagedServer): Promise<CallToolResult | undefined> => {
+  if (!managed.onDemand) return undefined;
+  if (!managed.hasSnapshot) {
+    try {
+      await managed.wake();
+    } catch (error) {
+      return toolError(`Server "${managed.name}" failed to start: ${reason(error)}`);
+    }
+  } else if (managed.state === 'sleeping') {
+    void managed.wake().catch(() => {});
+  }
+  return undefined;
+};
+
+/**
  * The aggregate, built for the era it will serve.
  *
  * `era` is not decoration: both entry points already construct one instance per
@@ -215,39 +248,6 @@ export function buildHubServer(supervisor: Supervisor, secret: string, era: Era)
   const hub = new McpServer({ name: 'mcp-hub', version: VERSION });
 
   const findServer = (name: string) => supervisor.get(name);
-
-  /**
-   * `hub: false` hides a server's TOOLS from the aggregate — those are meant
-   * to be used through the server's own endpoint. Its lifecycle is a different
-   * matter: wake_server/sleep_server manage hidden servers too, so the error
-   * points at the right door instead of pretending the server does not exist
-   * (/health names every server to the same token anyway).
-   */
-  const requireExposed = (managed: ManagedServer): CallToolResult | undefined => {
-    if (managed.config.hub) return undefined;
-    return toolError(`Server "${managed.name}" is not exposed through /hub — connect to its own endpoint /${managed.name}/mcp instead.`);
-  };
-
-  /**
-   * Asking about an on-demand server's tools is the strongest hint that a
-   * call follows, so a sleeping server is pre-warmed in the background while
-   * the cached snapshot answers. Only a server with nothing cached yet (first
-   * ever run) blocks on the start — there is nothing truthful to answer from.
-   * Always-running servers pass through untouched.
-   */
-  const prepare = async (managed: ManagedServer): Promise<CallToolResult | undefined> => {
-    if (!managed.onDemand) return undefined;
-    if (!managed.hasSnapshot) {
-      try {
-        await managed.wake();
-      } catch (error) {
-        return toolError(`Server "${managed.name}" failed to start: ${reason(error)}`);
-      }
-    } else if (managed.state === 'sleeping') {
-      void managed.wake().catch(() => {});
-    }
-    return undefined;
-  };
 
   hub.registerTool(
     'list_servers',

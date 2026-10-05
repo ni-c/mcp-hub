@@ -240,14 +240,14 @@ describe('the attribution prefix cannot be forged', () => {
   });
 });
 
-describe('the sealed state binds all of itself', () => {
-  const validState = (overrides: Partial<ElicitationState> = {}): ElicitationState => ({
-    ...BINDING,
-    round: 0,
-    expiresAt: Date.now() + 60_000,
-    ...overrides
-  });
+const validState = (overrides: Partial<ElicitationState> = {}): ElicitationState => ({
+  ...BINDING,
+  round: 0,
+  expiresAt: Date.now() + 60_000,
+  ...overrides
+});
 
+describe('the sealed state binds all of itself', () => {
   it('a state this hub sealed opens again unchanged', () => {
     fc.assert(
       fc.property(

@@ -60,24 +60,24 @@ afterEach(async () => {
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
-describe('HTTP password configuration fails closed at the login, not at startup', () => {
-  /** The login page of a fresh authorization, the way a browser reaches it. */
-  async function loginPage(hub: Awaited<ReturnType<typeof createHub>>) {
-    const clientId = await registerPublicClient(hub.app, REDIRECT_URI);
-    const agent = request.agent(hub.app);
-    const query = new URLSearchParams({
-      client_id: clientId, redirect_uri: REDIRECT_URI, response_type: 'code', code_challenge: 'a'.repeat(43),
-      code_challenge_method: 'S256', state: 'xyz', resource: 'http://localhost/hub'
-    });
-    let location = `/authorize?${query}`;
-    for (let hop = 0; hop < 6; hop += 1) {
-      const res = await agent.get(location).redirects(0);
-      if (!res.headers.location) return { agent, location, res };
-      location = new URL(res.headers.location as string, 'http://localhost/').pathname;
-    }
-    throw new Error('login page not reached');
+/** The login page of a fresh authorization, the way a browser reaches it. */
+async function loginPage(hub: Awaited<ReturnType<typeof createHub>>) {
+  const clientId = await registerPublicClient(hub.app, REDIRECT_URI);
+  const agent = request.agent(hub.app);
+  const query = new URLSearchParams({
+    client_id: clientId, redirect_uri: REDIRECT_URI, response_type: 'code', code_challenge: 'a'.repeat(43),
+    code_challenge_method: 'S256', state: 'xyz', resource: 'http://localhost/hub'
+  });
+  let location = `/authorize?${query}`;
+  for (let hop = 0; hop < 6; hop += 1) {
+    const res = await agent.get(location).redirects(0);
+    if (!res.headers.location) return { agent, location, res };
+    location = new URL(res.headers.location as string, 'http://localhost/').pathname;
   }
+  throw new Error('login page not reached');
+}
 
+describe('HTTP password configuration fails closed at the login, not at startup', () => {
   it.each([undefined, '', ' \t\n'])('starts without a password %j, warns, and refuses every login', async password => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const hub = await hubWith({ password });
@@ -373,27 +373,27 @@ describe('a URL-mode elicitation names a page the hub can vouch for', () => {
   });
 });
 
-describe('the session cookie behind HTTPS', () => {
-  /** The interaction routes over a provider stub: oidc-provider's own cookies
-   *  are Secure behind an https issuer, which supertest's plain-http agent
-   *  cannot carry, so the real provider cannot be driven to the login here. */
-  async function loginBehind(externalUrl: string) {
-    const store = new AuthStore(directory());
-    const provider = {
-      interactionDetails: async () => ({ uid: 'u1', prompt: { name: 'login' }, params: { client_id: 'c', redirect_uri: REDIRECT_URI } }),
-      Client: { find: async () => undefined },
-      interactionFinished: async (_req: unknown, res: express.Response) => {
-        res.status(204).end();
-      }
-    };
-    const app = express();
-    app.use(createOidcInteractionRoutes({ provider: provider as never, store, externalUrl, password: 'test-password' }));
-    const res = await request(app).post('/interaction/u1/login').type('form').send({ request: 'u1', password: 'test-password' });
-    expect(res.status).toBe(204);
-    const header = ([] as string[]).concat(res.headers['set-cookie'] ?? []).find(line => line.includes('mcp_hub_session'))!;
-    return { header, store };
-  }
+/** The interaction routes over a provider stub: oidc-provider's own cookies
+ *  are Secure behind an https issuer, which supertest's plain-http agent
+ *  cannot carry, so the real provider cannot be driven to the login here. */
+async function loginBehind(externalUrl: string) {
+  const store = new AuthStore(directory());
+  const provider = {
+    interactionDetails: async () => ({ uid: 'u1', prompt: { name: 'login' }, params: { client_id: 'c', redirect_uri: REDIRECT_URI } }),
+    Client: { find: async () => undefined },
+    interactionFinished: async (_req: unknown, res: express.Response) => {
+      res.status(204).end();
+    }
+  };
+  const app = express();
+  app.use(createOidcInteractionRoutes({ provider: provider as never, store, externalUrl, password: 'test-password' }));
+  const res = await request(app).post('/interaction/u1/login').type('form').send({ request: 'u1', password: 'test-password' });
+  expect(res.status).toBe(204);
+  const header = ([] as string[]).concat(res.headers['set-cookie'] ?? []).find(line => line.includes('mcp_hub_session'))!;
+  return { header, store };
+}
 
+describe('the session cookie behind HTTPS', () => {
   it('carries the __Host- prefix, Secure, Path=/ and no Domain', async () => {
     const { header, store } = await loginBehind('https://hub.example/');
     expect(header).toMatch(/^__Host-mcp_hub_session=/);

@@ -51,6 +51,16 @@ let dir: string;
 let proxySocket: string;
 let proxy: http.Server;
 
+const echoOnce = async (client: DockerClient) => {
+  const transport = new DockerTransport('dockertest', config.get('dockertest') as DockerServerConfig, client, () => {});
+  const messages: JSONRPCMessage[] = [];
+  setTransportHandlers(transport, { onmessage: message => messages.push(message) });
+  await transport.start();
+  await transport.send(ping);
+  for (let i = 0; i < 100 && messages.length === 0; i++) await new Promise(resolve => setTimeout(resolve, 50));
+  return { transport, messages };
+};
+
 describe.skipIf(!hasDocker)('a real container over the Docker API', () => {
   beforeAll(async () => {
     config = parseConfig(CONFIG_JSON, {} as NodeJS.ProcessEnv, { expand: false });
@@ -66,16 +76,6 @@ describe.skipIf(!hasDocker)('a real container over the Docker API', () => {
     await new Promise<void>(resolve => proxy.close(() => resolve()));
     fs.rmSync(dir, { recursive: true, force: true });
   });
-
-  const echoOnce = async (client: DockerClient) => {
-    const transport = new DockerTransport('dockertest', config.get('dockertest') as DockerServerConfig, client, () => {});
-    const messages: JSONRPCMessage[] = [];
-    setTransportHandlers(transport, { onmessage: message => messages.push(message) });
-    await transport.start();
-    await transport.send(ping);
-    for (let i = 0; i < 100 && messages.length === 0; i++) await new Promise(resolve => setTimeout(resolve, 50));
-    return { transport, messages };
-  };
 
   it(
     'refuses a direct Docker daemon that has no policy handshake',
