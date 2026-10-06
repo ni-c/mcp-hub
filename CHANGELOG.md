@@ -7,10 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- #region changelog -->
 
-## [Unreleased]
+## [0.11.5] - 2026-10-06
 
 ### Security
 
+- `proxy-addr` 2.0.8 (was 2.0.7, GHSA-jqcg-44mw-7w3h, critical). A trust
+  subnet written as an IPv4-mapped IPv6 block with a short prefix, such as
+  `::ffff:10.0.0.0/8`, matched every IPv4 address. `trustedProxies` is handed
+  to Express as `trust proxy`, so with such an entry any client could set its
+  own `req.ip` through `X-Forwarded-For` — the key of the per-caller rate limit
+  and the address in the consent log. Plain IPv4 notation (`10.0.0.0/8`) was
+  never affected.
+- `source-map-js` 1.2.2 (was 1.2.1, GHSA-68fv-2mgg-jv7q). A development
+  dependency only; it is not in the package or the image.
+- The documentation site builds with `vue` and `@vue/server-renderer` 3.5.43
+  (was 3.5.41, GHSA-g2v6-rqmx-r4w6). The site renders only its own Markdown at
+  build time; neither the package nor the image contains Vue.
 - The image overwrites npm's vendored `brace-expansion` with 5.0.11 instead of
   5.0.9 and now also its vendored `undici`, with 6.28.1. npm 12.0.2 pins
   `undici` 6.27.0, and the latest npm, 12.1.0, still ships 6.28.0 and
