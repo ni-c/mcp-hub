@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- #region changelog -->
 
+## [0.11.6] - 2026-10-07
+
+### Security
+
+- **Upstream credentials stay with the authorization server that issued
+  them** (GHSA-6qxp-vccf-f47h, high). An upstream names its authorization
+  server on every discovery, which happens at least once an hour, and the hub
+  refreshes, redeems codes and requests client_credentials tokens itself. A
+  compromised upstream could therefore name a different authorization server
+  and receive the refresh token, a registered or configured client secret, or
+  the code being redeemed. The credential record now carries the issuer it
+  belongs to. A discovery that names another one is refused before anything is
+  sent there, and the server shows `unauthorized`, with both servers named in
+  the log. A genuine move is accepted after `mcp-hub-admin upstream logout
+  <server>` and a new login. Records from 0.11.5 or earlier are bound to the
+  authorization server named by their cached discovery.
+- `@modelcontextprotocol/client`, `core` and `server` 2.3.0 (were 2.1.0), the
+  SDK's own fix for the same advisory, which also binds the credentials its
+  flows store to their issuer. `@modelcontextprotocol/sdk` 1.32.1 (was 1.30.0),
+  pulled in by `@modelcontextprotocol/server-everything` for the tests only.
+
 ## [0.11.5] - 2026-10-06
 
 ### Security
