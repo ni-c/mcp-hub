@@ -20,9 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the code being redeemed. The credential record now carries the issuer it
   belongs to. A discovery that names another one is refused before anything is
   sent there, and the server shows `unauthorized`, with both servers named in
-  the log. A genuine move is accepted after `mcp-hub-admin upstream logout
-  <server>` and a new login. Records from 0.11.5 or earlier are bound to the
-  authorization server named by their cached discovery.
+  the log. A genuine move is accepted after a logout and a new login:
+  `mcp-hub-admin upstream logout <server>`. Records from 0.11.5 or earlier are
+  bound to the authorization server named by their cached discovery.
 - `@modelcontextprotocol/client`, `core` and `server` 2.3.0 (were 2.1.0), the
   SDK's own fix for the same advisory, which also binds the credentials its
   flows store to their issuer. `@modelcontextprotocol/sdk` 1.32.1 (was 1.30.0),
