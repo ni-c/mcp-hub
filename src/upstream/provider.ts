@@ -1,7 +1,15 @@
 import crypto from 'node:crypto';
 import { SignJWT, exportJWK } from 'jose';
 import type { JWK } from 'jose';
-import type { OAuthClientProvider, OAuthDiscoveryState, OAuthClientInformation, OAuthClientMetadata, OAuthTokens } from '@modelcontextprotocol/client';
+import type {
+  OAuthClientProvider,
+  OAuthDiscoveryState,
+  OAuthClientInformationContext,
+  OAuthClientMetadata,
+  OAuthTokens,
+  StoredOAuthClientInformation,
+  StoredOAuthTokens
+} from '@modelcontextprotocol/client';
 import type { UpstreamOAuthConfig } from '../config.js';
 import type { AuthStore, UpstreamCredentials } from '../auth/store.js';
 import { sign } from '../auth/signed-token.js';
@@ -152,6 +160,21 @@ export function wellFormedOrUndefined(tokens: OAuthTokens | undefined): OAuthTok
   return tokens;
 }
 
+/**
+ * Whether two issuer identifiers name the same authorization server — the
+ * SDK's comparison, with RFC 8414 §3.3's one tolerance: a single trailing `/`.
+ */
+export function sameIssuer(a: string, b: string): boolean {
+  return a === b || (a.endsWith('/') && a.slice(0, -1) === b) || (b.endsWith('/') && b.slice(0, -1) === a);
+}
+
+/** The issuer a credential is saved under: the SDK's stamp on the value, or
+ *  the authorization server the caller resolved. */
+function stampFrom(value: { issuer?: string }, ctx: OAuthClientInformationContext | undefined): { issuer?: string } {
+  const issuer = value.issuer ?? ctx?.issuer;
+  return issuer ? { issuer } : {};
+}
+
 export interface UpstreamProviderOptions {
   /** Set while finishing a login: the verifier that was saved when it started. */
   pendingCodeVerifier?: string;
@@ -210,25 +233,37 @@ export class UpstreamAuthProvider implements OAuthClientProvider {
     return clientMetadataUrl(this.identity.externalUrl, this.identity.serverName, this.store.cookieSecret);
   }
 
-  clientInformation(): OAuthClientInformation | undefined {
+  /**
+   * Handed back with every credential, so the SDK's own flows refuse to present
+   * one to a different authorization server just as UpstreamAuth does.
+   */
+  private issuerStamp(): { issuer?: string } {
+    const issuer = this.record?.issuer;
+    return issuer ? { issuer } : {};
+  }
+
+  clientInformation(): StoredOAuthClientInformation | undefined {
     // Configured credentials win: with them there is nothing to register, and
     // the SDK skips both CIMD and dynamic registration.
     if (this.identity.oauth.mode === 'static') {
       return {
         client_id: this.identity.oauth.clientId!,
-        ...(this.identity.oauth.clientSecret ? { client_secret: this.identity.oauth.clientSecret } : {})
+        ...(this.identity.oauth.clientSecret ? { client_secret: this.identity.oauth.clientSecret } : {}),
+        ...this.issuerStamp()
       };
     }
     const record = this.record;
     if (!record?.clientId) return undefined;
     return {
       client_id: record.clientId,
-      ...(record.clientSecret ? { client_secret: record.clientSecret } : {})
+      ...(record.clientSecret ? { client_secret: record.clientSecret } : {}),
+      ...this.issuerStamp()
     };
   }
 
-  saveClientInformation(information: OAuthClientInformation & Record<string, unknown>): void {
+  saveClientInformation(information: StoredOAuthClientInformation & Record<string, unknown>, ctx?: OAuthClientInformationContext): void {
     this.patch({
+      ...stampFrom(information, ctx),
       clientId: information.client_id,
       ...(typeof information.client_secret === 'string' ? { clientSecret: information.client_secret } : {}),
       // RFC 7592 credentials, when the upstream issued them — what `upstream
@@ -252,11 +287,11 @@ export class UpstreamAuthProvider implements OAuthClientProvider {
    * same rotating refresh token and an upstream that detects reuse would revoke
    * the whole family. Refresh belongs to UpstreamAuth, which serializes it.
    */
-  tokens(): OAuthTokens | undefined {
+  tokens(): StoredOAuthTokens | undefined {
     const stored = wellFormedOrUndefined(this.record?.tokens as OAuthTokens | undefined);
     if (!stored) return undefined;
     const { refresh_token: _withheld, ...rest } = stored;
-    return rest as OAuthTokens;
+    return { ...(rest as OAuthTokens), ...this.issuerStamp() };
   }
 
   /** The full pair, for the one caller that is allowed to spend it. */
@@ -264,10 +299,13 @@ export class UpstreamAuthProvider implements OAuthClientProvider {
     return wellFormedOrUndefined(this.record?.tokens as OAuthTokens | undefined);
   }
 
-  saveTokens(tokens: OAuthTokens): void {
+  saveTokens(stamped: StoredOAuthTokens, ctx?: OAuthClientInformationContext): void {
+    // The stamp lives on the record, once for tokens and registration alike.
+    const { issuer: _stamp, ...tokens } = stamped;
     assertWellFormedTokens(tokens);
     const expiresIn = typeof tokens.expires_in === 'number' ? tokens.expires_in : undefined;
     this.patch({
+      ...stampFrom(stamped, ctx),
       tokens: tokens as unknown as Record<string, unknown>,
       ...(expiresIn !== undefined ? { accessTokenValidUntil: Math.floor(Date.now() / 1000) + expiresIn } : {})
     });

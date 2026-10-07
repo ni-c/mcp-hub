@@ -116,6 +116,14 @@ export interface UpstreamCredentials {
   accessTokenValidUntil?: number;
   /** Cached RFC 9728 / RFC 8414 discovery, so a restart does not re-derive it. */
   discovery?: Record<string, unknown>;
+  /**
+   * The authorization server the registration and the tokens belong to, the
+   * SDK's SEP-2352 stamp. The upstream names its authorization server anew on
+   * every discovery, so without this binding a compromised upstream could name
+   * another one and be handed the refresh token and the client secret
+   * (GHSA-6qxp-vccf-f47h).
+   */
+  issuer?: string;
   obtainedAt: number; // epoch seconds
 }
 

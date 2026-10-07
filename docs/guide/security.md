@@ -153,6 +153,22 @@ point the hub at a private address. And the configured `headers` are never sent
 to the authorization server, nor is an upstream token — the two request paths
 are kept apart deliberately, because the SDK hands the same fetch to both.
 
+**Credentials stay with the authorization server that issued them.** The
+upstream names its authorization server again on every discovery, at least once
+an hour. A compromised upstream could therefore name a different one and
+receive what the hub presents there: the refresh token, a registered or
+configured client secret, and a code being redeemed. The hub records which
+authorization server a registration and its tokens belong to. When a discovery
+names another one, the hub refuses before sending anything there, and the
+server shows `unauthorized`, with the reason in the log. If the move is
+genuine, `mcp-hub-admin upstream logout <server>` and a new login accept it. A
+record written before 0.11.6 carries no such stamp and is bound to the
+authorization server named by its cached discovery. Before 0.11.6 the next
+discovery could move the credentials anywhere
+([GHSA-6qxp-vccf-f47h](https://github.com/advisories/GHSA-6qxp-vccf-f47h)).
+The very first login, and a configured `static` client's first token request,
+still go to whichever server the upstream names at that moment.
+
 **A redirect from an upstream stays on the upstream.** That guard covers the
 authorization server; the MCP requests themselves — every remote server, with
 or without `oauth` — have their own rule. A `Location` is followed only when it
