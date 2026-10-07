@@ -15,7 +15,7 @@ import { createRoute, handleMcpRequest } from '../src/proxy.js';
 import { AuthStore } from '../src/auth/store.js';
 import { signPayload } from '../src/auth/signed-token.js';
 import { UpstreamAuth } from '../src/upstream/auth.js';
-import { UpstreamAuthProvider, clientDocumentId, clientMetadataUrl, credentialFingerprint, hubClientMetadata } from '../src/upstream/provider.js';
+import { UpstreamAuthProvider, clientDocumentId, clientMetadataUrl, credentialFingerprint, hubClientMetadata, sameIssuer } from '../src/upstream/provider.js';
 import { requireOAuthServer, startUpstreamLogin, upstreamStatus } from '../src/upstream/login.js';
 import { loadConfig } from '../src/config.js';
 
@@ -51,13 +51,16 @@ interface FakeUpstream {
     rotateRefreshToken: boolean;
     /** Refresh tokens the upstream has already retired. */
     retired: Set<string>;
+    /** Another authorization server for the upstream to name, as a
+     *  compromised one would; its own by default. */
+    authorizationServer?: string;
   };
 }
 
 async function startFakeUpstream(): Promise<FakeUpstream> {
   const app = express();
   const calls: Recorded[] = [];
-  const options = { supportsCimd: false, rotateRefreshToken: true, retired: new Set<string>() };
+  const options: FakeUpstream['options'] = { supportsCimd: false, rotateRefreshToken: true, retired: new Set<string>() };
   const challenges = new Map<string, { challenge: string; clientId: string }>();
   const registrations = new Map<string, { secret?: string }>();
   let accessToken = 'access-1';
@@ -76,7 +79,7 @@ async function startFakeUpstream(): Promise<FakeUpstream> {
 
   app.get('/.well-known/oauth-protected-resource', (req, res) => {
     record(req);
-    res.json({ resource: `${base()}/mcp`, authorization_servers: [base()] });
+    res.json({ resource: `${base()}/mcp`, authorization_servers: [options.authorizationServer ?? base()] });
   });
 
   app.get('/.well-known/oauth-authorization-server', (req, res) => {
@@ -195,6 +198,7 @@ async function startFakeUpstream(): Promise<FakeUpstream> {
       options.supportsCimd = false;
       options.rotateRefreshToken = true;
       options.retired.clear();
+      options.authorizationServer = undefined;
       accessToken = 'access-1';
       refreshToken = 'refresh-1';
       counter = 1;
@@ -570,6 +574,159 @@ describe('refreshing', () => {
   }, 30_000);
 });
 
+/** The issuer a fake upstream's authorization server declares. */
+const issuerOf = (fake: FakeUpstream): string => `http://127.0.0.1:${fake.port}`;
+
+/** Ages the cached discovery past its TTL, so the next token request
+ *  discovers again — the moment a compromised upstream gets to name another
+ *  authorization server. */
+function expireDiscovery(store: AuthStore): void {
+  store.updateUpstreamCredentials('saas', current => ({
+    ...current!,
+    discovery: { ...current!.discovery, fetchedAt: 0 }
+  }));
+}
+
+describe('the authorization server the credentials belong to', () => {
+  // GHSA-6qxp-vccf-f47h: the hub refreshes, exchanges and requests
+  // client_credentials tokens itself, so the SDK's issuer check never sees
+  // those calls. Each test lets the upstream name a second, fully working
+  // authorization server and proves it never receives a token request.
+  let rogue: FakeUpstream;
+
+  beforeAll(async () => {
+    rogue = await startFakeUpstream();
+  }, 30_000);
+
+  afterAll(async () => {
+    await rogue?.close();
+  });
+
+  beforeEach(() => {
+    rogue.reset();
+  });
+
+  it('refuses to refresh at an authorization server the upstream names later', async () => {
+    const { hub } = await makeHub({ mode: 'dcr', grant: 'authorization_code' });
+    try {
+      await hub.supervisor.waitUntilSettled();
+      const auth = await loggedIn(hub);
+      await hub.supervisor.stop();
+      const before = hub.store.getUpstreamCredentials('saas', auth.fingerprint)!;
+      expect(before.issuer).toBe(issuerOf(upstream));
+
+      upstream.options.authorizationServer = issuerOf(rogue);
+      expireDiscovery(hub.store);
+      await expect(auth.prepare({ force: true })).rejects.toThrow(/different authorization server/);
+
+      expect(rogue.tokenRequests()).toEqual([]);
+      const after = hub.store.getUpstreamCredentials('saas', auth.fingerprint)!;
+      expect(after.tokens).toEqual(before.tokens);
+      // Still the server `upstream logout` has to revoke at.
+      expect((after.discovery as { authorizationServerUrl: string }).authorizationServerUrl).toBe(
+        (before.discovery as { authorizationServerUrl: string }).authorizationServerUrl
+      );
+    } finally {
+      hub.stopMaintenance();
+      hub.watcher.stop();
+      await hub.supervisor.stop();
+    }
+  }, 30_000);
+
+  it('accepts the move once the operator has logged out and in again', async () => {
+    const { hub } = await makeHub({ mode: 'dcr', grant: 'authorization_code' });
+    try {
+      await hub.supervisor.waitUntilSettled();
+      await loggedIn(hub);
+      upstream.options.authorizationServer = issuerOf(rogue);
+      expect(hub.store.forgetUpstreamCredentials('saas')).toBe(true);
+
+      const auth = await loggedIn(hub);
+      expect(hub.store.getUpstreamCredentials('saas', auth.fingerprint)!.issuer).toBe(issuerOf(rogue));
+      expect(rogue.tokenRequests().map(call => call.body.grant_type)).toEqual(['authorization_code']);
+    } finally {
+      hub.stopMaintenance();
+      hub.watcher.stop();
+      await hub.supervisor.stop();
+    }
+  }, 30_000);
+
+  it('binds a record from before the stamp to the server its discovery names', async () => {
+    const { hub } = await makeHub({ mode: 'dcr', grant: 'authorization_code' });
+    try {
+      await hub.supervisor.waitUntilSettled();
+      const auth = await loggedIn(hub);
+      await hub.supervisor.stop();
+      // What 0.11.5 wrote: the same record without an issuer.
+      hub.store.updateUpstreamCredentials('saas', current => {
+        const { issuer: _stamp, ...legacy } = current!;
+        return legacy;
+      });
+
+      // An unchanged server still refreshes, and the record gains its stamp.
+      expireDiscovery(hub.store);
+      await auth.prepare({ force: true });
+      expect(hub.store.getUpstreamCredentials('saas', auth.fingerprint)!.issuer).toBe(issuerOf(upstream));
+
+      hub.store.updateUpstreamCredentials('saas', current => {
+        const { issuer: _stamp, ...legacy } = current!;
+        return legacy;
+      });
+      upstream.options.authorizationServer = issuerOf(rogue);
+      expireDiscovery(hub.store);
+      await expect(auth.prepare({ force: true })).rejects.toThrow(/different authorization server/);
+      expect(rogue.tokenRequests()).toEqual([]);
+    } finally {
+      hub.stopMaintenance();
+      hub.watcher.stop();
+      await hub.supervisor.stop();
+    }
+  }, 30_000);
+
+  it('keeps a configured client secret from a server named later', async () => {
+    const { hub } = await makeHub({ mode: 'static', grant: 'client_credentials', clientId: 'cfg', clientSecret: 'cfg-secret' });
+    try {
+      await hub.supervisor.waitUntilSettled();
+      const auth = hub.upstreamAuth.get('saas')!;
+      await auth.prepare({ force: true });
+      expect(hub.store.getUpstreamCredentials('saas', auth.fingerprint)!.issuer).toBe(issuerOf(upstream));
+      await hub.supervisor.stop();
+
+      upstream.options.authorizationServer = issuerOf(rogue);
+      expireDiscovery(hub.store);
+      await expect(auth.prepare({ force: true })).rejects.toThrow(/different authorization server/);
+      expect(rogue.tokenRequests()).toEqual([]);
+    } finally {
+      hub.stopMaintenance();
+      hub.watcher.stop();
+      await hub.supervisor.stop();
+    }
+  }, 30_000);
+
+  it('does not redeem a code at a server named while the login was open', async () => {
+    const { hub } = await makeHub({ mode: 'static', grant: 'authorization_code', clientId: 'cfg', clientSecret: 'cfg-secret' });
+    try {
+      await hub.supervisor.waitUntilSettled();
+      const auth = hub.upstreamAuth.get('saas')!;
+      const { authorizationUrl } = await startUpstreamLogin(hub.store, auth);
+      const state = new URL(authorizationUrl).searchParams.get('state')!;
+      const { code } = (await (await fetch(authorizationUrl)).json()) as { code: string };
+
+      upstream.options.authorizationServer = issuerOf(rogue);
+      expireDiscovery(hub.store);
+      const cookie = `mcp_hub_session=${encodeURIComponent(createSessionCookie(hub.store.cookieSecret))}`;
+      await request(hub.app).get('/upstream/callback').set('Cookie', cookie).query({ code, state }).expect(400);
+
+      expect(rogue.tokenRequests()).toEqual([]);
+      expect(hub.store.getUpstreamCredentials('saas', auth.fingerprint)?.tokens).toBeUndefined();
+    } finally {
+      hub.stopMaintenance();
+      hub.watcher.stop();
+      await hub.supervisor.stop();
+    }
+  }, 30_000);
+});
+
 const identityWith = (oauth: Record<string, unknown>) =>
   ({ serverName: 'saas', serverUrl: 'https://saas.example/mcp', oauth, externalUrl: 'https://hub.example/' }) as never;
 
@@ -634,6 +791,30 @@ describe('the provider handed to the SDK', () => {
     const record = store.listUpstreamCredentials().saas;
     expect(record.registrationAccessToken).toBe('rat');
     expect(record.registrationClientUri).toBe('https://as.example/register/c1');
+  });
+
+  it('keeps the issuer stamp apart from the tokens and hands it back with every credential', () => {
+    const provider = new UpstreamAuthProvider(identity, store);
+    provider.saveClientInformation({ client_id: 'c1', client_secret: 's1' } as never, { issuer: 'https://as.example' });
+    provider.saveTokens({ access_token: 'a', token_type: 'Bearer', refresh_token: 'r', issuer: 'https://as.example' } as never);
+    const record = store.listUpstreamCredentials().saas;
+    expect(record.issuer).toBe('https://as.example');
+    expect(record.tokens).not.toHaveProperty('issuer');
+    // The SDK's own flows compare these against the server they resolved.
+    expect(provider.tokens()?.issuer).toBe('https://as.example');
+    expect(provider.clientInformation()).toEqual({ client_id: 'c1', client_secret: 's1', issuer: 'https://as.example' });
+    const staticIdentity = { ...identity, oauth: { mode: 'static' as const, grant: 'client_credentials' as const, clientId: 'cfg', clientSecret: 'sec', scopes: [] } };
+    new UpstreamAuthProvider(staticIdentity, store).saveTokens({ access_token: 'a', token_type: 'Bearer' } as never, { issuer: 'https://as.example/' });
+    expect(new UpstreamAuthProvider(staticIdentity, store).clientInformation()?.issuer).toBe('https://as.example/');
+  });
+
+  it('compares issuers with no tolerance but a single trailing slash', () => {
+    expect(sameIssuer('https://as.example', 'https://as.example/')).toBe(true);
+    expect(sameIssuer('https://as.example/', 'https://as.example')).toBe(true);
+    expect(sameIssuer('https://as.example', 'https://as.example')).toBe(true);
+    expect(sameIssuer('https://as.example', 'https://as.example//')).toBe(false);
+    expect(sameIssuer('https://as.example', 'https://evil.example')).toBe(false);
+    expect(sameIssuer('https://as.example/tenant', 'https://as.example')).toBe(false);
   });
 
   it('prefers configured credentials over anything stored', () => {

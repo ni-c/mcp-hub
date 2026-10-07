@@ -7,7 +7,7 @@ import type { AuthStore, UpstreamCredentials, UpstreamLogin } from '../auth/stor
 import { isPrivateAddress, resolvePublicAddress } from '../auth/address.js';
 import { boundedResponse, guardedRequest } from '../auth/pinned-fetch.js';
 import { logSafe } from '../auth/text.js';
-import { UpstreamAuthProvider, callbackUrl, credentialFingerprint, hubClientMetadata, wellFormedOrUndefined } from './provider.js';
+import { UpstreamAuthProvider, callbackUrl, credentialFingerprint, hubClientMetadata, sameIssuer, wellFormedOrUndefined } from './provider.js';
 import { boundedRedirectFetch } from './redirects.js';
 import type { UpstreamIdentity } from './provider.js';
 
@@ -50,6 +50,12 @@ const AS_TIMEOUT_MS = 10_000;
 /** Exactly what the SDK caches, plus when — so the TTL below is ours and the
  *  shape stays the one `discoveryState()` has to hand back. */
 type StoredDiscovery = OAuthDiscoveryState & { fetchedAt: number };
+
+/** The authorization server a discovery names, identified the way the SDK
+ *  stamps credentials: the issuer its validated metadata declares. */
+function issuerOf(discovery: OAuthDiscoveryState): string {
+  return discovery.authorizationServerMetadata?.issuer ?? String(discovery.authorizationServerUrl);
+}
 
 export class UpstreamAuth {
   readonly identity: UpstreamIdentity;
@@ -154,9 +160,39 @@ export class UpstreamAuth {
     const now = Math.floor(Date.now() / 1000);
     if (!force && cached?.authorizationServerUrl && now - cached.fetchedAt < DISCOVERY_TTL_S) return cached;
     const info = await discoverOAuthServerInfo(this.identity.serverUrl, { fetchFn: this.boundAsFetch });
+    const bound = this.boundIssuer();
+    const named = issuerOf(info);
+    if (bound !== undefined && !sameIssuer(bound, named)) {
+      // Refused before anything is saved, so the cached discovery — and with it
+      // the revocation endpoint `upstream logout` uses — still names the
+      // server the credentials belong to.
+      throw new UpstreamLoginRequiredError(
+        this.identity.serverName,
+        `the upstream now names a different authorization server (${logSafe(named)}) than the one its credentials belong to (${logSafe(bound)}); if that move is intended, run "mcp-hub-admin upstream logout ${logSafe(this.identity.serverName)}" and log in again`
+      );
+    }
     const discovery: StoredDiscovery = { ...info, fetchedAt: now };
     this.provider().saveDiscoveryState(discovery);
     return discovery;
+  }
+
+  /**
+   * The authorization server the stored credentials belong to, or undefined
+   * while nothing is stored that another one could be handed.
+   *
+   * The upstream names its authorization server on every discovery, and
+   * `refreshAuthorization`, `exchangeAuthorization` and the client_credentials
+   * request below go wherever it points — the SDK's own SEP-2352 check covers
+   * none of these direct calls (GHSA-6qxp-vccf-f47h). A record written before
+   * the stamp existed is bound to the authorization server its cached
+   * discovery names: the one these credentials have been used with all along.
+   */
+  private boundIssuer(): string | undefined {
+    const record = this.record;
+    if (!record || (record.tokens === undefined && record.clientId === undefined)) return undefined;
+    if (record.issuer) return record.issuer;
+    const cached = record.discovery as StoredDiscovery | undefined;
+    return cached?.authorizationServerUrl ? issuerOf(cached) : undefined;
   }
 
   /**
@@ -180,11 +216,11 @@ export class UpstreamAuth {
         );
       }
       const clientId = this.provider().clientMetadataUrl!;
-      this.provider().saveClientInformation({ client_id: clientId });
+      this.provider().saveClientInformation({ client_id: clientId }, { issuer: issuerOf(discovery) });
       return { client_id: clientId };
     }
     const registered = await this.registerDynamically(discovery);
-    this.provider().saveClientInformation(registered);
+    this.provider().saveClientInformation(registered, { issuer: issuerOf(discovery) });
     console.log(`mcp-hub: registered with ${logSafe(discovery.authorizationServerUrl)} for upstream "${logSafe(this.identity.serverName)}"`);
     return registered;
   }
@@ -271,7 +307,7 @@ export class UpstreamAuth {
     if (this.identity.oauth.grant === 'client_credentials') {
       const tokens = await this.fetchClientCredentialsTokens(discovery, clientInformation, resource);
       try {
-        this.provider().saveTokens(tokens);
+        this.provider().saveTokens(tokens, { issuer: issuerOf(discovery) });
       } catch (error) {
         // Same failure class as a refused refresh below: a human has to act,
         // and restarting on a timer would only ask the same broken
@@ -294,7 +330,7 @@ export class UpstreamAuth {
         addClientAuthentication: this.provider().addClientAuthentication,
         fetchFn: this.boundAsFetch
       });
-      this.provider().saveTokens(tokens);
+      this.provider().saveTokens(tokens, { issuer: issuerOf(discovery) });
     } catch (error) {
       // A refresh token the upstream will not honour cannot be recovered from
       // without a human, so say so rather than restarting forever.
@@ -369,6 +405,15 @@ export class UpstreamAuth {
   /** Redeems the code the upstream sent back. */
   async finishLogin(login: UpstreamLogin, code: string): Promise<void> {
     const discovery = await this.discover();
+    // The code and its verifier belong to the server the login started at; a
+    // discovery that has moved since must not receive them, or the client
+    // secret that goes with them.
+    if (!sameIssuer(login.authorizationServerUrl, String(discovery.authorizationServerUrl))) {
+      throw new UpstreamLoginRequiredError(
+        this.identity.serverName,
+        'the upstream named a different authorization server while the login was open; start the login again'
+      );
+    }
     const clientInformation = await this.clientInformation(discovery);
     const tokens = await exchangeAuthorization(login.authorizationServerUrl, {
       metadata: discovery.authorizationServerMetadata,
@@ -380,7 +425,7 @@ export class UpstreamAuth {
       addClientAuthentication: this.provider().addClientAuthentication,
       fetchFn: this.boundAsFetch
     });
-    this.provider().saveTokens(tokens);
+    this.provider().saveTokens(tokens, { issuer: issuerOf(discovery) });
   }
 
   /**

@@ -1,5 +1,5 @@
 import { StdioClientTransport, getDefaultEnvironment } from '@modelcontextprotocol/client/stdio';
-import { Client, StreamableHTTPClientTransport, SSEClientTransport, UnauthorizedError } from '@modelcontextprotocol/client';
+import { AuthorizationServerMismatchError, Client, StreamableHTTPClientTransport, SSEClientTransport, UnauthorizedError } from '@modelcontextprotocol/client';
 import type { Transport, ServerCapabilities, Implementation, Tool, McpSubscription, SubscriptionFilter } from '@modelcontextprotocol/client';
 import type { ServerEvent } from '@modelcontextprotocol/server';
 import { ListToolsResultSchema } from '@modelcontextprotocol/core';
@@ -35,13 +35,19 @@ export type ServerState = 'starting' | 'up' | 'down' | 'stopped' | 'sleeping' | 
 /**
  * Whether a failure is one a restart could fix.
  *
- * Only two things mean "a human has to act": our own manager saying there is no
- * usable credential, and the SDK giving up on authorization. Everything else —
+ * Only three things mean "a human has to act": our own manager saying there is
+ * no usable credential, the SDK giving up on authorization, and the SDK refusing
+ * to present a credential to an authorization server it does not belong to —
+ * which a restart would only ask again. Everything else —
  * DNS, a 5xx, a timeout — is transient and must keep its backoff, or an
  * upstream that would have recovered on its own would need manual attention.
  */
 function classifyAuthFailure(error: unknown): 'restart' | 'unauthorized' {
-  return error instanceof UpstreamLoginRequiredError || error instanceof UnauthorizedError ? 'unauthorized' : 'restart';
+  return error instanceof UpstreamLoginRequiredError ||
+    error instanceof UnauthorizedError ||
+    error instanceof AuthorizationServerMismatchError
+    ? 'unauthorized'
+    : 'restart';
 }
 
 /**
