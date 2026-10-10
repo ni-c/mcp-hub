@@ -58,6 +58,9 @@ beforeAll(async () => {
   clients = new ClientPool(gateway);
   wire = new WireClient(gateway);
   hubToken = (await obtainToken(gateway, { resource: 'hub' })).access;
+  // Only the neighbour every case leans on is waited for; on a loaded runner the
+  // first case could otherwise reach it before it is up.
+  await gateway.waitForLog(/\[healthy\] up/, 60_000);
 }, 120_000);
 
 afterEach(() => clients?.closeAll());
@@ -71,7 +74,7 @@ async function hubIsStillWorking(): Promise<void> {
     name: 'call_tool',
     arguments: { server: 'healthy', tool: 'who_are_you', arguments: {} }
   })) as CallToolResult;
-  expect(result.isError ?? false).toBe(false);
+  expect(result.isError ?? false, JSON.stringify(result.content)).toBe(false);
 }
 
 describe.runIf(RUNS_HERE)('a child that dies', () => {
