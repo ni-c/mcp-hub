@@ -274,6 +274,8 @@ export class ManagedServer {
   private generation = 0;
   /** True while client.connect() is in flight; see start(). */
   private connecting = false;
+  /** The transport whose handshake is in flight; shutdown() must close it too. */
+  private pendingTransport?: Transport;
   /** The one upstream listen stream carrying this route's whole demand (modern era). */
   private upstream?: McpSubscription;
   private upstreamFilter?: SubscriptionFilter;
@@ -470,14 +472,17 @@ export class ManagedServer {
     // closed" in the log. connect() always rejects once its transport is
     // gone, so the catch below is the one place that reports this exit.
     this.connecting = true;
+    this.pendingTransport = transport;
     try {
       await client.connect(transport);
     } catch (error) {
       this.connecting = false;
+      if (this.pendingTransport === transport) this.pendingTransport = undefined;
       this.onExit(`failed to start: ${(error as Error).message}`, generation, classifyAuthFailure(error));
       return;
     }
     this.connecting = false;
+    if (this.pendingTransport === transport) this.pendingTransport = undefined;
     if (generation !== this.generation) {
       // sleep()/stop() ran while we were connecting; it already set the final
       // state, so this child is surplus and only needs to go away again.
@@ -821,6 +826,10 @@ export class ManagedServer {
       await client.close().catch(() => {});
       this.client = undefined;
     }
+    // A child that never finished its handshake has no client yet.
+    const pending = this.pendingTransport;
+    this.pendingTransport = undefined;
+    await pending?.close().catch(() => {});
   }
 
   async stop(): Promise<void> {
