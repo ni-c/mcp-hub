@@ -1,4 +1,4 @@
-import { execFile, spawn } from 'node:child_process';
+import { type ChildProcess, execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -10,7 +10,7 @@ import { assertTierInUse, defaultTier, type Tier } from './tiers.js';
 import { decorate, LogTail } from './logs.js';
 import { freePort, releasePort } from './ports.js';
 import { assertLoopback } from './loopback.js';
-import { waitForHttp } from './wait.js';
+import { waitFor, waitForHttp } from './wait.js';
 import { composeStack, composeUp, writeOverride, type ComposeStack } from './compose.js';
 import { assertBuildIsFresh, DIST_ADMIN, DIST_ENTRY, makeWorkspace, REPO_ROOT, type Workspace } from './workspace.js';
 
@@ -295,6 +295,61 @@ async function startInProcess(options: GatewayOptions, workspace: Workspace): Pr
  *    second still costs the full ready timeout and reports "did not answer"
  *    for a process that said exactly what was wrong.
  */
+interface PausedFrame {
+  functionName: string;
+  location: { scriptId: string; lineNumber: number; columnNumber: number };
+}
+
+/**
+ * Where a hub that is alive but not answering is stuck, for the failure message.
+ *
+ * A hub that logged "listening" and then answered nothing for the whole ready
+ * timeout was seen once in a local loop and never reproduced, and a blocked
+ * event loop leaves exactly that trace. Nothing that runs on the loop can report
+ * from inside it, `--report-on-signal` included; the inspector can, because
+ * SIGUSR1 and its messages arrive as V8 interrupts. `--inspect-port=0` keeps it
+ * off until then and off any fixed port.
+ */
+async function stackOfStuckHub(child: ChildProcess, output: () => string): Promise<string> {
+  let socket: WebSocket | undefined;
+  try {
+    child.kill('SIGUSR1');
+    const url = await waitFor(() => /ws:\/\/127\.0\.0\.1:\d+\/[\w-]+/.exec(output())?.[0], {
+      timeoutMs: 5_000,
+      intervalMs: 50,
+      what: 'the hub inspector to open'
+    });
+    const ws = new WebSocket(url);
+    socket = ws;
+    await new Promise((resolve, reject) => {
+      ws.addEventListener('open', resolve, { once: true });
+      ws.addEventListener('error', () => reject(new Error(`could not connect to ${url}`)), { once: true });
+    });
+    const scripts = new Map<string, string>();
+    const frames = await new Promise<PausedFrame[]>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('the hub did not pause within 5000ms')), 5_000);
+      ws.addEventListener('message', event => {
+        const message = JSON.parse(String(event.data)) as { method?: string; params?: { scriptId?: string; url?: string; callFrames?: PausedFrame[] } };
+        if (message.method === 'Debugger.scriptParsed') scripts.set(message.params!.scriptId!, message.params!.url!);
+        if (message.method === 'Debugger.paused') {
+          clearTimeout(timer);
+          resolve(message.params!.callFrames!);
+        }
+      });
+      ws.send(JSON.stringify({ id: 1, method: 'Debugger.enable' }));
+      ws.send(JSON.stringify({ id: 2, method: 'Debugger.pause' }));
+    });
+    const lines = frames
+      .slice(0, 25)
+      .map(f => `    at ${f.functionName || '<anonymous>'} (${scripts.get(f.location.scriptId) ?? '?'}:${f.location.lineNumber + 1}:${f.location.columnNumber + 1})`);
+    return `\n\nThe hub was still running. Where its event loop was:\n${lines.join('\n')}`;
+  } catch (error) {
+    return `\n\nThe hub was still running; no stack: ${(error as Error).message}`;
+  } finally {
+    socket?.close();
+  }
+}
+
 async function startSpawned(options: GatewayOptions, workspace: Workspace): Promise<Gateway> {
   assertBuildIsFresh();
   const attempts = 3;
@@ -318,7 +373,7 @@ async function spawnOnce(options: GatewayOptions, workspace: Workspace, port: nu
   const env = hubEnvironment(options, workspace, baseUrl, port);
   const log = new LogTail();
 
-  const child = spawn(process.execPath, [DIST_ENTRY], { cwd: REPO_ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, ['--inspect-port=0', DIST_ENTRY], { cwd: REPO_ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });
   log.attach(child.stdout);
   log.attach(child.stderr);
 
@@ -334,8 +389,9 @@ async function spawnOnce(options: GatewayOptions, workspace: Workspace, port: nu
       abandonIf: () => (exited ? `it exited with code ${exited.code}, signal ${exited.signal}` : undefined)
     });
   } catch (error) {
+    const stack = exited ? '' : await stackOfStuckHub(child, () => log.text());
     child.kill('SIGKILL');
-    throw decorate(error, `starting ${DIST_ENTRY} on port ${port}`, log.text());
+    throw decorate(error, `starting ${DIST_ENTRY} on port ${port}`, log.text() + stack);
   }
 
   if (options.waitUntilSettled !== false) {

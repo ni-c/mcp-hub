@@ -1,3 +1,5 @@
+import path from 'node:path';
+
 import type { CallToolResult } from '@modelcontextprotocol/client';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
@@ -8,6 +10,7 @@ import { tierEnabled } from '../harness/tiers.js';
 import { obtainToken } from '../harness/token.js';
 import { waitFor } from '../harness/wait.js';
 import { WireClient } from '../harness/wire.js';
+import { REPO_ROOT } from '../harness/workspace.js';
 
 /**
  * Children that misbehave, and a hub that has to stay up anyway.
@@ -299,6 +302,29 @@ describe.runIf(RUNS_HERE)('a child that answers with too much', () => {
       await endless.stop();
     }
   }, 120_000);
+});
+
+describe.runIf(RUNS_HERE)('a hub that stops answering', () => {
+  it('says where its event loop is stuck when it never becomes ready', async () => {
+    // Asserts the harness rather than the hub: a wedged loop leaves only a
+    // "did not answer" behind, and this is the evidence that comes with it.
+    const preload = path.join(REPO_ROOT, 'e2e', 'fixtures', 'block-event-loop.cjs');
+    const failure = await startGateway({
+      prefix: 'chaos-wedged',
+      tier: 'process',
+      servers: { healthy: stdio('slow-start-server.mjs', { env: { START_DELAY_MS: '0' }, keepAlive: true }) },
+      env: { NODE_OPTIONS: `--require ${preload}` },
+      readyTimeoutMs: 3_000,
+      waitUntilSettled: false
+    }).then(
+      async started => {
+        await started.stop();
+        return undefined;
+      },
+      (error: Error) => error
+    );
+    expect(failure?.message).toMatch(/Where its event loop was:\n.*at blockTheEventLoop \(.*block-event-loop\.cjs:\d+:\d+\)/);
+  }, 30_000);
 });
 
 describe.runIf(RUNS_HERE)('configuration that changes underneath it', () => {
