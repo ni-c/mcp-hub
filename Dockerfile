@@ -34,12 +34,12 @@ COPY --from=ghcr.io/astral-sh/uv:0.12.3@sha256:2d890623d310b57771ce840f0da5eed5f
 # base image, and npm reaches the registry over Node's built-in CA store, not
 # the system one (which the base image purges).
 RUN npm install -g npm@12.0.2 \
-    && npm pack brace-expansion@5.0.11 ip-address@10.3.1 tar@7.5.22 undici@6.28.1 --pack-destination /tmp > /dev/null \
+    && npm pack brace-expansion@5.0.11 ip-address@10.3.1 tar@7.5.22 undici@6.29.1 --pack-destination /tmp > /dev/null \
     && tar -xzf /tmp/brace-expansion-5.0.11.tgz --strip-components=1 -C /usr/local/lib/node_modules/npm/node_modules/brace-expansion \
     && tar -xzf /tmp/ip-address-10.3.1.tgz --strip-components=1 -C /usr/local/lib/node_modules/npm/node_modules/ip-address \
     && tar -xzf /tmp/tar-7.5.22.tgz --strip-components=1 -C /usr/local/lib/node_modules/npm/node_modules/tar \
-    && tar -xzf /tmp/undici-6.28.1.tgz --strip-components=1 -C /usr/local/lib/node_modules/npm/node_modules/undici \
-    && rm -f /tmp/brace-expansion-5.0.11.tgz /tmp/ip-address-10.3.1.tgz /tmp/tar-7.5.22.tgz /tmp/undici-6.28.1.tgz \
+    && tar -xzf /tmp/undici-6.29.1.tgz --strip-components=1 -C /usr/local/lib/node_modules/npm/node_modules/undici \
+    && rm -f /tmp/brace-expansion-5.0.11.tgz /tmp/ip-address-10.3.1.tgz /tmp/tar-7.5.22.tgz /tmp/undici-6.29.1.tgz \
     # Nothing here runs yarn or corepack, and each is a package manager with
     # its own dependency tree for the scanner to find something in one day.
     && rm -rf /opt/yarn-v* /usr/local/bin/yarn /usr/local/bin/yarnpkg /usr/local/lib/node_modules/corepack /usr/local/bin/corepack

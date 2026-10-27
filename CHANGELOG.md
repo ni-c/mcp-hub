@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- #region changelog -->
 
+## [0.11.7] - 2026-10-27
+
+### Security
+
+- `body-parser` 2.4.0 (was 2.3.0, CVE-2026-111181 / GHSA-27r3-jxmh-p828,
+  high), pulled in by Express. A compressed request body followed by trailing
+  bytes made the decompression stream fail outside the request's error
+  handling, so a single request could take the hub down. `qs` 6.17.0 (was
+  6.16.0) comes with it, because `body-parser` 2.4.0 asks for it.
+- The image overwrites npm's vendored `undici` with 6.29.1 instead of 6.28.1
+  (CVE-2026-109869 / GHSA-xjj6-f33q-929c, high). Only the npm CLI inside the
+  image uses this copy; the hub's own dependencies were not affected.
+- `fast-uri` 3.1.9 (was 3.1.8, GHSA-w74x-v6f9-j3xg, GHSA-wjr9-j795-jxcr,
+  GHSA-xhq7-xmqj-769h, GHSA-333x-w4r6-6crp) and `ip-address` 10.7.5 (was
+  10.7.2, GHSA-rxp7-6hxx-x8q5). Development dependencies only; neither is in
+  the package or the image.
+
 ## [0.11.6] - 2026-10-07
 
 ### Security
