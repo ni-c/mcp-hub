@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="mcp-hub">
+  <defs>
+    <linearGradient id="hubGrad" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6366f1"/>
+      <stop offset="1" stop-color="#06b6d4"/>
+    </linearGradient>
+  </defs>
+  <g stroke="url(#hubGrad)" stroke-width="2" stroke-linecap="round" fill="none">
+    <path d="M16 16 L6 7"/>
+    <path d="M16 16 L6 25"/>
+    <path d="M16 16 L27 16"/>
+  </g>
+  <rect x="10.5" y="10.5" width="11" height="11" rx="3.5" fill="url(#hubGrad)"/>
+  <circle cx="5" cy="6" r="3" fill="url(#hubGrad)"/>
+  <circle cx="5" cy="26" r="3" fill="url(#hubGrad)"/>
+  <circle cx="28" cy="16" r="3" fill="url(#hubGrad)"/>
+</svg>
