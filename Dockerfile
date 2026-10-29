@@ -1,16 +1,16 @@
 # Build stage
 #
-# node:24-bookworm-slim is the ACTIVE LTS line, not the newest tag, and it is the
-# line the CI test matrix covers. Node 26 is still Current, and libraries check:
-# oidc-provider warns "Unsupported runtime" on any build where process.release.lts
-# is unset, which is every non-LTS build.
+# node:26-bookworm-slim is the ACTIVE LTS line, not the newest tag, and the CI
+# test matrix covers it. Libraries check the LTS claim too: oidc-provider warns
+# "Unsupported runtime" on any build where process.release.lts is unset, which
+# is every non-LTS build.
 # Only the major belongs in this note. A patch version written here would be
 # falsified by the next digest bump, which would arrive red for a reason nobody
 # needs to act on. CI checks the claim instead, on every run
 # (.github/scripts/check-base-image-pin.sh): `node:lts-bookworm-slim` and
-# `node:24-bookworm-slim` must resolve to the same digest, and the digest
-# pinned below must be a Node 24 image. The day 24 leaves LTS, that fails.
-FROM node:24-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6 AS build
+# `node:26-bookworm-slim` must resolve to the same digest, and the digest
+# pinned below must be a Node 26 image. The day 26 leaves LTS, that fails.
+FROM node:26-bookworm-slim@sha256:bc0a2afd3b74ce12222fc8bab99271e66257f021078f5f4a5d687a77d280c1d9 AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts
@@ -20,7 +20,7 @@ RUN npm run build && npm prune --omit=dev --ignore-scripts
 
 # Runtime: node + npx for JS servers, uv/uvx + python3 for Python servers,
 # git for servers installed straight from a repository.
-FROM node:24-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6
+FROM node:26-bookworm-slim@sha256:bc0a2afd3b74ce12222fc8bab99271e66257f021078f5f4a5d687a77d280c1d9
 COPY --from=ghcr.io/astral-sh/uv:0.12.3@sha256:2d890623d310b57771ce840f0da5eed5fc6d657da05ffaa45d82797b53fa3abc /uv /uvx /usr/local/bin/
 # The base image bundles npm 11, whose vendored deps (tar, brace-expansion,
 # sigstore, ...) carry known HIGH/CRITICAL CVEs; replace it wholesale. Even
