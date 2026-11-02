@@ -25,7 +25,7 @@
   "homepage": "https://mcp-hub.ni-c.de",
   "funding": "https://github.com/sponsors/ni-c",
   "engines": {
-    "node": ">=22"
+    "node": ">=24"
   },
   "main": "dist/index.js",
   "bin": {

@@ -37,7 +37,7 @@ EXTERNAL_URL=http://localhost:3000 PASSWORD=dev \
 
 - **Tests.** Behaviour changes come with a test that fails without the change.
   The fast suite runs in a few seconds — run it before pushing. CI runs it on
-  Node 22 and 24, plus CodeQL and a Trivy scan of both container images. The
+  Node 24 and 26, plus CodeQL and a Trivy scan of both container images. The
   end-to-end suite runs nightly, on any pull request that touches `e2e/` or
   `demo/`, and as a gate on release tags.
 - **Nothing sleeps in a test.** Wait for a condition with a deadline, never for
