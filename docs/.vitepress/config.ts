@@ -106,6 +106,7 @@ export default defineConfig({
             { text: "Elicitation", link: "/guide/elicitation" },
             { text: "Subscriptions", link: "/guide/subscriptions" },
             { text: "Client registration", link: "/guide/client-registration" },
+            { text: "Two-factor login", link: "/guide/two-factor" },
             { text: "Security", link: "/guide/security" },
             { text: "FAQ & troubleshooting", link: "/guide/faq" },
           ],

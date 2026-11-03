@@ -38,6 +38,13 @@ services:
       # (PASSWORD with a plain-text value works too, PASSWORD_HASH wins.)
       PASSWORD_HASH: "${PASSWORD_HASH}"
 
+      # Optional second factor: a code from an authenticator app at every
+      # sign-in. Make the secret with
+      #   docker exec -it mcp-hub node /app/dist/admin.js totp init
+      # and put it into .env next to the password hash.
+      # TWO_FACTOR: "totp"
+      # TOTP_SECRET: "${TOTP_SECRET}"
+
       # Secrets referenced as ${VAR} in mcp.json, provided via .env:
       PAPERLESS_API_TOKEN: "${PAPERLESS_API_TOKEN}"
 

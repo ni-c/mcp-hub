@@ -68,6 +68,8 @@ runtime root filesystem read-only.
 - [ ] `TRUSTED_PROXIES` set to proxy addresses that **overwrite** forwarded
       headers ([details below](#trusted-proxies))
 - [ ] `PASSWORD_HASH` rather than a plain-text `PASSWORD`
+- [ ] [Two-factor login](/guide/two-factor) on (`TWO_FACTOR=totp`), with the
+      `TOTP_SECRET` kept apart from the password
 - [ ] `/data` on a persistent, private volume
 - [ ] `RESOURCE_BOUND_TOKENS` left at its default (`true`) — the migration
       mode is not still switched off
@@ -92,6 +94,12 @@ runtime root filesystem read-only.
 **One password.** There are no user accounts. Anyone who knows the password can
 approve a client and reach every server the hub exposes. Use a strong one and
 store the bcrypt hash, not the plain text.
+
+**An optional second factor.** With `TWO_FACTOR=totp` every sign-in needs a
+one-time code from an authenticator app as well, and refresh tokens, codes and
+sessions from sign-ins without one are refused while it is on. A wrong code
+after a correct password pauses further attempts, and a code works once. See
+[two-factor login](/guide/two-factor).
 
 **No password means no login, not an open one.** With neither a non-empty
 `PASSWORD` nor a bcrypt `PASSWORD_HASH` configured the hub starts and serves
@@ -289,6 +297,7 @@ password scoped to one resource.
 | `/login` | 100 per 15 min | 500 per 15 min |
 | `/consent` | 100 per 15 min | 500 per 15 min |
 | Failed logins | 10 per 15 min | 100 per 15 min |
+| Wrong one-time codes after a correct password | — | none for the first four, then a pause for everyone: 30 s, doubling, at most 1 h |
 | MCP traffic | `MCP_REQUESTS_PER_MINUTE` (120), `MCP_MAX_CONCURRENT_REQUESTS` (4) and `MCP_MAX_CONCURRENT_STREAMS` (32) **per OAuth client** | — |
 
 **A caller is an IPv4 address or an IPv6 /64**, not a single IPv6 address. A
@@ -386,8 +395,10 @@ cleaned up and restart delayed by the normal supervisor backoff.
 ## What the hub does not protect against
 
 - **A compromised stdio server.** See the trust model — this is the big one.
-- **Password compromise.** One password, full access. There is no second
-  factor.
+- **Password compromise, unless two-factor login is on.** Without it, one
+  password is full access. With `TWO_FACTOR=totp` a stolen password alone signs
+  nobody in, but a password and a code typed into a convincing copy of the
+  login page can still be replayed within the code's 30 seconds.
 - **A malicious reverse proxy.** The hub trusts it for TLS and client
   addresses.
 - **Denial of service at the network layer.** Rate limits protect the process,

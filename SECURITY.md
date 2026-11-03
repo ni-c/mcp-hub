@@ -23,8 +23,9 @@ Avoid `npx -y`, unversioned `uvx`, mutable Git branches and other runtime downlo
 - Terminate TLS at a trusted reverse proxy and set `EXTERNAL_URL` to the exact public HTTPS origin.
 - Set `TRUSTED_PROXIES` only to proxy addresses that overwrite forwarded headers.
 - Use `PASSWORD_HASH` and a persistent private `/data` volume, and leave `RESOURCE_BOUND_TOKENS` at its default; `false` is a migration mode, not a setting to keep.
+- Turn on two-factor login (`TWO_FACTOR=totp` with a `TOTP_SECRET` from `mcp-hub-admin totp init`) and keep that secret apart from the password.
 - Keep the example's non-root user, dropped capabilities, read-only root filesystem, process/RAM limits and `no-new-privileges` setting.
-- Treat `/data/jwt-key.pem`, `/data/state.json`, the MCP config and all referenced environment variables as secrets. Proxy-owned secret files must be regular, non-symlink files with mode 640 or stricter.
+- Treat `/data/jwt-key.pem`, `/data/state.json`, `TOTP_SECRET`, the MCP config and all referenced environment variables as secrets. Proxy-owned secret files must be regular, non-symlink files with mode 640 or stricter.
 - Restrict outbound network access to the destinations required by configured servers.
 
 Access tokens expire after 15 minutes. Refresh tokens rotate, and reuse of a consumed token revokes its family. Use the admin command documented in the README to revoke all grants for a client immediately; it works against a running hub.

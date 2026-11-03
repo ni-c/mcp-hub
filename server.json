@@ -74,6 +74,19 @@
           "format": "string"
         },
         {
+          "name": "TWO_FACTOR",
+          "description": "Set to totp to ask for a one-time code from an authenticator app at every sign-in. Default off.",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
+          "name": "TOTP_SECRET",
+          "description": "Base32 secret the authenticator app was set up with (mcp-hub-admin totp init). Read only when TWO_FACTOR is totp.",
+          "isRequired": false,
+          "isSecret": true,
+          "format": "string"
+        },
+        {
           "name": "TRUSTED_PROXIES",
           "description": "Comma-separated IPs/CIDRs of the reverse proxy allowed to set X-Forwarded-* headers",
           "isRequired": false,

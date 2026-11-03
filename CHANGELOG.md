@@ -9,9 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Optional two-factor login.** `TWO_FACTOR=totp` with a Base32
+  `TOTP_SECRET` adds a code from an authenticator app (TOTP, RFC 6238: SHA-1,
+  six digits, 30 seconds) to the password on the OAuth login. A code works
+  once, also across the hub and the admin CLI. Wrong codes after a correct
+  password pause further attempts, from the fifth one on: 30 seconds,
+  doubling, at most an hour. They log their own line, so fail2ban does not ban
+  the operator for a typo. With the switch on and the secret missing or
+  unusable nobody can sign in, and an unknown `TWO_FACTOR` value stops the
+  hub. Admin API tokens are not affected. See the new [two-factor
+  login](https://mcp-hub.ni-c.de/guide/two-factor) guide.
+- `mcp-hub-admin totp init` makes the secret. It shows a QR code in the
+  terminal, the setup key and `otpauth://` and `apple-otpauth://` links, and
+  prints the environment lines only after a code from the app matched.
+
 ### Changed
 
 - Require Node.js 24 or newer. CI tests the latest 24 and 26 LTS releases; Node 22 is no longer supported.
+- **Turning two-factor login on signs every connector in once more.** While it
+  is on, refresh tokens, authorization codes and browser sessions from a
+  sign-in without a code are refused, so a password that leaked earlier opens
+  nothing. Already issued access tokens run out within their fifteen minutes.
+  The operator session cookie is signed together with the mode, so switching
+  it in either direction ends that session too.
+- The login, consent and upstream pages follow the system colour scheme and
+  are light on a light system. With two-factor login on, the login page has a
+  code field and answers a wrong password or code with *Wrong password or
+  code*.
 
 ## [0.11.7] - 2026-10-27
 

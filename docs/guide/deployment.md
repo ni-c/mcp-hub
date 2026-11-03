@@ -282,6 +282,14 @@ failregex = mcp-hub: authentication failure from <HOST>\s*$
 ignoreregex =
 ```
 
+With [two-factor login](/guide/two-factor) on, a wrong password still logs
+`authentication failure`. A wrong or reused code after a correct password logs
+`second-factor failure from <ip>` or
+`second-factor code reused, attempt from <ip>` instead, and those are left out
+of the filter on purpose. Only someone who
+knows the password can produce them, the hub already pauses such attempts on
+its own, and banning on them would lock you out for a typo on your phone.
+
 ```ini
 # /etc/fail2ban/jail.d/mcp-hub.conf
 [mcp-hub-auth]

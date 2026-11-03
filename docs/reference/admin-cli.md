@@ -21,9 +21,9 @@ next request — and a change the hub makes is not overwritten by this one.
 
 | Variable | Needed by |
 |---|---|
-| `DATA_PATH` | everything |
+| `DATA_PATH` | everything except `totp init` |
 | `CONFIG_PATH` | every `upstream` command — they have to read the server definition |
-| `EXTERNAL_URL` | `tokens create`; and `upstream login` unless the hub has run at least once, which records it |
+| `EXTERNAL_URL` | `tokens create`; `upstream login` unless the hub has run at least once, which records it; `totp init` names the hub after its host |
 
 Output is split so it can be piped: machine-readable JSON goes to **stdout**,
 prose and secrets-with-context go to **stderr**. Exit codes are `0` for success,
@@ -128,6 +128,38 @@ browser.
 the token and delete a dynamic registration, where it supports those. The local
 side goes away regardless; a failure at the upstream is reported and sets a
 non-zero exit code.
+
+## `totp`
+
+Sets up an authenticator app for [two-factor login](/guide/two-factor).
+
+```sh
+docker exec -it mcp-hub node /app/dist/admin.js totp init [--label <name>] [--light] [--no-confirm] [--force]
+```
+
+Makes a 160-bit secret and shows it on **stderr** in every form an
+authenticator takes: a QR code drawn in the terminal, the setup key in groups
+of four, an `otpauth://` link and the `apple-otpauth://` link the iOS Passwords
+app opens. It then asks for the code the app shows. Only when that code matches
+does it print the two lines for the hub's environment, alone on **stdout**:
+
+```txt
+TWO_FACTOR=totp
+TOTP_SECRET=<32 characters>
+```
+
+Run it with `-it`, since it reads the code from the terminal. Three wrong codes,
+or no input at all, end it with exit code `2` and nothing set up.
+
+| Flag | Effect |
+|---|---|
+| `--label <name>` | The name the app lists the hub under. Default: the host of `EXTERNAL_URL`, or `mcp-hub`. |
+| `--light` | Draws the QR code for a light terminal background. The default suits a dark one. |
+| `--no-confirm` | Skips asking for a code, for scripts. The secret is then unchecked. |
+| `--force` | Makes a new secret although `TOTP_SECRET` is already set in the environment. The old one stops working once the hub runs with the new one. |
+
+It needs no data volume and changes nothing on disk. The output contains the
+secret, so clear it from anything that records terminal output.
 
 ## Next
 

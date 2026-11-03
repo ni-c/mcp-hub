@@ -76,6 +76,11 @@ replaces N containers with one process:
   after 60 idle minutes, answering `initialize`/`tools/list` from a persistent
   snapshot meanwhile — a dozen servers cost only the memory of the ones in
   use. `keepAlive: true` exempts a server, `IDLE_TIMEOUT_MINUTES=0` the hub.
+- **Optional two-factor login**: `TWO_FACTOR=totp` adds a code from any
+  authenticator app to the password on the OAuth login. Codes work once, wrong
+  ones pause further attempts, and switching it on retires every token that a
+  password alone had issued. `mcp-hub-admin totp init` draws the QR code in the
+  terminal.
 - **CIMD-first OAuth 2.1**: clients identify themselves with a [Client ID
   Metadata Document](https://mcp-hub.ni-c.de/guide/client-registration) — the
   registration-free path the MCP spec now prefers — including `private_key_jwt`
@@ -250,6 +255,8 @@ The local `--stdio` mode uses neither variable.
 | `EXTERNAL_URL`                  | yes                 | Public base URL, e.g. `https://mcp.example.net` (no path)                                                                     |
 | `PASSWORD_HASH`                 | one of              | bcrypt hash of the login password (`htpasswd -bnBC 10 "" 'pw' \| tr -d ':\n'`)                                                |
 | `PASSWORD`                      | one of              | plain-text alternative to `PASSWORD_HASH`                                                                                     |
+| `TWO_FACTOR`                    | no                  | `totp` adds an authenticator code to every sign-in, default `off`                                                             |
+| `TOTP_SECRET`                   | with `TWO_FACTOR`   | Base32 secret from `mcp-hub-admin totp init`; missing or unusable → login disabled                                            |
 | `TRUSTED_PROXIES`               | no                  | comma-separated IPs/CIDRs allowed to set `X-Forwarded-*` (see below)                                                          |
 | `RESOURCE_BOUND_TOKENS`         | no                  | RFC 8707 tokens bound to `/hub` or one `/<name>/mcp`, default `true`; set `false` only to keep pre-0.5 unbound tokens working |
 | `DEFAULT_RESOURCE`              | no                  | server name (or `hub`) to bind tokens to when a client sends no `resource` parameter; unset → such requests are refused       |

@@ -21,6 +21,15 @@ htpasswd -bnBC 10 "" 'yourpassword' | tr -d ':\n'
 container's environment where every child process and `docker inspect` can see
 it. Use it only for a throwaway test.
 
+## Two-factor login
+
+See [two-factor login](/guide/two-factor) for what these do and how to set them up.
+
+| Variable | Default | Description |
+|---|---|---|
+| `TWO_FACTOR` | `off` | `totp` asks for a six-digit code from an authenticator app at every sign-in, next to the password. While it is on, refresh tokens, authorization codes and browser sessions from sign-ins without a code are refused, so every connector signs in once more. An unknown value exits at startup. |
+| `TOTP_SECRET` | *(unset)* | The Base32 secret the authenticator app was set up with, at least 160 bits. Generate it with [`mcp-hub-admin totp init`](/reference/admin-cli#totp). Read only with `TWO_FACTOR=totp`. Unset, not Base32 or too short there → the login is **disabled** with a startup warning, the same way a missing password disables it. A secret: keep it in `.env`, not in the compose file. |
+
 ## Recommended
 
 | Variable | Default | Description |
@@ -157,7 +166,7 @@ apply. What it reads:
 | `DATA_PATH` | *(unset)* | Optional here, unlike over HTTP. Point it at an HTTP hub's `/data` to reuse and refresh an [upstream OAuth token](/guide/configuration#upstreams-that-speak-oauth) authorized there. Without it, a server with an `oauth` block is skipped — there is no listener for a browser to return to. |
 | `LOG_FILE` | *(unset)* | Same as above. Logging otherwise goes to stderr: in stdio mode stdout carries the protocol, so `console.log` output is moved out of the way. |
 
-Everything else — `EXTERNAL_URL`, `PASSWORD*`, `TRUSTED_PROXIES`,
+Everything else — `EXTERNAL_URL`, `PASSWORD*`, `TWO_FACTOR`, `TOTP_SECRET`, `TRUSTED_PROXIES`,
 `RESOURCE_BOUND_TOKENS`, `DEFAULT_RESOURCE`, `PORT`, the rate limits and the
 HTTP timeouts — is HTTP-only and ignored. The call
 timeouts (`MCP_CALL_TIMEOUT_MS` and friends) apply, since they belong to the
@@ -169,6 +178,8 @@ proxying path.
 environment:
   EXTERNAL_URL: "https://mcp.example.net"
   PASSWORD_HASH: "${PASSWORD_HASH}"
+  TWO_FACTOR: "totp"
+  TOTP_SECRET: "${TOTP_SECRET}"
   TRUSTED_PROXIES: "192.168.1.0/24"
 
   MCP_BODY_LIMIT: "1mb"
