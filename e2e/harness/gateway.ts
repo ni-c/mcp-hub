@@ -88,6 +88,8 @@ export interface Gateway {
    * there for a reason that has nothing to do with what it was testing.
    */
   readonly password: string;
+  /** The TOTP secret a hub started with TWO_FACTOR=totp was given; the token helper answers the code field with it. */
+  readonly totpSecret?: string;
   readonly workspace: Workspace;
 
   /**
@@ -184,6 +186,8 @@ function hubOptionsFromEnv(env: Record<string, string> | undefined): Partial<Hub
     switch (key) {
       case 'PASSWORD': options.password = value; break;
       case 'PASSWORD_HASH': options.passwordHash = value; break;
+      case 'TWO_FACTOR': options.twoFactor = value as HubOptions['twoFactor']; break;
+      case 'TOTP_SECRET': options.totpSecret = value; break;
       case 'RESOURCE_BOUND_TOKENS': options.requireResourceBoundTokens = value !== 'false' && value !== '0'; break;
       case 'DEFAULT_RESOURCE': options.defaultResource = value; break;
       case 'MCP_BODY_LIMIT': options.mcpBodyLimit = value; break;
@@ -244,6 +248,7 @@ async function startInProcess(options: GatewayOptions, workspace: Workspace): Pr
       baseUrl,
       externalUrl: IN_PROCESS_EXTERNAL_URL,
       password: options.password ?? E2E_PASSWORD,
+      totpSecret: options.env?.TOTP_SECRET,
       // The app, not the URL: in-process there is no reason to go out to the
       // socket, and supertest against the app is both faster and immune to the
       // port races the other tiers have to live with.
@@ -426,6 +431,7 @@ async function spawnOnce(options: GatewayOptions, workspace: Workspace, port: nu
     baseUrl,
     externalUrl: baseUrl,
     password: env.PASSWORD,
+    totpSecret: env.TOTP_SECRET,
     target: baseUrl,
     workspace,
     internals: () => {
@@ -604,6 +610,7 @@ async function startContainerised(options: GatewayOptions, workspace: Workspace)
     baseUrl,
     externalUrl: baseUrl,
     password: options.password ?? options.env?.PASSWORD ?? E2E_PASSWORD,
+    totpSecret: options.env?.TOTP_SECRET,
     target: baseUrl,
     workspace,
     internals: () => {

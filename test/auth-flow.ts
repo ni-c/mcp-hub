@@ -2,6 +2,8 @@ import crypto from 'node:crypto';
 
 import request from 'supertest';
 
+import { base32Decode, hotp, totpStep } from '../src/auth/totp.js';
+
 /**
  * The browser half of an authorization, written so that it does not know which
  * authorization server is mounted.
@@ -80,6 +82,17 @@ export interface AuthorizeOptions {
   consent?: 'approve' | 'deny';
   /** Expect the flow to end at the client's redirect_uri with an error. */
   allowError?: boolean;
+  /** Answers the login page's code field, for a hub running with TWO_FACTOR=totp. */
+  totpSecret?: string;
+  /** The time the code is made for, in epoch milliseconds; now when absent. */
+  codeAt?: number;
+}
+
+/** The code an authenticator set up with this secret shows at `at`. */
+export function totpCode(secret: string, at = Date.now()): string {
+  const key = base32Decode(secret);
+  if (!key) throw new Error('totpCode: the secret is not Base32');
+  return hotp(key, totpStep(at));
 }
 
 /**
@@ -125,8 +138,13 @@ export async function authorizeInBrowser(
       pages.push(res.text);
       const action = formAction(res.text, location.split('?')[0]);
       const body: Record<string, string> = { request: field(res.text, 'request')! };
-      if (/name="password"/.test(res.text)) body.password = options.password;
-      else {
+      if (/name="password"/.test(res.text)) {
+        body.password = options.password;
+        if (/name="code"/.test(res.text)) {
+          if (!options.totpSecret) throw new Error('the login page asks for a one-time code, but no totpSecret was given');
+          body.code = totpCode(options.totpSecret, options.codeAt);
+        }
+      } else {
         body.csrf = field(res.text, 'csrf')!;
         body.action = options.consent ?? 'approve';
       }

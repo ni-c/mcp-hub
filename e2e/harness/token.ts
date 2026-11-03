@@ -62,6 +62,7 @@ export async function obtainToken(gateway: Gateway, options: TokenOptions = {}):
   const clientId = await registerPublicClient(gateway.target, REDIRECT_URI);
   const { code, verifier, pages } = await authorizeInBrowser(gateway.target, clientId, {
     password: gateway.password,
+    totpSecret: gateway.totpSecret,
     redirectUri: REDIRECT_URI,
     resource,
     consent: options.consent

@@ -16,7 +16,8 @@ import { mountOidcProvider } from './auth/oidc/mount.js';
 import { buildOidcProvider } from './auth/oidc/provider.js';
 import { OidcTokenVerifier } from './auth/oidc/verifier.js';
 import { authSecurityHeaders } from './auth/headers.js';
-import { operatorCredential } from './auth/password.js';
+import { OperatorFactors, operatorFactorsProblem, TWO_FACTOR_MODES } from './auth/factors.js';
+import type { TwoFactorMode } from './auth/factors.js';
 import { createProtectedResourceRoutes } from './auth/protected-resource.js';
 import { createRegistrationManagementRoutes } from './auth/registration.js';
 import { createUpstreamRoutes } from './upstream/routes.js';
@@ -34,6 +35,10 @@ export interface HubOptions {
   dataPath: string;
   passwordHash?: string;
   password?: string;
+  /** `totp` asks for a one-time code at every sign-in and unlock. Defaults to off. */
+  twoFactor?: TwoFactorMode;
+  /** Base32 secret the authenticator app was set up with; read only when twoFactor is totp. */
+  totpSecret?: string;
   trustedProxies?: string[];
   /** Defaults to true; set false only to keep pre-0.5 global tokens working. */
   requireResourceBoundTokens?: boolean;
@@ -74,8 +79,8 @@ export async function createHub(options: HubOptions) {
   // reads. The hub still starts: with no usable password nobody can approve a
   // client, so nothing is reachable, and a process that runs and says why is
   // more useful to a health check or a directory crawler than one that exits.
-  const credential = operatorCredential(options);
-  if (!credential.enabled) console.warn(`mcp-hub: ${credential.problem}`);
+  const signInProblem = operatorFactorsProblem(options);
+  if (signInProblem) console.warn(`mcp-hub: ${signInProblem}`);
   // Canonical issuer identifier: URL.href form ('https://host/' for a root
   // URL), so JWT iss/aud, AS metadata issuer and PRM authorization_servers all
   // match byte-for-byte — claude.ai compares these strictly.
@@ -124,6 +129,8 @@ export async function createHub(options: HubOptions) {
   // Recorded so `mcp-hub-admin upstream login` can build a redirect URI: the
   // image sets CONFIG_PATH and DATA_PATH, but never EXTERNAL_URL.
   store.rememberExternalUrl(externalUrl);
+  const factors = new OperatorFactors(options, store);
+  announceTwoFactorMode(factors, store.recordTwoFactorMode(factors.mode));
   // A metadata document has to be fetchable over https by a third party, so
   // this mode cannot work behind a plain-http issuer. Say so at boot rather
   // than at the first login attempt.
@@ -235,8 +242,7 @@ export async function createHub(options: HubOptions) {
       provider: oidc,
       store,
       externalUrl,
-      password: options.password,
-      passwordHash: options.passwordHash,
+      factors,
       cimd,
       // Same canonicaliser as buildOidcProvider, so an approval is stored
       // under the key the provider looks up.
@@ -367,6 +373,23 @@ export async function createHub(options: HubOptions) {
   return { app, supervisor, watcher, verifier, store, upstreamAuth, stopMaintenance };
 }
 
+function announceTwoFactorMode(factors: OperatorFactors, previous: TwoFactorMode | undefined): void {
+  if (factors.mode === 'totp' && factors.enabled) console.log('mcp-hub: two-factor login is on — every sign-in needs the password and a TOTP code');
+  if (previous === undefined || previous === factors.mode) return;
+  console.warn(factors.mode === 'totp' ? 'mcp-hub: two-factor login was switched on since the last start' : 'mcp-hub: two-factor login was switched off since the last start — the password alone signs in again');
+}
+
+/** TWO_FACTOR names the second factor; unset or empty means none. */
+function twoFactorEnv(): TwoFactorMode {
+  const raw = process.env.TWO_FACTOR?.trim().toLowerCase();
+  if (!raw) return 'off';
+  if (!(TWO_FACTOR_MODES as readonly string[]).includes(raw)) {
+    console.error(`mcp-hub: TWO_FACTOR must be one of ${TWO_FACTOR_MODES.join(', ')}`);
+    process.exit(1);
+  }
+  return raw as TwoFactorMode;
+}
+
 function requireEnv(name: string): string {
   const value = process.env[name];
   if (!value) {
@@ -474,6 +497,8 @@ if (isMain && process.argv.includes('--stdio')) {
     dataPath: process.env.DATA_PATH ?? '/data',
     passwordHash: process.env.PASSWORD_HASH,
     password: process.env.PASSWORD,
+    twoFactor: twoFactorEnv(),
+    totpSecret: process.env.TOTP_SECRET,
     trustedProxies: process.env.TRUSTED_PROXIES?.split(',').map(s => s.trim()).filter(Boolean),
     requireResourceBoundTokens: process.env.RESOURCE_BOUND_TOKENS !== 'false' && process.env.RESOURCE_BOUND_TOKENS !== '0',
     defaultResource: process.env.DEFAULT_RESOURCE || undefined,

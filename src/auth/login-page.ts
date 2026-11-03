@@ -6,7 +6,13 @@ import type { ClientIdentity } from './page.js';
  * both the client and where its codes would be sent — the client name is
  * self-declared at registration and anyone can register, the URL cannot lie.
  */
-export function renderLoginPage(requestToken: string, redirectUri: string, identity: ClientIdentity = {}, errorMessage?: string): string {
+export function renderLoginPage(
+  requestToken: string,
+  redirectUri: string,
+  identity: ClientIdentity = {},
+  errorMessage?: string,
+  askForCode = false
+): string {
   return renderPage(
     'mcp-hub login',
     `<form method="post" action="login">
@@ -14,7 +20,7 @@ export function renderLoginPage(requestToken: string, redirectUri: string, ident
   <p>${identity.clientName ? `Authorize <strong>${escapeHtml(identity.clientName)}</strong>` : 'Authorization required'}</p>
 ${renderIdentity(redirectUri, identity)}
   <input type="password" name="password" placeholder="Password" autofocus required autocomplete="current-password">
-  <input type="hidden" name="request" value="${escapeHtml(requestToken)}">
+${askForCode ? '  <input type="text" name="code" placeholder="Code from your authenticator app" required autocomplete="one-time-code" inputmode="numeric" pattern="[0-9 ]*" maxlength="12">\n' : ''}  <input type="hidden" name="request" value="${escapeHtml(requestToken)}">
   ${errorMessage ? `<p class="error">${escapeHtml(errorMessage)}</p>` : ''}
   <button type="submit">Sign in</button>
 </form>`

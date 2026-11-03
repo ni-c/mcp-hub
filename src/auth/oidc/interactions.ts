@@ -5,8 +5,9 @@ import type { CimdResolver } from '../cimd.js';
 import { renderConsentPage } from '../consent-page.js';
 import { allowFormActionTo, authSecurityHeaders } from '../headers.js';
 import { renderLoginPage } from '../login-page.js';
-import { earlyRateLimit, LoginRateLimiter } from '../rate-limit.js';
-import { operatorCredential } from '../password.js';
+import { OperatorFactors } from '../factors.js';
+import type { TwoFactorMode } from '../factors.js';
+import { earlyRateLimit } from '../rate-limit.js';
 import { isLoopbackOnly } from '../redirect-uri.js';
 import { approvalResourceKey } from '../resource.js';
 import { createSessionCookie, csrfToken, readSessionCookie, SESSION_TTL_MS, sessionCookieName, verifyCsrfToken } from '../session.js';
@@ -20,6 +21,10 @@ export interface OidcInteractionOptions {
   externalUrl: string;
   password?: string;
   passwordHash?: string;
+  twoFactor?: TwoFactorMode;
+  totpSecret?: string;
+  /** The hub's shared factors; built from the fields above when absent. */
+  factors?: OperatorFactors;
   cimd?: CimdResolver;
   /**
    * The canonicalisation buildOidcProvider uses, so an approval is recorded
@@ -74,7 +79,6 @@ function expired(res: express.Response, status: number, message: string): void {
 export function createOidcInteractionRoutes(options: OidcInteractionOptions): Router {
   const { provider, store } = options;
   const router = Router();
-  const rateLimiter = new LoginRateLimiter();
 
   // The pages this router serves are the ones with a password field on them, so
   // they need the anti-clickjacking and no-store headers at least as much as
@@ -86,8 +90,12 @@ export function createOidcInteractionRoutes(options: OidcInteractionOptions): Ro
   // Missing or unusable means nobody signs in — never that anybody does. The
   // empty-buffer comparison this replaced let an empty form field through when
   // no password was configured, which approved the client and minted tokens.
-  const credential = operatorCredential(options);
-  const disabledNotice = 'Sign-in is disabled: this hub has no usable operator password configured.';
+  const factors = options.factors ?? new OperatorFactors(options, store);
+  const disabledNotice =
+    factors.disabledBy === 'second-factor'
+      ? 'Sign-in is disabled: two-factor login is on, but this hub has no usable TOTP secret configured.'
+      : 'Sign-in is disabled: this hub has no usable operator password configured.';
+  const wrongFactors = factors.requiresCode ? 'Wrong password or code' : 'Wrong password';
 
   /** What the page may say about who is asking, and what it must not claim. */
   const identityOf = async (clientId: string, resource?: string) => {
@@ -122,9 +130,9 @@ export function createOidcInteractionRoutes(options: OidcInteractionOptions): Ro
 
         if (details.prompt.name === 'login') {
           res
-            .status(credential.enabled ? 200 : 503)
+            .status(factors.enabled ? 200 : 503)
             .type('html')
-            .send(renderLoginPage(details.uid, redirectUri, identity, credential.enabled ? undefined : disabledNotice));
+            .send(renderLoginPage(details.uid, redirectUri, identity, factors.enabled ? undefined : disabledNotice, factors.requiresCode));
           return;
         }
         const session = readSessionCookie(req.headers.cookie, store.cookieSecret, secure);
@@ -150,7 +158,7 @@ export function createOidcInteractionRoutes(options: OidcInteractionOptions): Ro
     express.urlencoded({ extended: false }),
     asyncHandler(async (req, res) => {
       const ip = req.ip ?? 'unknown';
-      const { password, request } = req.body as { password?: string; request?: string };
+      const { password, code, request } = req.body as { password?: string; code?: string; request?: string };
       let details;
       try {
         details = await provider.interactionDetails(req, res);
@@ -162,32 +170,31 @@ export function createOidcInteractionRoutes(options: OidcInteractionOptions): Ro
         expired(res, 400, 'Authorization request expired. Close this window and connect again.');
         return;
       }
-      if (rateLimiter.isBlocked(ip)) {
-        console.warn(`mcp-hub: login rate limit exceeded from ${logSafe(ip)}`);
+      const params = details.params as { client_id?: string; redirect_uri?: string; resource?: string };
+      const redirectUri = String(params.redirect_uri ?? '');
+      // Not a failed guess: there is nothing to guess. Counting it would let
+      // a misconfigured hub fill the fail2ban log with its own visitors.
+      const verdict = factors.verify(ip, { password, code });
+      if (verdict.outcome === 'rate_limited') {
         expired(res, 429, 'Too many attempts. Try again later.');
         return;
       }
-
-      const params = details.params as { client_id?: string; redirect_uri?: string; resource?: string };
-      const redirectUri = String(params.redirect_uri ?? '');
-      if (!credential.enabled) {
-        // Not a failed guess: there is nothing to guess. Counting it would let
-        // a misconfigured hub fill the fail2ban log with its own visitors.
+      if (verdict.outcome !== 'ok') {
         const identity = await identityOf(String(params.client_id), params.resource);
         allowFormActionTo(res, redirectUri);
-        res.status(503).type('html').send(renderLoginPage(details.uid, redirectUri, identity, disabledNotice));
-        return;
-      }
-      if (typeof password !== 'string' || !credential.check(password)) {
-        rateLimiter.recordFailure(ip);
-        console.warn(`mcp-hub: authentication failure from ${logSafe(ip)}`);
-        const identity = await identityOf(String(params.client_id), params.resource);
-        allowFormActionTo(res, redirectUri);
-        res.status(401).type('html').send(renderLoginPage(details.uid, redirectUri, identity, 'Wrong password'));
+        if (verdict.outcome === 'paused') res.set('Retry-After', String(verdict.retryAfterSeconds));
+        const [status, message] =
+          verdict.outcome === 'disabled'
+            ? [503, disabledNotice]
+            : verdict.outcome === 'paused'
+              ? [429, `Too many attempts. Try again in ${verdict.retryAfterSeconds} seconds.`]
+              : verdict.outcome === 'replayed_code'
+                ? [401, 'This code was already used. Wait for the next one.']
+                : [401, wrongFactors];
+        res.status(status).type('html').send(renderLoginPage(details.uid, redirectUri, identity, message, factors.requiresCode));
         return;
       }
 
-      rateLimiter.reset(ip);
       console.log(`mcp-hub: successful login from ${logSafe(ip)}`);
       // Typing the password is the consent for the client that triggered it:
       // for its redirect target and for the resource the page showed.
@@ -209,7 +216,7 @@ export function createOidcInteractionRoutes(options: OidcInteractionOptions): Ro
         maxAge: SESSION_TTL_MS,
         path: '/'
       });
-      await provider.interactionFinished(req, res, { login: { accountId: HUB_ACCOUNT_ID } }, { mergeWithLastSubmission: false });
+      await provider.interactionFinished(req, res, { login: { accountId: HUB_ACCOUNT_ID, amr: verdict.amr } }, { mergeWithLastSubmission: false });
     })
   );
 

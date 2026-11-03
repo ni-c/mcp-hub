@@ -34,11 +34,38 @@ export function pauseFor(failures: number): number {
   return Math.min(PAUSE_MAX_MS, PAUSE_BASE_MS * 2 ** (failures - PAUSE_AFTER_FAILURES));
 }
 
+interface ResolvedFactors {
+  mode: TwoFactorMode;
+  credential: OperatorCredential;
+  totpKey?: Buffer;
+  problem?: string;
+  disabledBy?: 'password' | 'second-factor';
+}
+
+function resolveFactors(options: OperatorFactorsOptions): ResolvedFactors {
+  const mode = options.twoFactor ?? 'off';
+  if (!TWO_FACTOR_MODES.includes(mode)) throw new Error(`twoFactor must be one of ${TWO_FACTOR_MODES.join(', ')}`);
+  const credential = operatorCredential(options);
+  if (credential.problem) return { mode, credential, problem: credential.problem, disabledBy: 'password' };
+  if (mode === 'off') return { mode, credential };
+  const secret = parseTotpSecret(options.totpSecret);
+  if (secret.problem) {
+    return { mode, credential, problem: `TWO_FACTOR=totp but ${secret.problem} — the operator login is disabled, no client can be approved`, disabledBy: 'second-factor' };
+  }
+  return { mode, credential, totpKey: secret.key };
+}
+
+/** Why nobody can sign in with these settings, without needing a store. */
+export function operatorFactorsProblem(options: OperatorFactorsOptions): string | undefined {
+  return resolveFactors(options).problem;
+}
+
 /** What the operator proves at a sign-in or an unlock. */
 export class OperatorFactors {
   readonly mode: TwoFactorMode;
   readonly enabled: boolean;
   readonly problem?: string;
+  readonly disabledBy?: 'password' | 'second-factor';
   readonly amr: readonly string[];
   private readonly credential: OperatorCredential;
   private readonly totpKey?: Buffer;
@@ -50,16 +77,14 @@ export class OperatorFactors {
     private readonly store: AuthStore,
     readonly limiter: LoginRateLimiter = new LoginRateLimiter()
   ) {
-    const mode = options.twoFactor ?? 'off';
-    if (!TWO_FACTOR_MODES.includes(mode)) throw new Error(`twoFactor must be one of ${TWO_FACTOR_MODES.join(', ')}`);
-    this.mode = mode;
-    this.credential = operatorCredential(options);
-    this.amr = mode === 'totp' ? ['pwd', 'otp', 'mfa'] : ['pwd'];
-    const secret = mode === 'totp' ? parseTotpSecret(options.totpSecret) : {};
-    this.totpKey = secret.key;
-    const problem = this.credential.problem ?? (secret.problem ? `TWO_FACTOR=totp but ${secret.problem} — the operator login is disabled, no client can be approved` : undefined);
-    this.enabled = problem === undefined;
-    if (problem !== undefined) this.problem = problem;
+    const resolved = resolveFactors(options);
+    this.mode = resolved.mode;
+    this.credential = resolved.credential;
+    this.totpKey = resolved.totpKey;
+    this.amr = resolved.mode === 'totp' ? ['pwd', 'otp', 'mfa'] : ['pwd'];
+    this.enabled = resolved.problem === undefined;
+    if (resolved.problem !== undefined) this.problem = resolved.problem;
+    if (resolved.disabledBy !== undefined) this.disabledBy = resolved.disabledBy;
   }
 
   get requiresCode(): boolean {
