@@ -2,10 +2,10 @@ import type { AuthStore } from '../auth/store.js';
 import type { ManagedServer } from '../supervisor.js';
 import { locksWholeServer } from './policy.js';
 
-/** How long a lock waits for the calls already running before it ends the child under them. */
+/** How long a lock waits for running calls. */
 export const IN_FLIGHT_GRACE_MS = 5 * 60_000;
 
-/** Watches unlocks end — by expiry, a page, a tool or the admin CLI — and ends what a whole-locked child held meanwhile. */
+/** Recycles a whole-locked child once its last unlock has ended. */
 export class UnlockSweep {
   private timer?: NodeJS.Timeout;
   private readonly open = new Set<string>();

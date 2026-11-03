@@ -19,7 +19,7 @@ export interface UnlockRoutesOptions {
   store: AuthStore;
   factors: OperatorFactors;
   secret: string;
-  /** The current policy of a server, or undefined when it is gone or no longer locked. */
+  /** The current policy of a server, if it is still locked. */
   policyFor: (server: string) => UnlockPolicy | undefined;
   /** Every server that has `unlock`, for the dashboard. */
   lockedServers: () => string[];
@@ -49,7 +49,7 @@ const describeGrant = (duration: UnlockDuration, now: number) =>
 const notFound = (res: Response) =>
   res.status(404).type('html').send(renderOutcome('Link expired', 'This unlock link has expired or does not exist. Ask the model to call the tool again for a new one.'));
 
-/** The request page, the operator's dashboard and the actions behind them; no state changes on GET. */
+/** The unlock pages; no state changes on GET. */
 export function createUnlockRoutes(options: UnlockRoutesOptions): Router {
   const { gate, store, factors, secret } = options;
   const runtime = gate.runtime;

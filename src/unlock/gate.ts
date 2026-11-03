@@ -35,7 +35,7 @@ export interface UnlockGateOptions {
   externalUrl: string;
   /** False when no page can unlock anything: the operator factors are unusable. */
   canUnlock: () => boolean;
-  /** Seals the hub's resume state; a resumed call continues the one that was admitted. */
+  /** Seals the hub's resume state. */
   secret: string;
   clientName?: (clientId: string) => string | undefined;
   /** Told when a grant was spent or ended, so expiry handling can look again. */
@@ -44,14 +44,14 @@ export interface UnlockGateOptions {
 
 const locked = (text: string): CallToolResult => ({ isError: true, content: [{ type: 'text', text }] });
 
-/** Only a caller that declared URL-mode elicitation in this request's 2026 envelope is shown the page through its client. */
+/** Whether this request declared URL-mode elicitation. */
 export function declaresUrlElicitation(ctx: ServerContext): boolean {
   const envelope = ctx.mcpReq.envelope as Record<string, unknown> | undefined;
   const elicitation = (envelope?.[CLIENT_CAPABILITIES_META_KEY] as ClientCapabilities | undefined)?.elicitation as Record<string, unknown> | undefined;
   return typeof elicitation === 'object' && elicitation !== null && elicitation.url !== undefined;
 }
 
-/** Decides, per call, whether a locked server's tool may run for this caller. Any failure counts as locked. */
+/** Decides per call whether a locked tool may run; failures count as locked. */
 export class UnlockGate {
   constructor(private readonly options: UnlockGateOptions) {}
 
@@ -76,7 +76,7 @@ export class UnlockGate {
       .toSorted((a, b) => b.expiresAt - a.expiresAt)[0];
   }
 
-  /** Whether everything this server serves is open to the caller: no lock, a tool-list lock, or a live window. */
+  /** Whether everything this server serves is open to the caller. */
   openForEverything(managed: ManagedServer, caller: Caller): boolean {
     try {
       return !locksWholeServer(managed.config.unlock) || this.windowFor(managed.name, caller) !== undefined;
@@ -85,7 +85,7 @@ export class UnlockGate {
     }
   }
 
-  /** For resources, prompts and completion of a whole-locked server; never opens a request. */
+  /** Refuses resources and prompts of a whole-locked server. */
   assertOpen(managed: ManagedServer, ctx: ServerContext): void {
     if (this.openForEverything(managed, callerOf(ctx))) return;
     throw new ProtocolError(
@@ -94,7 +94,7 @@ export class UnlockGate {
     );
   }
 
-  /** Ends the caller's own unlocks of a server: its authorization's, and the client-wide ones. */
+  /** Ends the caller's own unlocks of a server. */
   endUnlocks(server: string, caller: Caller): number {
     const ended = this.options.store.revokeUnlockGrants({ server, clientId: caller.clientId, ...(caller.grantId !== undefined ? { grantId: caller.grantId } : {}) });
     if (ended > 0) {
@@ -104,7 +104,7 @@ export class UnlockGate {
     return ended;
   }
 
-  /** An ask without a call, for request_unlock: no "only this call", same caps and cooldown. */
+  /** An ask without a call, for request_unlock. */
   requestAhead(managed: ManagedServer, ctx: ServerContext): { status: 'pending' | 'denied'; request?: UnlockRequest; message: string } {
     const caller = callerOf(ctx);
     if (!caller.clientId) return { status: 'denied', message: 'This connection cannot unlock anything.' };

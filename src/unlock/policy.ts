@@ -1,6 +1,6 @@
 import { matches } from '../tool-filter.js';
 
-/** `unlock` in mcp.json: which tools stay locked until a person unlocks them, and for how long at most. */
+/** `unlock` in mcp.json: the locked tools and the longest unlock. */
 export interface UnlockPolicy {
   tools: string[];
   maxMinutes: number;
@@ -24,21 +24,21 @@ export function locksTool(policy: UnlockPolicy | undefined, tool: string): boole
   return policy !== undefined && matches(policy.tools, tool);
 }
 
-/** What the page offers: "only this call" when there is a call to bind it to, then the presets up to the cap. */
+/** The durations the page offers, up to the cap. */
 export function durationChoices(policy: UnlockPolicy, hasCall: boolean): UnlockDuration[] {
   const minutes = UNLOCK_PRESETS.filter(preset => preset <= policy.maxMinutes);
   if (policy.maxMinutes > 0 && !minutes.includes(policy.maxMinutes)) minutes.push(policy.maxMinutes);
   return [...(hasCall ? (['once'] as const) : []), ...minutes];
 }
 
-/** The duration preselected on the page: 30 minutes when offered, else the longest one under it, else "only this call". */
+/** The duration preselected on the page. */
 export function defaultDuration(choices: readonly UnlockDuration[]): UnlockDuration | undefined {
   const minutes = choices.filter((choice): choice is number => choice !== 'once');
   if (minutes.includes(UNLOCK_DEFAULT_MINUTES)) return UNLOCK_DEFAULT_MINUTES;
   return minutes.filter(choice => choice < UNLOCK_DEFAULT_MINUTES).at(-1) ?? minutes[0] ?? choices[0];
 }
 
-/** Patterns that match none of the tools the server lists — a typo leaves those tools unlocked. */
+/** Patterns that match none of the server's tools. */
 export function unmatchedUnlockPatterns(policy: UnlockPolicy | undefined, tools: readonly { name: string }[]): string[] {
   if (!policy) return [];
   return policy.tools.filter(pattern => pattern !== '*' && !tools.some(tool => matches([pattern], tool.name)));

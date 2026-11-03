@@ -182,11 +182,11 @@ export interface OidcArtifact {
  */
 const MAX_OIDC_ARTIFACTS_PER_MODEL = 5_000;
 
-/** A locked server opened for one client: for a time window, or for one call with these exact arguments. */
+/** A locked server opened for one client, for a time window or one call. */
 export interface UnlockGrant {
   server: string;
   clientId: string;
-  /** The authorization it was asked from; absent means every authorization of the client. */
+  /** The authorization it was asked from; absent means all of them. */
   grantId?: string;
   kind: 'window' | 'once';
   tool?: string;
@@ -693,7 +693,7 @@ export class AuthStore {
     return id;
   }
 
-  /** Spends a matching once-grant; true for exactly one of any number of concurrent identical calls. */
+  /** Spends a matching once-grant, exactly once across concurrent calls. */
   takeOnceGrant(match: UnlockGrantMatch & { tool: string; argsHash: string }, now = Date.now()): string | undefined {
     return this.mutate(() => {
       for (const [id, grant] of Object.entries(this.state.unlockGrants)) {
@@ -706,7 +706,7 @@ export class AuthStore {
     });
   }
 
-  /** Ends grants; every field given must match, and a client-wide grant counts for each of its authorizations. */
+  /** Ends the grants that match every field given. */
   revokeUnlockGrants(filter: { server?: string; clientId?: string; grantId?: string; id?: string }): number {
     return this.mutate(() => {
       let ended = 0;

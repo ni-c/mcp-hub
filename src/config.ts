@@ -232,7 +232,7 @@ const KNOWN_KEYS: Record<ServerConfig['kind'], ReadonlySet<string>> = {
   socket: new Set([...COMMON_KEYS, 'socket', 'host', 'port'])
 };
 
-/** A typo in a key reads as "setting absent", so it is said out loud rather than ignored. */
+/** Names keys the hub ignores, since a typo reads as an absent setting. */
 function warnUnknownKeys(name: string, entry: Record<string, unknown>, parsed: ServerConfig, options: ParseOptions | undefined): void {
   if (!options?.warn) return;
   const unknown = Object.keys(entry).filter(key => !KNOWN_KEYS[parsed.kind].has(key));
@@ -463,7 +463,7 @@ function parseSubscriptions(name: string, entry: Record<string, unknown>): Subsc
   return { subscriptions: entry.subscriptions };
 }
 
-/** `unlock`: true locks every tool; an object names the tools and caps the duration. Strict, so a typo cannot leave a lock off. */
+/** `unlock`, parsed strictly so a typo cannot leave a lock off. */
 function parseUnlock(name: string, entry: Record<string, unknown>): UnlockConfig {
   const value = entry.unlock;
   if (value === undefined || value === false) return {};
@@ -728,11 +728,11 @@ export interface ConfigDiff {
   added: string[];
   removed: string[];
   changed: string[];
-  /** Servers whose `unlock` settings changed and nothing else: applied in place, without a restart. */
+  /** Servers where only `unlock` changed; applied without a restart. */
   retuned?: string[];
 }
 
-/** What a restart depends on: the presence of `unlock` restarts a child, its contents do not. */
+/** Only the presence of `unlock` restarts a child, not its contents. */
 export function restartFingerprint(config: ServerConfig): string {
   return JSON.stringify(config.unlock === undefined ? config : { ...config, unlock: true });
 }

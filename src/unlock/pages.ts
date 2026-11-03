@@ -65,7 +65,7 @@ export interface RequestPageInput {
   error?: string;
 }
 
-/** Facts come from the hub's own record; the model's arguments sit outside the form, marked as the model's. */
+/** Shows the hub's own record; the model's arguments sit outside the form. */
 export function renderRequestPage({ request, lockDescription, choices, selected, csrf, factors, error }: RequestPageInput): string {
   const call = request.tool
     ? `  <p class="label">Call that asked (${request.argsComplete === false ? 'cut at 2 KiB, written by the model' : 'written by the model'})</p>

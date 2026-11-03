@@ -849,7 +849,7 @@ export class ManagedServer {
   private inflight = 0;
   private readonly idleWaiters: Array<() => void> = [];
 
-  /** Counts a forwarded request until it settles, so a lock can wait for the calls already running. */
+  /** Counts a forwarded request until it settles. */
   track<T>(work: Promise<T>): Promise<T> {
     this.inflight++;
     return work.finally(() => {
@@ -858,7 +858,7 @@ export class ManagedServer {
     });
   }
 
-  /** Resolves when no tracked request is running, or after `timeoutMs` at the latest. */
+  /** Resolves when no tracked request runs, or after `timeoutMs`. */
   whenIdle(timeoutMs: number): Promise<void> {
     if (this.inflight === 0) return Promise.resolve();
     return new Promise(resolve => {
@@ -871,7 +871,7 @@ export class ManagedServer {
     });
   }
 
-  /** Ends what a running child holds: an on-demand child sleeps, an always-on one restarts, a remote or socket one is left alone. */
+  /** Sleeps an on-demand child, restarts an always-on one, leaves remote ones. */
   async recycle(): Promise<'slept' | 'restarted' | 'kept'> {
     if (this.config.kind === 'remote' || this.config.kind === 'socket' || this.state !== 'up') return 'kept';
     if (this.onDemand) {

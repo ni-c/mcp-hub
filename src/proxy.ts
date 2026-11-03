@@ -104,7 +104,7 @@ function advertisedCapabilities(capabilities: ServerCapabilities | undefined, er
  * transport means no server-side session state at all — claude.ai reconnects
  * every few minutes without ever closing sessions, so anything stateful leaks.
  */
-/** A locked tool's name must be one the server lists, so a case or alias variant cannot slip past the lock. */
+/** On a locked server, a name the server does not list is unknown. */
 export function unknownToLockedServer(managed: ManagedServer, tool: string): boolean {
   if (!managed.config.unlock || (managed.tools.length === 0 && !managed.hasSnapshot)) return false;
   return !managed.tools.some(t => t.name === tool);
@@ -151,7 +151,7 @@ function buildProxyServer(managed: ManagedServer, secret: string, era: Era, gate
     managed.markUsed();
     return forwardLive(request, resultSchema, options);
   };
-  // A whole-locked server lists no resources or prompts and serves none until the caller holds an unlock.
+  // A whole-locked server serves no resources or prompts without an unlock.
   const lockedFor = (ctx: Parameters<UnlockGate['assertOpen']>[1]): boolean =>
     locksWholeServer(managed.config.unlock) && !(gate?.openForEverything(managed, callerOf(ctx)) ?? false);
   const guarded = <S extends ClientResultSchema>(request: { method: string; params?: unknown }, ctx: Parameters<UnlockGate['assertOpen']>[1], resultSchema: S) => {

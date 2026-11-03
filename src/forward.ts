@@ -84,7 +84,7 @@ export interface ForwardToolCall {
   /** Signs the request state. `AuthStore.cookieSecret` behind HTTP. */
   secret: string;
   via: ForwardRoute;
-  /** Set by the caller once the unlock gate let this call through; a locked tool without it is refused. */
+  /** Set once the unlock gate admitted this call. */
   admitted?: boolean;
 }
 

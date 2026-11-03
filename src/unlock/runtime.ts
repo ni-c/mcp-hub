@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 
-// What lives only as long as the process: open unlock requests and the dashboard's short tickets.
+// Open unlock requests and dashboard tickets, held in memory only.
 
 export const REQUEST_TTL_MS = 10 * 60_000;
 export const DENY_COOLDOWN_MS = 2 * 60_000;
@@ -17,9 +17,9 @@ export interface UnlockRequestInput {
   /** `/hub` or the server's own path. */
   door: string;
   tool?: string;
-  /** The canonical JSON of the arguments, exactly what argsHash covers, cut at the page's limit. */
+  /** The canonical arguments, cut at the page's limit. */
   args?: string;
-  /** False when `args` was cut; such a call cannot be unlocked for "only this call". */
+  /** False when `args` was cut. */
   argsComplete?: boolean;
   argsHash?: string;
 }
@@ -57,7 +57,7 @@ export class UnlockRuntime {
 
   constructor(private readonly now: () => number = () => Date.now()) {}
 
-  /** The same ask while one is open gets the same link; a fresh denial holds the next ask off for two minutes. */
+  /** Reuses an open ask; a fresh denial holds the same ask off. */
   open(input: UnlockRequestInput): OpenRequestResult {
     this.sweep();
     const now = this.now();

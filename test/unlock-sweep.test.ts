@@ -106,7 +106,24 @@ describe('when the last unlock of a tool-list lock ends', () => {
   }, 30_000);
 });
 
+describe('ManagedServer.recycle', () => {
+  it('leaves a server alone that is not running', async () => {
+    const { managed } = await start({});
+    await managed.sleep();
+    expect(await managed.recycle()).toBe('kept');
+    expect(managed.state).toBe('sleeping');
+  }, 30_000);
+});
+
 describe('ManagedServer.whenIdle', () => {
+  it('counts a failed request as finished', async () => {
+    const { managed } = await start({});
+    await managed.track(Promise.reject(new Error('boom'))).catch(() => {});
+    const started = Date.now();
+    await managed.whenIdle(5_000);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  }, 30_000);
+
   it('resolves at once when nothing runs, and at the latest after the timeout', async () => {
     const { managed } = await start({});
     await managed.whenIdle(10);
