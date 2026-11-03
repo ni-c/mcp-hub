@@ -182,6 +182,12 @@ export interface OidcArtifact {
  */
 const MAX_OIDC_ARTIFACTS_PER_MODEL = 5_000;
 
+/** The last accepted one-time-code step and the two-factor mode last run. */
+export interface SecondFactorState {
+  lastTotpStep?: number;
+  mode?: 'off' | 'totp';
+}
+
 interface PersistedState {
   cookieSecret: string;
   clients: Record<string, OAuthClientInformationFull>;
@@ -197,6 +203,7 @@ interface PersistedState {
    *  than ten typed ones, because the library owns these payload shapes and
    *  mirroring them here would be a second schema to keep in step. */
   oidcArtifacts: Record<string, Record<string, OidcArtifact>>;
+  secondFactor: SecondFactorState;
   /** The issuer the hub last ran under, so `mcp-hub-admin upstream login` can
    *  build a redirect URI without EXTERNAL_URL being set in its environment —
    *  the Dockerfile sets only CONFIG_PATH and DATA_PATH. */
@@ -480,6 +487,14 @@ export class AuthStore {
     };
   }
 
+  private static normalizeSecondFactor(value: unknown): SecondFactorState {
+    const source = (value && typeof value === 'object' ? value : {}) as Partial<SecondFactorState>;
+    return {
+      ...(Number.isSafeInteger(source.lastTotpStep) ? { lastTotpStep: source.lastTotpStep } : {}),
+      ...(source.mode === 'off' || source.mode === 'totp' ? { mode: source.mode } : {})
+    };
+  }
+
   /**
    * Shapes a parsed state file, or undefined when it is unusable. Fields added
    * later default to empty: a state.json written before client approvals
@@ -503,6 +518,7 @@ export class AuthStore {
       upstreamCredentials: bare(state.upstreamCredentials),
       upstreamLogins: bare(state.upstreamLogins),
       oidcArtifacts: bare(Object.fromEntries(Object.entries(bare(state.oidcArtifacts)).map(([model, records]) => [model, bare(records)]))),
+      secondFactor: AuthStore.normalizeSecondFactor(state.secondFactor),
       ...(typeof state.externalUrl === 'string' ? { externalUrl: state.externalUrl } : {})
     };
   }
@@ -587,6 +603,30 @@ export class AuthStore {
       // An empty model map is a row that never goes away.
       if (Object.keys(records).length === 0) delete this.state.oidcArtifacts[model];
     }
+  }
+
+  // --- Second factor -------------------------------------------------------
+
+  /** False when this step or a later one was already accepted. */
+  acceptTotpStep(step: number): boolean {
+    return this.mutate(() => {
+      const last = this.state.secondFactor.lastTotpStep;
+      if (last !== undefined && step <= last) return false;
+      this.state.secondFactor.lastTotpStep = step;
+      return true;
+    });
+  }
+
+  /** Records the mode the hub now runs with and returns the one it ran with before. */
+  recordTwoFactorMode(mode: 'off' | 'totp'): 'off' | 'totp' | undefined {
+    this.reloadIfChanged();
+    const previous = this.state.secondFactor.mode;
+    if (previous !== mode) {
+      this.mutate(() => {
+        this.state.secondFactor.mode = mode;
+      });
+    }
+    return previous;
   }
 
   // --- Upstream OAuth ------------------------------------------------------
