@@ -75,6 +75,11 @@ and `unauthorized` means a remote server whose
 appears only on `"hub": false` servers: their tools are served exclusively by
 their own endpoint, but `wake_server`/`sleep_server` accept them.
 
+On a hub with [locked servers](/guide/unlock), an entry for a server with
+locked tools also carries `locked` (whether they are locked for you right now),
+`lockedTools` (the patterns, absent when every tool is locked) and
+`unlockedUntil` (when your unlock ends).
+
 ## `list_tools`
 
 > List the tools of one MCP server with one-line descriptions. Use
@@ -270,6 +275,29 @@ act.
 
 When the hub does drop a question, it also says so once in its own log — per
 client, server and reason. See [Elicitation](/guide/elicitation).
+
+## `request_unlock`
+
+> Get a link the user opens to unlock a locked server for you, before you call
+> its tools.
+
+Present only on a hub where some server has `unlock`, and not over stdio.
+Input `{ server }`. Returns `status` (`unlocked`, `pending` or `denied`), and
+for `pending` the `url` for the user, the matching `code` and when the link
+expires. A server hidden from `/hub` is answered with a pointer to its own
+connector: an unlock asked for here would belong to the `/hub` authorization,
+not to the one that can reach the server.
+
+## `lock_server`
+
+> End your unlocks of a server now, once you are done with it.
+
+Present alongside `request_unlock`. Input `{ server }`. Ends the caller's own
+unlocks of that server and nobody else's, and returns how many. It can never
+unlock anything.
+
+A call to a locked tool through `call_tool` answers with the link the same way;
+see [what a model sees](/guide/unlock#what-a-model-sees).
 
 ## Caching
 

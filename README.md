@@ -76,6 +76,13 @@ replaces N containers with one process:
   after 60 idle minutes, answering `initialize`/`tools/list` from a persistent
   snapshot meanwhile — a dozen servers cost only the memory of the ones in
   use. `keepAlive: true` exempts a server, `IDLE_TIMEOUT_MINUTES=0` the hub.
+- **Servers that stay locked until you say so**: `"unlock": true` on a shell,
+  a mailbox or your DNS, and a model that calls it gets a link instead of a
+  result. You unlock it on the hub's page with your password (and code) for one
+  call or 15 minutes to four hours, for the connection that asked and nobody
+  else. Clients that open pages themselves get the link as a URL elicitation,
+  every other client as text, and a whole-locked server is put to sleep when
+  its last unlock ends.
 - **Optional two-factor login**: `TWO_FACTOR=totp` adds a code from any
   authenticator app to the password on the OAuth login. Codes work once, wrong
   ones pause further attempts, and switching it on retires every token that a
@@ -205,12 +212,13 @@ header: the hub registers itself (statically, via RFC 7591 or via a client
 metadata document), obtains the token and refreshes it, with one browser visit
 started from the admin CLI where the grant needs a person.
 `"hub": false` hides a server from the `/hub` aggregate; its own path keeps
-working. `allowTools` / `denyTools` cut finer and apply to every kind of
+working. `"unlock"` keeps a server's tools locked until a person unlocks them
+([locked servers](https://mcp-hub.ni-c.de/guide/unlock)). `allowTools` / `denyTools` cut finer and apply to every kind of
 server: a filtered tool is absent from both `tools/list` and `/hub`, and is
 refused if called anyway — before the server is woken.
 Reserved names: `mcp`, `hub`, `authorize`, `token`, `register`,
 `login`, `consent`, `health`, `livez`, `revoke`, `jwks`, `interaction`,
-`session`, `userinfo`, `upstream`, `.well-known`.
+`session`, `userinfo`, `upstream`, `.well-known`, `unlock`.
 
 All stdio children share the hub's Unix user and can read its mounted files.
 Only install fully trusted stdio servers. A server with a different trust level

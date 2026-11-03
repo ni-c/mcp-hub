@@ -47,6 +47,17 @@
       "denyTools": [
         "delete_document"
       ]
+    },
+    "locked": {
+      "command": "shell-mcp",
+      "args": [],
+      "unlock": {
+        "tools": [
+          "run_command",
+          "write_*"
+        ],
+        "maxMinutes": 60
+      }
     }
   }
 }

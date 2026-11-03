@@ -21,6 +21,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unusable nobody can sign in, and an unknown `TWO_FACTOR` value stops the
   hub. Admin API tokens are not affected. See the new [two-factor
   login](https://mcp-hub.ni-c.de/guide/two-factor) guide.
+- **Servers that stay locked until a person unlocks them.** `"unlock": true`
+  in a server's entry locks all of it, and `{ "tools": [...], "maxMinutes": N }`
+  locks the named tools and caps an unlock at N minutes (0–240). A call to a
+  locked tool gets a link to the hub's unlock page instead of a result. Clients
+  that declare URL-mode elicitation get it as such, every other client gets it
+  as text with a matching code. The page shows what asked, with its exact
+  arguments, and unlocks after the operator password (and the code, with
+  two-factor login on) for only this call or 15 minutes to four hours. Only the
+  authorization that asked is unlocked, and the link alone unlocks nothing.
+  `/unlock` lists open requests and active unlocks with Lock now, and unlocks
+  ahead of a call. `list_servers` shows what is locked, `request_unlock` and
+  `lock_server` appear on a hub that locks something, and `mcp-hub-admin unlock
+  list|grant|revoke` works from the host. When the last unlock of a
+  whole-locked server ends, running calls finish and the server is put to sleep
+  or restarted. See [locked servers](https://mcp-hub.ni-c.de/guide/unlock).
 - `mcp-hub-admin totp init` makes the secret. It shows a QR code in the
   terminal, the setup key and `otpauth://` and `apple-otpauth://` links, and
   prints the environment lines only after a code from the app matched.
@@ -34,6 +49,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nothing. Already issued access tokens run out within their fifteen minutes.
   The operator session cookie is signed together with the mode, so switching
   it in either direction ends that session too.
+- **`unlock` is a reserved server name** now: the unlock pages live under
+  `/unlock`. A hub older than 0.12 ignores the `unlock` key and runs such a
+  server unlocked, so upgrade before adding it and do not roll back past 0.12
+  while servers rely on it.
+- Keys a server entry carries that the hub does not know are logged as a
+  warning (`has a key the hub ignores: "unlok"`) instead of being ignored in
+  silence. They still load.
 - The login, consent and upstream pages follow the system colour scheme and
   are light on a light system. With two-factor login on, the login page has a
   code field and answers a wrong password or code with *Wrong password or

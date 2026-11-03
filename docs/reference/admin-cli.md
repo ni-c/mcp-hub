@@ -22,7 +22,7 @@ next request — and a change the hub makes is not overwritten by this one.
 | Variable | Needed by |
 |---|---|
 | `DATA_PATH` | everything except `totp init` |
-| `CONFIG_PATH` | every `upstream` command — they have to read the server definition |
+| `CONFIG_PATH` | every `upstream` command and `unlock grant`/`revoke` — they have to read the server definition |
 | `EXTERNAL_URL` | `tokens create`; `upstream login` unless the hub has run at least once, which records it; `totp init` names the hub after its host |
 
 Output is split so it can be piped: machine-readable JSON goes to **stdout**,
@@ -160,6 +160,24 @@ or no input at all, end it with exit code `2` and nothing set up.
 
 It needs no data volume and changes nothing on disk. The output contains the
 secret, so clear it from anything that records terminal output.
+
+## `unlock`
+
+The host's side of [locked servers](/guide/unlock).
+
+```sh
+mcp-hub-admin unlock list
+mcp-hub-admin unlock grant <server> <minutes> --client <client-id>
+mcp-hub-admin unlock revoke <server> [--client <client-id>]
+```
+
+`list` prints the live unlocks as JSON. `grant` unlocks a server whose entry
+has `unlock` for whole minutes up to its `maxMinutes`, for every authorization of
+an approved client (`clients list`) or for an API token (`token:<id>`, from
+`tokens list`). It is the way in without a phone, or for a hub without a usable
+sign-in. `revoke` ends the unlocks of a server, or only one client's. The hub
+sees either within seconds; a server that locks every tool is then put to sleep
+or restarted once its running calls are done.
 
 ## Next
 

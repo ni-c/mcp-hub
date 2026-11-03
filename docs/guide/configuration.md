@@ -40,7 +40,7 @@ serves them:
 
 `mcp` · `hub` · `authorize` · `token` · `register` · `login` · `consent` ·
 `health` · `livez` · `revoke` · `upstream` · `.well-known` · `jwks` ·
-`interaction` · `session` · `userinfo`
+`interaction` · `session` · `userinfo` · `unlock`
 
 The check is case-insensitive — `Hub` is rejected just like `hub`.
 
@@ -384,6 +384,14 @@ inactivity. Two fields tune that per server:
 are mutually exclusive. Both are rejected on remote and socket servers, whose
 processes the hub does not own. Like `hub`, Claude Code ignores them.
 
+## Locking a server: `unlock`
+
+`"unlock": true` keeps every tool of a server locked until a person unlocks it
+on the hub's page; `{ "tools": [...], "maxMinutes": 120 }` locks only the named
+tools and caps how long an unlock may last. Changing the fields applies without
+a restart. See [locked servers](/guide/unlock) for what a model sees, the page
+and who is unlocked.
+
 ## Hot reload
 
 The hub watches the config file and applies changes without a restart:
@@ -431,6 +439,12 @@ The config is validated strictly at load. Common messages:
 | `"allowTools" must be an array of strings` | it was a bare string, or held a non-string |
 | `"allowTools" entry "…" — only a trailing "*" is supported` | the `*` was not the last character |
 | `"allowTools" must not contain an empty string` | a stray comma left an empty entry |
+| `Server "…": unknown "unlock" field(s) …` | a key inside `unlock` other than `tools` and `maxMinutes` |
+| `Server "…": "unlock.maxMinutes" must be a whole number from 0 …` | out of range, a fraction or a string |
+| `Server "…": "unlock.tools" must name at least one tool …` | an empty list; use `"*"` for all of them |
+
+Keys the hub does not know are not an error — they load, and the log says so:
+`mcp-hub: server "ssh" has a key the hub ignores: "unlok" — check for a typo`.
 
 At startup these are fatal — the hub refuses to run on a config it cannot
 parse. On reload they are logged and ignored.

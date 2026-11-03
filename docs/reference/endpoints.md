@@ -152,6 +152,6 @@ These cannot be used as server names, because the hub serves them itself:
 
 `mcp` · `hub` · `authorize` · `token` · `register` · `login` · `consent` ·
 `health` · `livez` · `revoke` · `jwks` · `interaction` · `session` · `userinfo` ·
-`upstream` · `.well-known`
+`upstream` · `.well-known` · `unlock`
 
 The check is case-insensitive and happens when the config is parsed.

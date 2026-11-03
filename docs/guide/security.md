@@ -88,6 +88,9 @@ runtime root filesystem read-only.
       into the hub, and both images on the same version
 - [ ] Sandbox secret files (`secretsFrom`) `chmod 640` and mounted into the
       proxy only
+- [ ] Servers that can do damage — a shell, a mailbox that sends, your DNS —
+      [locked](/guide/unlock) with `unlock`, and the hub upgraded before the key
+      was added
 
 ## Authentication and authorization
 
@@ -399,6 +402,10 @@ cleaned up and restart delayed by the normal supervisor backoff.
   password is full access. With `TWO_FACTOR=totp` a stolen password alone signs
   nobody in, but a password and a code typed into a convincing copy of the
   login page can still be replayed within the code's 30 seconds.
+- **Whatever runs while a server is unlocked.** An [unlock](/guide/unlock) is a
+  window for one authorization, and a manipulated model inside it is that
+  authorization. A server that can administer the hub's own host can switch
+  the lock off from inside the window.
 - **A malicious reverse proxy.** The hub trusts it for TLS and client
   addresses.
 - **Denial of service at the network layer.** Rate limits protect the process,

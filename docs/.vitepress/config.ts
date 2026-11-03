@@ -107,6 +107,7 @@ export default defineConfig({
             { text: "Subscriptions", link: "/guide/subscriptions" },
             { text: "Client registration", link: "/guide/client-registration" },
             { text: "Two-factor login", link: "/guide/two-factor" },
+            { text: "Locked servers", link: "/guide/unlock" },
             { text: "Security", link: "/guide/security" },
             { text: "FAQ & troubleshooting", link: "/guide/faq" },
           ],

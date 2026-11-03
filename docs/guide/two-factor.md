@@ -7,6 +7,9 @@ Every connector you add, in any client, sends you through that login, so a
 password that leaked — typed into the wrong window, pasted into a chat, read
 off a screen — no longer approves a client on its own.
 
+The same factors unlock [locked servers](/guide/unlock): with two-factor login
+on, the unlock page asks for the code as well.
+
 Two-factor login is off unless you turn it on. Nothing changes for a hub that
 does not set the variable.
 
