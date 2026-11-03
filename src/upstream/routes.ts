@@ -44,6 +44,8 @@ export interface UpstreamRoutesOptions {
   supervisor: Supervisor;
   watcher: ConfigWatcher;
   externalUrl: string;
+  /** The two-factor mode the operator's session cookie was signed under; empty when off. */
+  sessionScope?: string;
 }
 
 const page = (res: Response, status: number, title: string, body: string): void => {
@@ -97,7 +99,7 @@ export function createUpstreamRoutes(options: UpstreamRoutesOptions): Router {
     // Proving the browser belongs to the operator, not just to whoever ended up
     // holding the redirect. The session cookie rides along because the upstream
     // sends a top-level navigation and the cookie is SameSite=Lax.
-    if (readSessionCookie(cookie, store.cookieSecret, secure) === undefined) {
+    if (readSessionCookie(cookie, store.cookieSecret, secure, options.sessionScope) === undefined) {
       page(res, 401, 'Not signed in', 'Sign in to this hub in the same browser, then run the login again.');
       return;
     }

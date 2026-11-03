@@ -1,5 +1,5 @@
 import type { Configuration, KoaContextWithOIDC } from 'oidc-provider';
-import Provider, { errors } from 'oidc-provider';
+import Provider, { errors, interactionPolicy } from 'oidc-provider';
 
 import type { CimdResolver } from '../cimd.js';
 import { isSafeRedirectUri, redirectUriMatches } from '../redirect-uri.js';
@@ -55,6 +55,20 @@ export interface OidcProviderOptions {
    *  it, and a relative `action="login"` only resolves that way from a path
    *  that ends in a slash. */
   interactionPath?: string;
+  /** Sends a session that was signed in without a one-time code back to the login page. */
+  requireSecondFactor?: boolean;
+}
+
+function loginPolicy(requireSecondFactor: boolean): interactionPolicy.Prompt[] {
+  const policy = interactionPolicy.base();
+  if (requireSecondFactor) {
+    policy
+      .get('login')
+      ?.checks.add(
+        new interactionPolicy.Check('second_factor', 'End-User authentication with a second factor is required', ctx => !(ctx.oidc.session?.amr ?? []).includes('otp'))
+      );
+  }
+  return policy;
 }
 
 /**
@@ -467,6 +481,7 @@ export function buildOidcProvider(store: AuthStore, options: OidcProviderOptions
     },
 
     interactions: {
+      policy: loginPolicy(options.requireSecondFactor ?? false),
       url: (_ctx, interaction) => `${options.interactionPath ?? '/interaction'}/${interaction.uid}/`
     },
 

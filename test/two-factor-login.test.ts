@@ -1,4 +1,6 @@
 import fs from 'node:fs';
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -7,6 +9,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 
 import { createHub } from '../src/index.js';
 import type { HubOptions } from '../src/index.js';
+import { createSessionCookie, readSessionCookie } from '../src/auth/session.js';
 import { base32Encode } from '../src/auth/totp.js';
 import { authorizeInBrowser, pkcePair, registerPublicClient, totpCode } from './auth-flow.js';
 
@@ -84,8 +87,8 @@ async function openLoginPage(hub: Hub) {
   throw new Error('the login page never came');
 }
 
-async function exchange(hub: Hub, clientId: string, code: string, verifier: string) {
-  return request(hub.app)
+async function exchange(hub: Hub | string, clientId: string, code: string, verifier: string) {
+  return request(typeof hub === 'string' ? hub : (hub.app as Parameters<typeof request>[0]))
     .post('/token')
     .type('form')
     .send({ grant_type: 'authorization_code', code, code_verifier: verifier, client_id: clientId, redirect_uri: REDIRECT_URI, resource: RESOURCE });
@@ -213,7 +216,7 @@ describe('switching two-factor login', () => {
 
       const second = await startHub({ twoFactor: 'totp', totpSecret: SECRET }, first.dataPath);
       await stopHub(second.hub);
-      expect(warn.mock.calls.flat()).toContain('mcp-hub: two-factor login was switched on since the last start');
+      expect(warn.mock.calls.flat()).toContain('mcp-hub: two-factor login was switched on since the last start — sessions and refresh tokens from sign-ins without a code are no longer accepted, so every connector signs in once more');
       expect(log.mock.calls.flat()).toContain('mcp-hub: two-factor login is on — every sign-in needs the password and a TOTP code');
 
       const third = await startHub({}, first.dataPath);
@@ -223,5 +226,79 @@ describe('switching two-factor login', () => {
       log.mockRestore();
       warn.mockRestore();
     }
+  });
+});
+
+describe('sign-ins from before two-factor login was switched on', () => {
+  it('stop counting: their refresh tokens, codes and browser sessions all need a code now', async () => {
+    let current: Hub | undefined;
+    const server = http.createServer((req, res) => {
+      (current!.app as unknown as http.RequestListener)(req, res);
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    try {
+      const off = await startHub();
+      current = off.hub;
+      const agent = request.agent(base);
+      const clientId = await registerPublicClient(base, REDIRECT_URI);
+      const signIn = { password: PASSWORD, redirectUri: REDIRECT_URI, resource: RESOURCE, agent };
+      const first = await authorizeInBrowser(base, clientId, signIn);
+      const tokens = await exchange(base, clientId, first.code, first.verifier);
+      expect(tokens.status).toBe(200);
+      const reused = await authorizeInBrowser(base, clientId, signIn);
+      expect(reused.pages).toEqual([]); // the browser session alone gets a code while the second factor is off
+      await stopHub(off.hub);
+
+      const on = await startHub({ twoFactor: 'totp', totpSecret: SECRET }, off.dataPath);
+      current = on.hub;
+      try {
+        const refreshed = await request(base)
+          .post('/token')
+          .type('form')
+          .send({ grant_type: 'refresh_token', refresh_token: tokens.body.refresh_token, client_id: clientId, resource: RESOURCE });
+        expect(refreshed.status).toBe(400);
+        expect(refreshed.body.error).toBe('invalid_grant');
+
+        const pending = await exchange(base, clientId, reused.code, reused.verifier);
+        expect(pending.status).toBe(400);
+        expect(pending.body.error).toBe('invalid_grant');
+
+        const again = await authorizeInBrowser(base, clientId, { ...signIn, totpSecret: SECRET });
+        expect(again.pages.some(page => page.includes('name="code"'))).toBe(true);
+        const fresh = await exchange(base, clientId, again.code, again.verifier);
+        expect(fresh.status).toBe(200);
+        const rotated = await request(base)
+          .post('/token')
+          .type('form')
+          .send({ grant_type: 'refresh_token', refresh_token: fresh.body.refresh_token, client_id: clientId, resource: RESOURCE });
+        expect(rotated.status).toBe(200);
+      } finally {
+        await stopHub(on.hub);
+      }
+    } finally {
+      server.close();
+    }
+  });
+});
+
+const sessionHeader = (value: string) => `mcp_hub_session=${encodeURIComponent(value)}`;
+
+describe('the operator session cookie', () => {
+  const secret = 'cookie-secret';
+  const header = sessionHeader;
+
+  it('reads as before while two-factor login is off', () => {
+    const value = createSessionCookie(secret);
+    expect(readSessionCookie(header(value), secret)).toBe(value);
+    expect(readSessionCookie(header(value), secret, false, '')).toBe(value);
+  });
+
+  it('does not survive a change of the two-factor mode, in either direction', () => {
+    const plain = createSessionCookie(secret);
+    const scoped = createSessionCookie(secret, 'totp');
+    expect(readSessionCookie(header(scoped), secret, false, 'totp')).toBe(scoped);
+    expect(readSessionCookie(header(plain), secret, false, 'totp')).toBeUndefined();
+    expect(readSessionCookie(header(scoped), secret, false, '')).toBeUndefined();
   });
 });

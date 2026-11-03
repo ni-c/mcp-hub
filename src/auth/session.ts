@@ -32,9 +32,14 @@ export function sessionCookieName(secure: boolean): string {
  * copies of this format drifting apart would break a flow that neither of them
  * looks like it owns.
  */
-export function createSessionCookie(secret: string): string {
+export function createSessionCookie(secret: string, scope = ''): string {
   const expires = String(Date.now() + SESSION_TTL_MS);
-  return `${expires}.${sign(expires, secret)}`;
+  return `${expires}.${sign(sessionSigningInput(expires, scope), secret)}`;
+}
+
+/** A cookie signed under one two-factor mode does not verify under another. */
+function sessionSigningInput(expires: string, scope: string): string {
+  return scope ? `${scope}|${expires}` : expires;
 }
 
 /**
@@ -43,7 +48,7 @@ export function createSessionCookie(secret: string): string {
  * Only the name for this deployment is read: behind HTTPS the bare name is not
  * the session cookie, whatever it carries.
  */
-export function readSessionCookie(cookieHeader: string | undefined, secret: string, secure = false): string | undefined {
+export function readSessionCookie(cookieHeader: string | undefined, secret: string, secure = false, scope = ''): string | undefined {
   const match = cookieHeader?.match(new RegExp(`(?:^|;\\s*)${sessionCookieName(secure)}=([^;]+)`));
   if (!match) return undefined;
   let value: string;
@@ -55,7 +60,7 @@ export function readSessionCookie(cookieHeader: string | undefined, secret: stri
   const [expires, signature, extra] = value.split('.');
   if (extra !== undefined) return undefined;
   if (!expires || !signature) return undefined;
-  if (!signatureMatches(expires, signature, secret)) return undefined;
+  if (!signatureMatches(sessionSigningInput(expires, scope), signature, secret)) return undefined;
   return Number(expires) > Date.now() ? value : undefined;
 }
 

@@ -236,6 +236,41 @@ describe('AuthStore second-factor state', () => {
     expect(reopened.recordTwoFactorMode('off')).toBeUndefined();
   });
 
+  it('hides codes and refresh tokens from sign-ins without a code while a second factor is required', () => {
+    const withCode = { clientId: 'c', iat: Math.floor(Date.now() / 1000), amr: ['pwd', 'otp', 'mfa'] };
+    const withoutCode = { clientId: 'c', iat: Math.floor(Date.now() / 1000), amr: ['pwd'] };
+    const unmarked = { clientId: 'c', iat: Math.floor(Date.now() / 1000) };
+    const notAList = { clientId: 'c', iat: Math.floor(Date.now() / 1000), amr: 'otp' };
+    const nulled = { clientId: 'c', iat: Math.floor(Date.now() / 1000), amr: null };
+    for (const model of ['AuthorizationCode', 'RefreshToken', 'AccessToken']) {
+      store.oidcUpsert(model, `${model}-with`, withCode, 600);
+      store.oidcUpsert(model, `${model}-without`, withoutCode, 600);
+      store.oidcUpsert(model, `${model}-unmarked`, unmarked, 600);
+      store.oidcUpsert(model, `${model}-string`, notAList, 600);
+      store.oidcUpsert(model, `${model}-null`, nulled, 600);
+    }
+    const visible = () =>
+      ['AuthorizationCode', 'RefreshToken', 'AccessToken'].flatMap(model =>
+        ['with', 'without', 'unmarked', 'string', 'null'].filter(kind => store.oidcFind(model, `${model}-${kind}`) !== undefined).map(kind => `${model}-${kind}`)
+      );
+    const all = visible();
+    expect(all).toHaveLength(15);
+
+    store.requireSecondFactor(true);
+    expect(visible()).toEqual([
+      'AuthorizationCode-with',
+      'RefreshToken-with',
+      'AccessToken-with',
+      'AccessToken-without',
+      'AccessToken-unmarked',
+      'AccessToken-string',
+      'AccessToken-null'
+    ]);
+
+    store.requireSecondFactor(false);
+    expect(visible()).toEqual(all);
+  });
+
   it('reads a state file written before the slot existed', () => {
     const file = path.join(dir, 'state.json');
     const { secondFactor: _gone, ...older } = JSON.parse(fs.readFileSync(file, 'utf8'));

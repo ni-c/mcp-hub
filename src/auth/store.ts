@@ -289,6 +289,7 @@ export class AuthStore {
   /** Identity of the file contents this.state was loaded from; see fileSignature(). */
   private signature?: string;
   private tmpCounter = 0;
+  private secondFactorRequired = false;
 
   constructor(
     dataDir: string,
@@ -606,6 +607,13 @@ export class AuthStore {
   }
 
   // --- Second factor -------------------------------------------------------
+
+  /** While required, codes and refresh tokens without a one-time code are not found. */
+  requireSecondFactor(required: boolean): void {
+    this.secondFactorRequired = required;
+  }
+
+  private static readonly SIGN_IN_MODELS = new Set(['AuthorizationCode', 'RefreshToken']);
 
   /** False when this step or a later one was already accepted. */
   acceptTotpStep(step: number): boolean {
@@ -1188,6 +1196,10 @@ export class AuthStore {
     if (!record) return undefined;
     if (record.expiresAt !== 0 && record.expiresAt < Math.floor(Date.now() / 1000)) return undefined;
 
+    if (this.secondFactorRequired && AuthStore.SIGN_IN_MODELS.has(model)) {
+      const amr = record.payload.amr;
+      if (!Array.isArray(amr) || !amr.includes('otp')) return undefined;
+    }
     const clientId = record.payload.clientId;
     const issuedAt = record.payload.iat;
     if (typeof clientId === 'string' && typeof issuedAt === 'number') {

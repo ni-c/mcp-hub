@@ -96,6 +96,7 @@ export function createOidcInteractionRoutes(options: OidcInteractionOptions): Ro
       ? 'Sign-in is disabled: two-factor login is on, but this hub has no usable TOTP secret configured.'
       : 'Sign-in is disabled: this hub has no usable operator password configured.';
   const wrongFactors = factors.requiresCode ? 'Wrong password or code' : 'Wrong password';
+  const sessionScope = factors.requiresCode ? 'totp' : '';
 
   /** What the page may say about who is asking, and what it must not claim. */
   const identityOf = async (clientId: string, resource?: string) => {
@@ -135,7 +136,7 @@ export function createOidcInteractionRoutes(options: OidcInteractionOptions): Ro
             .send(renderLoginPage(details.uid, redirectUri, identity, factors.enabled ? undefined : disabledNotice, factors.requiresCode));
           return;
         }
-        const session = readSessionCookie(req.headers.cookie, store.cookieSecret, secure);
+        const session = readSessionCookie(req.headers.cookie, store.cookieSecret, secure, sessionScope);
         if (!session) {
           expired(res, 401, 'Session expired. Close this window and connect again.');
           return;
@@ -209,7 +210,7 @@ export function createOidcInteractionRoutes(options: OidcInteractionOptions): Ro
       // other origin, path or domain, so nobody can fix a session into this
       // browser from a sibling host. No `domain`, and `path: '/'`, are what the
       // prefix requires.
-      res.cookie(sessionCookieName(secure), createSessionCookie(store.cookieSecret), {
+      res.cookie(sessionCookieName(secure), createSessionCookie(store.cookieSecret, sessionScope), {
         httpOnly: true,
         secure,
         sameSite: 'lax',
@@ -237,7 +238,7 @@ export function createOidcInteractionRoutes(options: OidcInteractionOptions): Ro
         expired(res, 400, 'Authorization request expired. Close this window and connect again.');
         return;
       }
-      const session = readSessionCookie(req.headers.cookie, store.cookieSecret, secure);
+      const session = readSessionCookie(req.headers.cookie, store.cookieSecret, secure, sessionScope);
       if (!session) {
         expired(res, 401, 'Session expired. Close this window and connect again.');
         return;

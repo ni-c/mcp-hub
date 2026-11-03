@@ -130,6 +130,7 @@ export async function createHub(options: HubOptions) {
   // image sets CONFIG_PATH and DATA_PATH, but never EXTERNAL_URL.
   store.rememberExternalUrl(externalUrl);
   const factors = new OperatorFactors(options, store);
+  store.requireSecondFactor(factors.requiresCode);
   announceTwoFactorMode(factors, store.recordTwoFactorMode(factors.mode));
   // A metadata document has to be fetchable over https by a third party, so
   // this mode cannot work behind a plain-http issuer. Say so at boot rather
@@ -234,7 +235,8 @@ export async function createHub(options: HubOptions) {
     resolveResource: resource => canonicalResourceUrl(resource, origin, watcher.current),
     defaultResource: options.defaultResource !== undefined ? resourceUrlForRoute(origin, options.defaultResource) : undefined,
     allowDynamicRegistration: mechanisms.includes('dcr'),
-    cimd
+    cimd,
+    requireSecondFactor: factors.requiresCode
   });
 
   app.use(
@@ -256,7 +258,7 @@ export async function createHub(options: HubOptions) {
   // The upstream callback and the hub's own client metadata document. Mounted
   // after the auth routes so it inherits nothing from them but sits ahead of
   // the /:name catch-all.
-  app.use(createUpstreamRoutes({ store, registry: upstreamAuth, supervisor, watcher, externalUrl }));
+  app.use(createUpstreamRoutes({ store, registry: upstreamAuth, supervisor, watcher, externalUrl, sessionScope: factors.requiresCode ? 'totp' : '' }));
 
   // Registrations age out on a clock, not on traffic, so this cannot wait for
   // the next write to state.json — an idle hub would never clean up at all.
@@ -376,7 +378,11 @@ export async function createHub(options: HubOptions) {
 function announceTwoFactorMode(factors: OperatorFactors, previous: TwoFactorMode | undefined): void {
   if (factors.mode === 'totp' && factors.enabled) console.log('mcp-hub: two-factor login is on — every sign-in needs the password and a TOTP code');
   if (previous === undefined || previous === factors.mode) return;
-  console.warn(factors.mode === 'totp' ? 'mcp-hub: two-factor login was switched on since the last start' : 'mcp-hub: two-factor login was switched off since the last start — the password alone signs in again');
+  console.warn(
+    factors.mode === 'totp'
+      ? 'mcp-hub: two-factor login was switched on since the last start — sessions and refresh tokens from sign-ins without a code are no longer accepted, so every connector signs in once more'
+      : 'mcp-hub: two-factor login was switched off since the last start — the password alone signs in again'
+  );
 }
 
 /** TWO_FACTOR names the second factor; unset or empty means none. */
