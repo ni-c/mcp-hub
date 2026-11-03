@@ -187,3 +187,17 @@
   border: 1px solid var(--vp-c-divider);
   border-radius: 12px;
 }
+
+/* Screenshots that come in a light and a dark variant. */
+.dark .light-only,
+html:not(.dark) .dark-only {
+  display: none;
+}
+.shot {
+  display: block;
+  margin: 1.5rem auto;
+  max-width: 100%;
+  height: auto;
+  border-radius: 12px;
+  box-shadow: 0 8px 30px rgb(0 0 0 / 18%);
+}

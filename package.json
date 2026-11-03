@@ -58,6 +58,7 @@
     "prepublishOnly": "npm test && npm run build",
     "assets": "svg-asset-set",
     "assets:check": "svg-asset-set --check",
+    "assets:unlock": "node scripts/unlock-screenshots.mjs",
     "lint": "oxlint --deny-warnings"
   },
   "dependencies": {

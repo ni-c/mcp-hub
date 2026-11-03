@@ -45,6 +45,14 @@ features:
     link: /reference/hub-tools
     linkText: Meta-tool reference
   - icon:
+      src: /icons/lock.svg
+      width: 26
+      height: 26
+    title: Locked until you say so
+    details: 'Mark a server, or just its dangerous tools, with "unlock" and a model that reaches for it gets a link instead of a result. You unlock it for one call or up to four hours, with your password and an authenticator code, for that connection alone.'
+    link: /guide/unlock
+    linkText: Locked servers
+  - icon:
       src: /icons/ask.svg
       width: 26
       height: 26
@@ -85,6 +93,18 @@ features:
     link: /guide/architecture
     linkText: Architecture
 ---
+
+## Locked until you say so
+
+A shell, a mailbox that sends, your DNS: `"unlock": true` keeps such a server
+shut until you open it. The model's call ends at this page, which shows what
+asked and with which arguments, and opens the server for that connection only,
+after your password and, with [two-factor login](/guide/two-factor), a code.
+
+<img class="light-only shot" src="/unlock-light.png" alt="The unlock page: server, client, matching code, the call that asked with its arguments, a duration select, password and code fields, Unlock and Deny" width="640">
+<img class="dark-only shot" src="/unlock-dark.png" alt="The unlock page in dark mode" width="640">
+
+[How locked servers work →](/guide/unlock)
 
 ## The shape of it
 
