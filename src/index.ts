@@ -27,7 +27,8 @@ import { canonicalResourceUrl, resourceUrlForRoute } from './auth/resource.js';
 import { ClientRequestGate } from './limits.js';
 import { runStdio } from './stdio.js';
 import { isMainModule } from './main-module.js';
-import { CONFIG_POLL_INTERVAL_MS, IDLE_TIMEOUT_MS } from './timings.js';
+import { CONFIG_POLL_INTERVAL_MS, IDLE_TIMEOUT_MS, UNLOCK_SWEEP_INTERVAL_MS } from './timings.js';
+import { UnlockSweep } from './unlock/sweep.js';
 import { UnlockGate } from './unlock/gate.js';
 import { createUnlockRoutes } from './unlock/routes.js';
 import { describeLock } from './unlock/policy.js';
@@ -158,13 +159,15 @@ export async function createHub(options: HubOptions) {
   // change worth relaying is a child's tool list moving; the supervisor
   // publishes those here.
   const unlockRuntime = new UnlockRuntime();
+  const unlockSweep = new UnlockSweep({ store, server: name => supervisor.get(name), intervalMs: UNLOCK_SWEEP_INTERVAL_MS });
   const unlockGate = new UnlockGate({
     store,
     runtime: unlockRuntime,
     externalUrl,
     canUnlock: () => factors.enabled,
     secret: store.cookieSecret,
-    clientName: clientId => store.getApproval(clientId)?.clientName
+    clientName: clientId => store.getApproval(clientId)?.clientName,
+    poke: () => unlockSweep.poke()
   });
   announceLocks(config);
   const hubRoute = createRoute(era => buildHubServer(supervisor, store.cookieSecret, era, unlockGate).server, {
@@ -287,7 +290,8 @@ export async function createHub(options: HubOptions) {
       factors,
       secret: store.cookieSecret,
       policyFor: server => watcher.current.get(server)?.unlock,
-      lockedServers: () => [...watcher.current].filter(([, server]) => server.unlock).map(([name]) => name)
+      lockedServers: () => [...watcher.current].filter(([, server]) => server.unlock).map(([name]) => name),
+      poke: () => unlockSweep.poke()
     })
   );
 
@@ -308,8 +312,10 @@ export async function createHub(options: HubOptions) {
   sweepClients();
   const pruneTimer = setInterval(sweepClients, CLIENT_PRUNE_INTERVAL_MS);
   pruneTimer.unref(); // never a reason to keep the process alive
+  unlockSweep.start();
   const stopMaintenance = () => {
     clearInterval(pruneTimer);
+    unlockSweep.stop();
     // The aggregate's handler holds whatever listen streams are open on /hub;
     // nothing else closes it, because it is not owned by a ManagedServer.
     void hubRoute.close().catch(() => {});
@@ -403,7 +409,7 @@ export async function createHub(options: HubOptions) {
     res.status(500).json({ jsonrpc: '2.0', error: { code: -32603, message: 'Internal error' }, id: null });
   });
 
-  return { app, supervisor, watcher, verifier, store, upstreamAuth, stopMaintenance, unlockGate, unlockRuntime };
+  return { app, supervisor, watcher, verifier, store, upstreamAuth, stopMaintenance, unlockGate, unlockRuntime, unlockSweep };
 }
 
 function announceLocks(config: HubConfig): void {

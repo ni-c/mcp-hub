@@ -131,12 +131,14 @@ function buildProxyServer(managed: ManagedServer, secret: string, era: Era, gate
   ): Promise<StandardSchemaV1.InferOutput<S>> => {
     const client = managed.client;
     if (!client) throw new Error(`Server "${managed.name}" is not running`);
-    return client
-      .request(request as Parameters<NonNullable<ManagedServer['client']>['request']>[0], resultSchema, {
-        ...ABSOLUTE_CALL_OPTIONS,
-        ...options
-      })
-      .then(assertForwardedResultSize);
+    return managed.track(
+      client
+        .request(request as Parameters<NonNullable<ManagedServer['client']>['request']>[0], resultSchema, {
+          ...ABSOLUTE_CALL_OPTIONS,
+          ...options
+        })
+        .then(assertForwardedResultSize)
+    );
   };
   // Real usage: wakes a sleeping on-demand server (blocking until it is up)
   // and resets its idle window. Everything else is answered without a child.

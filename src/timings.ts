@@ -58,6 +58,9 @@ export const IDLE_SWEEP_INTERVAL_MS = positiveIntegerEnv('MCP_IDLE_SWEEP_INTERVA
  */
 export const CONFIG_POLL_INTERVAL_MS = positiveIntegerEnv('MCP_CONFIG_POLL_INTERVAL_MS', 3_000);
 
+/** How often the hub looks for unlocks that ended, including ones the admin CLI ended. */
+export const UNLOCK_SWEEP_INTERVAL_MS = positiveIntegerEnv('MCP_UNLOCK_SWEEP_INTERVAL_MS', 5_000);
+
 /**
  * Idle timeout in milliseconds, when minutes are too coarse.
  *

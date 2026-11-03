@@ -846,6 +846,43 @@ export class ManagedServer {
     await channel?.close().catch(() => {});
   }
 
+  private inflight = 0;
+  private readonly idleWaiters: Array<() => void> = [];
+
+  /** Counts a forwarded request until it settles, so a lock can wait for the calls already running. */
+  track<T>(work: Promise<T>): Promise<T> {
+    this.inflight++;
+    return work.finally(() => {
+      this.inflight--;
+      if (this.inflight === 0) for (const wake of this.idleWaiters.splice(0)) wake();
+    });
+  }
+
+  /** Resolves when no tracked request is running, or after `timeoutMs` at the latest. */
+  whenIdle(timeoutMs: number): Promise<void> {
+    if (this.inflight === 0) return Promise.resolve();
+    return new Promise(resolve => {
+      const timer = setTimeout(resolve, timeoutMs);
+      timer.unref();
+      this.idleWaiters.push(() => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+  }
+
+  /** Ends what a running child holds: an on-demand child sleeps, an always-on one restarts, a remote or socket one is left alone. */
+  async recycle(): Promise<'slept' | 'restarted' | 'kept'> {
+    if (this.config.kind === 'remote' || this.config.kind === 'socket' || this.state !== 'up') return 'kept';
+    if (this.onDemand) {
+      await this.sleep();
+      return 'slept';
+    }
+    await this.shutdown();
+    await this.start();
+    return 'restarted';
+  }
+
   /** Same teardown as stop(), but the server stays wakeable. */
   async sleep(): Promise<void> {
     if (this.state === 'sleeping' || this.state === 'stopped') return;

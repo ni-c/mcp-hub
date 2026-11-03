@@ -133,12 +133,14 @@ export async function forwardToolCall({
     resultSchema: S,
     options: Partial<Parameters<typeof client.request>[2]> = {}
   ): Promise<unknown> =>
-    client
-      .request({ method: 'tools/call', params: body } as Parameters<typeof client.request>[0], resultSchema, {
-        ...ABSOLUTE_CALL_OPTIONS,
-        ...options
-      })
-      .then(assertForwardedResultSize);
+    managed.track(
+      client
+        .request({ method: 'tools/call', params: body } as Parameters<typeof client.request>[0], resultSchema, {
+          ...ABSOLUTE_CALL_OPTIONS,
+          ...options
+        })
+        .then(assertForwardedResultSize)
+    );
 
   // `RequestMetaEnvelope` is published as `{}`, so the reserved keys cannot be
   // reached through it by name. The constant is the SDK's own, and the value it
