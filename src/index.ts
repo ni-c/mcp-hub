@@ -27,7 +27,7 @@ import { canonicalResourceUrl, resourceUrlForRoute } from './auth/resource.js';
 import { ClientRequestGate } from './limits.js';
 import { runStdio } from './stdio.js';
 import { isMainModule } from './main-module.js';
-import { IDLE_TIMEOUT_MS } from './timings.js';
+import { CONFIG_POLL_INTERVAL_MS, IDLE_TIMEOUT_MS } from './timings.js';
 
 export interface HubOptions {
   externalUrl: string;
@@ -100,7 +100,8 @@ export async function createHub(options: HubOptions) {
   // Bound tokens are the default: an unbound token reaches every MCP path, so
   // the safe behaviour must be the one you get without asking for it.
   const requireResource = options.requireResourceBoundTokens ?? true;
-  const config = loadConfig(options.configPath);
+  const parseOptions = { warn: (message: string) => console.warn(message) };
+  const config = loadConfig(options.configPath, process.env, parseOptions);
   warnMutableDockerImages(config);
   warnSingleFileMount(options.configPath, 'mcp-hub');
   if (options.defaultResource !== undefined) {
@@ -163,7 +164,7 @@ export async function createHub(options: HubOptions) {
     .reapOrphans()
     .catch(error => console.error(`mcp-hub: could not reap sandbox containers: ${(error as Error).message}`));
 
-  const watcher = new ConfigWatcher(options.configPath, config);
+  const watcher = new ConfigWatcher(options.configPath, config, process.env, CONFIG_POLL_INTERVAL_MS, parseOptions);
   watcher.on('change', (next, diff) => {
     warnMutableDockerImages(next);
     console.log(`mcp-hub: config changed (added: ${diff.added.join(',') || '-'} removed: ${diff.removed.join(',') || '-'} changed: ${diff.changed.join(',') || '-'})`);

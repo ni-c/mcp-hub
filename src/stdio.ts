@@ -11,7 +11,9 @@ import { buildHubServer } from './hub.js';
 import type { Era } from './proxy.js';
 import { isMainModule } from './main-module.js';
 import { SubscriptionRegistry } from './subscriptions.js';
-import { IDLE_TIMEOUT_MS } from './timings.js';
+import { CONFIG_POLL_INTERVAL_MS, IDLE_TIMEOUT_MS } from './timings.js';
+
+const parseOptions = { warn: (message: string) => console.warn(message) };
 
 export interface StdioHubOptions {
   /** Path to the mcp.json. A missing file starts an empty hub instead of failing. */
@@ -64,7 +66,7 @@ function toStderr(...args: unknown[]): void {
  */
 function loadOrEmpty(configPath: string): HubConfig {
   try {
-    return loadConfig(configPath);
+    return loadConfig(configPath, process.env, parseOptions);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     console.warn(`mcp-hub: no config at ${configPath} — starting with no servers`);
@@ -131,7 +133,7 @@ export function createStdioHub(options: StdioHubOptions) {
     .reapOrphans()
     .catch(error => console.error(`mcp-hub: could not reap sandbox containers: ${(error as Error).message}`));
 
-  const watcher = new ConfigWatcher(options.configPath, config);
+  const watcher = new ConfigWatcher(options.configPath, config, process.env, CONFIG_POLL_INTERVAL_MS, parseOptions);
   watcher.on('change', (next, diff) => {
     warnMutableDockerImages(next);
     console.log(`mcp-hub: config changed (added: ${diff.added.join(',') || '-'} removed: ${diff.removed.join(',') || '-'} changed: ${diff.changed.join(',') || '-'})`);

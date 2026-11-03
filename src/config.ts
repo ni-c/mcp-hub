@@ -197,6 +197,45 @@ export function expandEnvVars(value: string, env: NodeJS.ProcessEnv = process.en
  */
 export interface ParseOptions {
   expand?: boolean;
+  /** Receives a line about keys a server entry carries that the hub ignores. */
+  warn?: (message: string) => void;
+}
+
+const COMMON_KEYS = ['type', 'hub', 'allowTools', 'denyTools', 'passthrough', 'subscriptions'];
+const LIFECYCLE_KEYS = ['keepAlive', 'idleMinutes'];
+const KNOWN_KEYS: Record<ServerConfig['kind'], ReadonlySet<string>> = {
+  stdio: new Set([...COMMON_KEYS, ...LIFECYCLE_KEYS, 'command', 'args', 'env']),
+  remote: new Set([...COMMON_KEYS, 'url', 'headers', 'oauth']),
+  docker: new Set([
+    ...COMMON_KEYS,
+    ...LIFECYCLE_KEYS,
+    'image',
+    'pull',
+    'command',
+    'entrypoint',
+    'env',
+    'secretsFrom',
+    'volumes',
+    'ports',
+    'network',
+    'memory',
+    'pidsLimit',
+    'cpus',
+    'readOnly',
+    'tmpfs',
+    'user'
+  ]),
+  socket: new Set([...COMMON_KEYS, 'socket', 'host', 'port'])
+};
+
+/** A typo in a key reads as "setting absent", so it is said out loud rather than ignored. */
+function warnUnknownKeys(name: string, entry: Record<string, unknown>, parsed: ServerConfig, options: ParseOptions | undefined): void {
+  if (!options?.warn) return;
+  const unknown = Object.keys(entry).filter(key => !KNOWN_KEYS[parsed.kind].has(key));
+  if (unknown.length === 0) return;
+  options.warn(
+    `mcp-hub: server "${name}" has ${unknown.length === 1 ? 'a key' : 'keys'} the hub ignores: ${unknown.map(key => JSON.stringify(key)).join(', ')} — check for a typo`
+  );
 }
 
 type ExpandFn = (value: string) => string;
@@ -633,7 +672,9 @@ export function parseConfig(json: string, env: NodeJS.ProcessEnv = process.env, 
     if (typeof entry !== 'object' || entry === null) {
       throw new ConfigError(`Server "${name}" must be an object`);
     }
-    result.set(name, parseServer(name, entry, env, options));
+    const parsed = parseServer(name, entry, env, options);
+    warnUnknownKeys(name, entry, parsed, options);
+    result.set(name, parsed);
   }
   return result;
 }
