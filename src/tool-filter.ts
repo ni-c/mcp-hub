@@ -22,7 +22,7 @@ export function hasToolFilter(config: ToolFilterConfig): boolean {
   return config.allowTools !== undefined || config.denyTools !== undefined;
 }
 
-function matches(patterns: readonly string[], name: string): boolean {
+export function matches(patterns: readonly string[], name: string): boolean {
   return patterns.some(pattern => (pattern.endsWith('*') ? name.startsWith(pattern.slice(0, -1)) : name === pattern));
 }
 

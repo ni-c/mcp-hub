@@ -5,6 +5,8 @@ import path from 'node:path';
 import type { ToolFilterConfig } from './tool-filter.js';
 import type { PassthroughConfig } from './elicitation.js';
 import type { SubscriptionsConfig } from './subscriptions.js';
+import { UNLOCK_MAX_MINUTES } from './unlock/policy.js';
+import type { UnlockConfig } from './unlock/policy.js';
 import { CONFIG_POLL_INTERVAL_MS } from './timings.js';
 
 /**
@@ -18,7 +20,7 @@ import { CONFIG_POLL_INTERVAL_MS } from './timings.js';
  * local server from on-demand lifecycling) and `idleMinutes` (per-server
  * override of the global idle timeout).
  */
-export interface StdioServerConfig extends ToolFilterConfig, PassthroughConfig, SubscriptionsConfig {
+export interface StdioServerConfig extends ToolFilterConfig, PassthroughConfig, SubscriptionsConfig, UnlockConfig {
   kind: 'stdio';
   command: string;
   args: string[];
@@ -62,7 +64,7 @@ export const OAUTH_MODES = new Set(['static', 'dcr', 'cimd']);
 export const OAUTH_GRANTS = new Set(['authorization_code', 'client_credentials']);
 export const OAUTH_CLIENT_AUTH = new Set(['client_secret_basic', 'client_secret_post', 'private_key_jwt']);
 
-export interface RemoteServerConfig extends ToolFilterConfig, PassthroughConfig, SubscriptionsConfig {
+export interface RemoteServerConfig extends ToolFilterConfig, PassthroughConfig, SubscriptionsConfig, UnlockConfig {
   kind: 'remote';
   transport: 'http' | 'sse';
   url: string;
@@ -85,7 +87,7 @@ export interface RemoteServerConfig extends ToolFilterConfig, PassthroughConfig,
  * (the hub supervises). A knob that can only weaken the sandbox is a knob the
  * policy would have to defend.
  */
-export interface DockerServerConfig extends ToolFilterConfig, PassthroughConfig, SubscriptionsConfig {
+export interface DockerServerConfig extends ToolFilterConfig, PassthroughConfig, SubscriptionsConfig, UnlockConfig {
   kind: 'docker';
   image: string;
   /** `never` (default) fails when the image is absent; `missing` lets the hub pull it. */
@@ -126,7 +128,7 @@ export interface DockerServerConfig extends ToolFilterConfig, PassthroughConfig,
  * started by whoever owns the Compose file, and the hub needs no Docker access
  * at all. A Unix socket in a shared volume even works with `network_mode: none`.
  */
-export interface SocketServerConfig extends ToolFilterConfig, PassthroughConfig, SubscriptionsConfig {
+export interface SocketServerConfig extends ToolFilterConfig, PassthroughConfig, SubscriptionsConfig, UnlockConfig {
   kind: 'socket';
   transport: 'unix' | 'tcp';
   socketPath?: string;
@@ -163,7 +165,9 @@ const RESERVED_NAMES = new Set([
   'userinfo',
   // The upstream OAuth callback lives under /upstream/…; a server of that name
   // would be reachable at /upstream and is too close for comfort.
-  'upstream'
+  'upstream',
+  // The pages that unlock a locked server.
+  'unlock'
 ]);
 const REMOTE_TYPES = new Set(['http', 'sse', 'streamable-http', 'streamable_http']);
 const SECRETS_NAME_PATTERN = /^[a-zA-Z0-9_-]+$/;
@@ -201,7 +205,7 @@ export interface ParseOptions {
   warn?: (message: string) => void;
 }
 
-const COMMON_KEYS = ['type', 'hub', 'allowTools', 'denyTools', 'passthrough', 'subscriptions'];
+const COMMON_KEYS = ['type', 'hub', 'allowTools', 'denyTools', 'passthrough', 'subscriptions', 'unlock'];
 const LIFECYCLE_KEYS = ['keepAlive', 'idleMinutes'];
 const KNOWN_KEYS: Record<ServerConfig['kind'], ReadonlySet<string>> = {
   stdio: new Set([...COMMON_KEYS, ...LIFECYCLE_KEYS, 'command', 'args', 'env']),
@@ -396,21 +400,24 @@ function parseToolFilter(name: string, entry: Record<string, unknown>): ToolFilt
   const result: ToolFilterConfig = {};
   for (const field of ['allowTools', 'denyTools'] as const) {
     if (entry[field] === undefined) continue;
-    const patterns = requireStringArray(name, field, entry[field]);
-    for (const pattern of patterns) {
-      if (pattern.length === 0) {
-        throw new ConfigError(`Server "${name}": "${field}" must not contain an empty string`);
-      }
-      const star = pattern.indexOf('*');
-      if (star !== -1 && star !== pattern.length - 1) {
-        throw new ConfigError(
-          `Server "${name}": "${field}" entry "${pattern}" — only a trailing "*" is supported (e.g. "list_*"); other entries are exact tool names`
-        );
-      }
-    }
-    result[field] = patterns;
+    result[field] = validatePatterns(name, field, requireStringArray(name, field, entry[field]));
   }
   return result;
+}
+
+function validatePatterns(name: string, field: string, patterns: string[]): string[] {
+  for (const pattern of patterns) {
+    if (pattern.length === 0) {
+      throw new ConfigError(`Server "${name}": "${field}" must not contain an empty string`);
+    }
+    const star = pattern.indexOf('*');
+    if (star !== -1 && star !== pattern.length - 1) {
+      throw new ConfigError(
+        `Server "${name}": "${field}" entry "${pattern}" — only a trailing "*" is supported (e.g. "list_*"); other entries are exact tool names`
+      );
+    }
+  }
+  return patterns;
 }
 
 /**
@@ -454,6 +461,30 @@ function parseSubscriptions(name: string, entry: Record<string, unknown>): Subsc
     throw new ConfigError(`Server "${name}": "subscriptions" must be "auto" or "off"`);
   }
   return { subscriptions: entry.subscriptions };
+}
+
+/** `unlock`: true locks every tool; an object names the tools and caps the duration. Strict, so a typo cannot leave a lock off. */
+function parseUnlock(name: string, entry: Record<string, unknown>): UnlockConfig {
+  const value = entry.unlock;
+  if (value === undefined || value === false) return {};
+  if (value === true) return { unlock: { tools: ['*'], maxMinutes: UNLOCK_MAX_MINUTES } };
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new ConfigError(`Server "${name}": "unlock" must be true, false or an object with "tools" and "maxMinutes"`);
+  }
+  const fields = value as Record<string, unknown>;
+  const unknown = Object.keys(fields).filter(key => key !== 'tools' && key !== 'maxMinutes');
+  if (unknown.length > 0) {
+    throw new ConfigError(`Server "${name}": unknown "unlock" field(s) ${unknown.map(key => JSON.stringify(key)).join(', ')} (supported: tools, maxMinutes)`);
+  }
+  const tools = fields.tools === undefined ? ['*'] : validatePatterns(name, 'unlock.tools', requireStringArray(name, 'unlock.tools', fields.tools));
+  if (tools.length === 0) {
+    throw new ConfigError(`Server "${name}": "unlock.tools" must name at least one tool, or "*" for all of them`);
+  }
+  const maxMinutes = fields.maxMinutes ?? UNLOCK_MAX_MINUTES;
+  if (!Number.isSafeInteger(maxMinutes) || (maxMinutes as number) < 0 || (maxMinutes as number) > UNLOCK_MAX_MINUTES) {
+    throw new ConfigError(`Server "${name}": "unlock.maxMinutes" must be a whole number from 0 (only single calls) to ${UNLOCK_MAX_MINUTES}`);
+  }
+  return { unlock: { tools, maxMinutes: maxMinutes as number } };
 }
 
 function rejectLifecycle(name: string, entry: Record<string, unknown>, kind: string): void {
@@ -585,7 +616,7 @@ function parseSocketServer(name: string, entry: Record<string, unknown>, type: '
 function parseServer(name: string, entry: Record<string, unknown>, env: NodeJS.ProcessEnv, options?: ParseOptions): ServerConfig {
   const expand = expanderFor(env, options);
   const hub = entry.hub !== false;
-  const toolFilter = { ...parseToolFilter(name, entry), ...parsePassthrough(name, entry), ...parseSubscriptions(name, entry) };
+  const toolFilter = { ...parseToolFilter(name, entry), ...parsePassthrough(name, entry), ...parseSubscriptions(name, entry), ...parseUnlock(name, entry) };
   if (entry.hub !== undefined && typeof entry.hub !== 'boolean') {
     throw new ConfigError(`Server "${name}": "hub" must be a boolean`);
   }
