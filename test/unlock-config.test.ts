@@ -1,9 +1,15 @@
+import { createHash } from 'node:crypto';
+import path from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
-import { parseConfig } from '../src/config.js';
+import { diffConfigs, parseConfig } from '../src/config.js';
+import { Supervisor } from '../src/supervisor.js';
+import { ToolCache } from '../src/tool-cache.js';
 import { defaultDuration, describeLock, durationChoices, locksTool, locksWholeServer, unmatchedUnlockPatterns } from '../src/unlock/policy.js';
 import type { UnlockPolicy } from '../src/unlock/policy.js';
 
+const EVERYTHING = path.resolve('node_modules/@modelcontextprotocol/server-everything/dist/index.js');
 const parse = (unlock: unknown, extra: Record<string, unknown> = {}) =>
   parseConfig(JSON.stringify({ mcpServers: { ssh: { command: 'ssh-mcp', unlock, ...extra } } }), {}).get('ssh')!;
 
@@ -122,5 +128,46 @@ describe('unlock policy', () => {
   it('describes a lock for log lines and pages', () => {
     expect(describeLock(whole)).toBe('all tools');
     expect(describeLock(listed)).toBe('send_mail, reply_*');
+  });
+});
+
+const config = (unlock: unknown) => parseConfig(JSON.stringify({ mcpServers: { a: { command: 'x', ...(unlock === undefined ? {} : { unlock }) } } }), {});
+
+describe('changing unlock settings', () => {
+  it('retunes the server when only the settings move', () => {
+    expect(diffConfigs(config({ tools: ['a'] }), config({ tools: ['a', 'b'], maxMinutes: 60 }))).toEqual({ added: [], removed: [], changed: [], retuned: ['a'] });
+  });
+
+  it('restarts the server when the lock comes or goes', () => {
+    expect(diffConfigs(config(undefined), config(true))).toEqual({ added: [], removed: [], changed: ['a'] });
+    expect(diffConfigs(config(true), config(undefined))).toEqual({ added: [], removed: [], changed: ['a'] });
+  });
+
+  it('sees no change between two spellings of the same lock', () => {
+    expect(diffConfigs(config(true), config({ tools: ['*'], maxMinutes: 240 }))).toEqual({ added: [], removed: [], changed: [] });
+  });
+
+  it('keeps the tool snapshot of a server across a retune, and the fingerprint of a server without a lock as it was', () => {
+    const plain = config(undefined).get('a')!;
+    expect(ToolCache.fingerprint(plain)).toBe(createHash('sha256').update(JSON.stringify(plain)).digest('hex'));
+    expect(ToolCache.fingerprint(config({ tools: ['a'] }).get('a')!)).toBe(ToolCache.fingerprint(config({ tools: ['b'], maxMinutes: 5 }).get('a')!));
+    expect(ToolCache.fingerprint(config(true).get('a')!)).not.toBe(ToolCache.fingerprint(plain));
+  });
+
+  it('applies a retune to the running server without replacing it', async () => {
+    const before = parseConfig(JSON.stringify({ mcpServers: { e: { command: process.execPath, args: [EVERYTHING], unlock: { tools: ['echo'] } } } }), {});
+    const after = parseConfig(JSON.stringify({ mcpServers: { e: { command: process.execPath, args: [EVERYTHING], unlock: { tools: ['get-*'] } } } }), {});
+    const supervisor = new Supervisor(before, { idleTimeoutMinutes: 0 });
+    try {
+      await supervisor.start();
+      await supervisor.waitUntilSettled();
+      const running = supervisor.get('e')!;
+      await supervisor.applyDiff(after, diffConfigs(before, after));
+      expect(supervisor.get('e')).toBe(running);
+      expect(running.state).toBe('up');
+      expect(running.config.unlock?.tools).toEqual(['get-*']);
+    } finally {
+      await supervisor.stop();
+    }
   });
 });

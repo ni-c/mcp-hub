@@ -167,7 +167,7 @@ export async function createHub(options: HubOptions) {
   const watcher = new ConfigWatcher(options.configPath, config, process.env, CONFIG_POLL_INTERVAL_MS, parseOptions);
   watcher.on('change', (next, diff) => {
     warnMutableDockerImages(next);
-    console.log(`mcp-hub: config changed (added: ${diff.added.join(',') || '-'} removed: ${diff.removed.join(',') || '-'} changed: ${diff.changed.join(',') || '-'})`);
+    console.log(`mcp-hub: config changed (added: ${diff.added.join(',') || '-'} removed: ${diff.removed.join(',') || '-'} changed: ${diff.changed.join(',') || '-'}${diff.retuned ? ` unlock settings: ${diff.retuned.join(',')}` : ''})`);
     void supervisor.applyDiff(next, diff);
   });
   watcher.on('error', error => console.error(`mcp-hub: ignoring broken config update: ${(error as Error).message}`));

@@ -728,16 +728,27 @@ export interface ConfigDiff {
   added: string[];
   removed: string[];
   changed: string[];
+  /** Servers whose `unlock` settings changed and nothing else: applied in place, without a restart. */
+  retuned?: string[];
+}
+
+/** What a restart depends on: the presence of `unlock` restarts a child, its contents do not. */
+export function restartFingerprint(config: ServerConfig): string {
+  return JSON.stringify(config.unlock === undefined ? config : { ...config, unlock: true });
 }
 
 export function diffConfigs(before: HubConfig, after: HubConfig): ConfigDiff {
   const added = [...after.keys()].filter(name => !before.has(name));
   const removed = [...before.keys()].filter(name => !after.has(name));
-  const changed = [...after.keys()].filter(name => {
-    const a = before.get(name);
-    return a !== undefined && JSON.stringify(a) !== JSON.stringify(after.get(name));
-  });
-  return { added, removed, changed };
+  const changed: string[] = [];
+  const retuned: string[] = [];
+  for (const [name, next] of after) {
+    const previous = before.get(name);
+    if (previous === undefined) continue;
+    if (restartFingerprint(previous) !== restartFingerprint(next)) changed.push(name);
+    else if (JSON.stringify(previous) !== JSON.stringify(next)) retuned.push(name);
+  }
+  return { added, removed, changed, ...(retuned.length > 0 ? { retuned } : {}) };
 }
 
 /**
@@ -792,7 +803,7 @@ export class ConfigWatcher extends EventEmitter {
       return;
     }
     const diff = diffConfigs(this.current, next);
-    if (diff.added.length === 0 && diff.removed.length === 0 && diff.changed.length === 0) return;
+    if (diff.added.length === 0 && diff.removed.length === 0 && diff.changed.length === 0 && !diff.retuned) return;
     this.current = next;
     this.emit('change', next, diff);
   }

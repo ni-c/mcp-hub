@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import type { Implementation, ServerCapabilities, Tool } from '@modelcontextprotocol/server';
+import { restartFingerprint } from './config.js';
 import type { ServerConfig } from './config.js';
 
 const CACHE_VERSION = 1;
@@ -39,7 +40,7 @@ export class ToolCache {
   constructor(readonly filePath: string) {}
 
   static fingerprint(config: ServerConfig): string {
-    return createHash('sha256').update(JSON.stringify(config)).digest('hex');
+    return createHash('sha256').update(restartFingerprint(config)).digest('hex');
   }
 
   /** A corrupt or foreign-version file must never take the hub down — it only costs a warm start. */

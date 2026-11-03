@@ -1074,6 +1074,11 @@ export class Supervisor {
 
   async applyDiff(config: HubConfig, diff: ConfigDiff): Promise<void> {
     this.config = config;
+    for (const name of diff.retuned ?? []) {
+      const server = this.servers.get(name);
+      const cfg = config.get(name);
+      if (server && cfg) server.config = cfg;
+    }
     for (const name of [...diff.removed, ...diff.changed]) {
       const server = this.servers.get(name);
       if (server) {
