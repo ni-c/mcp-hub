@@ -25,7 +25,10 @@ export function base32Encode(bytes: Uint8Array): string {
 
 /** Case, spaces and trailing padding are forgiven; anything else outside the alphabet is not. */
 export function base32Decode(text: string): Buffer | undefined {
-  const cleaned = text.replace(/\s+/g, '').toUpperCase().replace(/=+$/, '');
+  let cleaned = text.replace(/\s+/g, '').toUpperCase();
+  let end = cleaned.length;
+  while (end > 0 && cleaned[end - 1] === '=') end--;
+  cleaned = cleaned.slice(0, end);
   const bytes: number[] = [];
   let bits = 0;
   let value = 0;
@@ -80,9 +83,9 @@ export interface TotpSecret {
 export function parseTotpSecret(raw: string | undefined): TotpSecret {
   if (raw === undefined || raw.trim() === '') return { problem: 'TOTP_SECRET is not set' };
   const key = base32Decode(raw);
-  if (!key) return { problem: `TOTP_SECRET is not Base32 (a ${raw.trim().length}-character value)` };
+  if (!key) return { problem: 'TOTP_SECRET is not Base32 (A–Z and 2–7, spaces and padding allowed)' };
   if (key.length < MIN_SECRET_BYTES) {
-    return { problem: `TOTP_SECRET holds ${key.length} bytes; at least ${MIN_SECRET_BYTES} (160 bits) are required — generate one with mcp-hub-admin totp init` };
+    return { problem: `TOTP_SECRET is shorter than ${MIN_SECRET_BYTES} bytes (160 bits) — generate one with mcp-hub-admin totp init` };
   }
   return { key };
 }

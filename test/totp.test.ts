@@ -112,6 +112,14 @@ describe('base32', () => {
     expect(base32Decode(text)).toBeUndefined();
   });
 
+  it('stays linear on a long run of padding that is not at the end', () => {
+    const hostile = `${'='.repeat(100_000)}x`;
+    const started = performance.now();
+    expect(base32Decode(hostile)).toBeUndefined();
+    expect(base32Decode(`MZXW6YTBOI${'='.repeat(100_000)}`)?.toString()).toBe('foobar');
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+
   it('round-trips random bytes', () => {
     for (let length = 0; length < 40; length++) {
       const bytes = Buffer.from(Array.from({ length }, (_, i) => (i * 37 + length) & 0xff));
@@ -145,7 +153,7 @@ describe('parseTotpSecret', () => {
 
   it('refuses a secret under 160 bits', () => {
     const short = base32Encode(Buffer.alloc(16, 7));
-    expect(parseTotpSecret(short)).toEqual({ problem: expect.stringContaining('16 bytes') });
+    expect(parseTotpSecret(short)).toEqual({ problem: expect.stringContaining('shorter than 20 bytes') });
   });
 
   it('accepts 160 bits and more, in pasted form', () => {

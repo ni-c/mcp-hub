@@ -168,7 +168,7 @@ describe('two-factor login on without a usable secret', () => {
       const { hub } = await startHub({ twoFactor: 'totp', totpSecret: 'too-short' });
       try {
         expect(warn.mock.calls.map(call => String(call[0]))).toContain(
-          'mcp-hub: TWO_FACTOR=totp but TOTP_SECRET is not Base32 (a 9-character value) — the operator login is disabled, no client can be approved'
+          'mcp-hub: TWO_FACTOR=totp but TOTP_SECRET is not Base32 (A–Z and 2–7, spaces and padding allowed) — the operator login is disabled, no client can be approved'
         );
         const page = await openLoginPage(hub);
         expect(page.status).toBe(503);

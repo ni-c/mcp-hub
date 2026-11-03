@@ -72,7 +72,7 @@ describe('OperatorFactors, configuration', () => {
     ['missing', undefined, 'TOTP_SECRET is not set'],
     ['empty', '  ', 'TOTP_SECRET is not set'],
     ['not Base32', '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!', 'not Base32'],
-    ['too short', base32Encode(Buffer.alloc(10, 1)), '10 bytes']
+    ['too short', base32Encode(Buffer.alloc(10, 1)), 'shorter than 20 bytes']
   ])('disables the login when on and the secret is %s', (_label, totpSecret, reason) => {
     const broken = factors({ totpSecret });
     expect(broken.enabled).toBe(false);
