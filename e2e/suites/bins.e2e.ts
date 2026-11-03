@@ -238,6 +238,15 @@ describe.runIf(RUNS_HERE)('mcp-hub-admin, the CLI nothing used to call', () => {
     expect(result.stderr).toContain('█');
   });
 
+  it('lists, refuses and revokes unlocks without a running page', async () => {
+    expect(JSON.parse((await gateway.admin(['unlock', 'list'])).stdout)).toEqual([]);
+    const refused = await gateway.admin(['unlock', 'grant', 'ok', '30', '--client', 'nobody']);
+    expect(refused.code).toBe(2);
+    expect(refused.stderr).toContain('is not locked');
+    const revoked = await gateway.admin(['unlock', 'revoke', 'ok']);
+    expect(JSON.parse(revoked.stdout)).toEqual({ server: 'ok', ended: 0 });
+  });
+
   it('adds, lists, revokes and deletes a client', async () => {
     const added = await gateway.admin(['clients', 'add', '--name', 'operator-managed', '--redirect-uri', 'https://example.invalid/cb']);
     expect(added.code).toBe(0);

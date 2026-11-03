@@ -8,6 +8,7 @@ import { isClientIdMetadataUrl } from './auth/cimd.js';
 import { mintApiToken } from './auth/api-tokens.js';
 import { base32Decode, verifyTotp } from './auth/totp.js';
 import { prepareTotpSetup, totpAccountLabel } from './auth/totp-setup.js';
+import { planGrant } from './unlock/cli.js';
 import { loadConfig } from './config.js';
 import type { UpstreamAuth } from './upstream/auth.js';
 import { authFor, requireOAuthServer, startUpstreamLogin, upstreamStatus } from './upstream/login.js';
@@ -31,6 +32,9 @@ function usage(): never {
       '  mcp-hub-admin upstream refresh <server>    (renew the token now)',
       '  mcp-hub-admin upstream logout <server>     (forget it here and revoke it there)',
       '  mcp-hub-admin totp init [--label <name>] [--light] [--no-confirm] [--force]',
+      '  mcp-hub-admin unlock list',
+      '  mcp-hub-admin unlock grant <server> <minutes> --client <client-id>   (every authorization of the client)',
+      '  mcp-hub-admin unlock revoke <server> [--client <client-id>]',
       '',
       'tokens create needs EXTERNAL_URL in the environment (same value the hub runs with).',
       'upstream commands read CONFIG_PATH; run them inside the hub container so the',
@@ -298,6 +302,35 @@ if (group === 'tokens' && action === 'revoke') {
     process.exit(1);
   }
   console.log(JSON.stringify({ id, revoked: true }, null, 2));
+  process.exit(0);
+}
+
+if (group === 'unlock' && action === 'list') {
+  console.log(JSON.stringify(store.unlockGrants(), null, 2));
+  process.exit(0);
+}
+
+if (group === 'unlock' && (action === 'grant' || action === 'revoke')) {
+  const configPath = process.env.CONFIG_PATH ?? '/config/mcp.json';
+  let config;
+  try {
+    config = loadConfig(configPath);
+  } catch (error) {
+    fail(`Cannot read ${configPath}: ${(error as Error).message}`);
+  }
+  const [server, minutes] = rest.filter(argument => !argument.startsWith('--') && argument !== flag(rest, 'client'));
+  const clientId = flag(rest, 'client');
+  if (action === 'grant') {
+    const plan = planGrant({ config, store, server, minutes, clientId });
+    if (typeof plan === 'string') fail(plan);
+    const id = store.addUnlockGrant(plan);
+    console.error(`Unlocked "${plan.server}" for every authorization of that client until ${new Date(plan.expiresAt).toISOString()}. The hub notices within seconds.`);
+    console.log(JSON.stringify({ id, ...plan }, null, 2));
+    process.exit(0);
+  }
+  if (!server) fail('Usage: mcp-hub-admin unlock revoke <server> [--client <client-id>]');
+  const ended = store.revokeUnlockGrants({ server, ...(clientId ? { clientId } : {}) });
+  console.log(JSON.stringify({ server, ended }, null, 2));
   process.exit(0);
 }
 
