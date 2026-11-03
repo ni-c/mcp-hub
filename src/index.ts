@@ -29,6 +29,7 @@ import { runStdio } from './stdio.js';
 import { isMainModule } from './main-module.js';
 import { CONFIG_POLL_INTERVAL_MS, IDLE_TIMEOUT_MS } from './timings.js';
 import { UnlockGate } from './unlock/gate.js';
+import { createUnlockRoutes } from './unlock/routes.js';
 import { describeLock } from './unlock/policy.js';
 import { UnlockRuntime } from './unlock/runtime.js';
 import type { HubConfig } from './config.js';
@@ -277,6 +278,18 @@ export async function createHub(options: HubOptions) {
   // after the auth routes so it inherits nothing from them but sits ahead of
   // the /:name catch-all.
   app.use(createUpstreamRoutes({ store, registry: upstreamAuth, supervisor, watcher, externalUrl, sessionScope: factors.requiresCode ? 'totp' : '' }));
+  // The pages that unlock a locked server, ahead of the /:name catch-all.
+  app.use(
+    '/unlock',
+    createUnlockRoutes({
+      gate: unlockGate,
+      store,
+      factors,
+      secret: store.cookieSecret,
+      policyFor: server => watcher.current.get(server)?.unlock,
+      lockedServers: () => [...watcher.current].filter(([, server]) => server.unlock).map(([name]) => name)
+    })
+  );
 
   // Registrations age out on a clock, not on traffic, so this cannot wait for
   // the next write to state.json — an idle hub would never clean up at all.

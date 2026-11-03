@@ -55,7 +55,7 @@ export class UnlockRuntime {
   private readonly requests = new Map<string, UnlockRequest>();
   private readonly tickets = new Map<string, number>();
 
-  constructor(private readonly now: () => number = Date.now) {}
+  constructor(private readonly now: () => number = () => Date.now()) {}
 
   /** The same ask while one is open gets the same link; a fresh denial holds the next ask off for two minutes. */
   open(input: UnlockRequestInput): OpenRequestResult {
