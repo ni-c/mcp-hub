@@ -11,8 +11,9 @@ export const PAGE_STYLE = `<style>
   .code { font-family: ui-monospace, monospace; font-size: 1.6rem; letter-spacing: 0.15em; color: var(--text); margin: 0 0 1rem; }
   .args { white-space: pre-wrap; max-height: 14rem; overflow: auto; }
   .row { display: flex; gap: 0.5rem; align-items: center; justify-content: space-between; border-top: 1px solid var(--line); padding: 0.6rem 0; }
-  .row form { margin: 0; }
-  .row button { width: auto; margin: 0; padding: 0.35rem 0.8rem; font-size: 0.85rem; }
+  .row span { font-size: 0.85rem; }
+  .row form { margin: 0; flex-shrink: 0; }
+  .row button { width: auto; margin: 0; padding: 0.35rem 0.8rem; font-size: 0.85rem; white-space: nowrap; }
   .ok { color: var(--text); }
   label { display: block; color: var(--muted); font-size: 0.75rem; margin: 0.9rem 0 0.35rem; }
 </style>`;
