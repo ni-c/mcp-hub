@@ -228,6 +228,16 @@ describe.runIf(RUNS_HERE)('mcp-hub-admin, the CLI nothing used to call', () => {
     expect(() => JSON.parse(listed.stdout)).not.toThrow();
   });
 
+  it('sets up an authenticator: the secret for the app on stderr, the lines for the hub on stdout', async () => {
+    const result = await gateway.admin(['totp', 'init', '--no-confirm', '--label', 'hub.example.invalid']);
+    expect(result.code).toBe(0);
+    expect(result.stdout).toMatch(/^TWO_FACTOR=totp\nTOTP_SECRET=[A-Z2-7]{32}\n$/);
+    const secret = /TOTP_SECRET=([A-Z2-7]+)/.exec(result.stdout)![1];
+    expect(result.stderr).toContain(`otpauth://totp/mcp-hub:hub.example.invalid?secret=${secret}&issuer=mcp-hub`);
+    expect(result.stderr).toContain('apple-otpauth://');
+    expect(result.stderr).toContain('█');
+  });
+
   it('adds, lists, revokes and deletes a client', async () => {
     const added = await gateway.admin(['clients', 'add', '--name', 'operator-managed', '--redirect-uri', 'https://example.invalid/cb']);
     expect(added.code).toBe(0);

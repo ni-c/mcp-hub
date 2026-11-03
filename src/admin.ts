@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 import crypto from 'node:crypto';
+import readline from 'node:readline';
 import { AuthStore, clientLimitsFromEnv } from './auth/store.js';
 import { isSafeRedirectUri } from './auth/redirect-uri.js';
 import { clampDisplayName, logSafe } from './auth/text.js';
 import { isClientIdMetadataUrl } from './auth/cimd.js';
 import { mintApiToken } from './auth/api-tokens.js';
+import { base32Decode, verifyTotp } from './auth/totp.js';
+import { prepareTotpSetup, totpAccountLabel } from './auth/totp-setup.js';
 import { loadConfig } from './config.js';
 import type { UpstreamAuth } from './upstream/auth.js';
 import { authFor, requireOAuthServer, startUpstreamLogin, upstreamStatus } from './upstream/login.js';
@@ -27,6 +30,7 @@ function usage(): never {
       '  mcp-hub-admin upstream register <server>   (obtain a client_id without logging in)',
       '  mcp-hub-admin upstream refresh <server>    (renew the token now)',
       '  mcp-hub-admin upstream logout <server>     (forget it here and revoke it there)',
+      '  mcp-hub-admin totp init [--label <name>] [--light] [--no-confirm] [--force]',
       '',
       'tokens create needs EXTERNAL_URL in the environment (same value the hub runs with).',
       'upstream commands read CONFIG_PATH; run them inside the hub container so the',
@@ -61,6 +65,53 @@ function clientOrigin(clientId: string): 'cimd' | 'static' | 'dcr' {
 }
 
 const [, , group, action, ...rest] = process.argv;
+
+/** Prints the secret, confirms one code, then the environment lines. */
+async function totpInit(args: string[]): Promise<void> {
+  if (process.env.TOTP_SECRET && !args.includes('--force')) {
+    fail('TOTP_SECRET is already set here. A new secret replaces the one your authenticator app holds; pass --force to make one anyway.');
+  }
+  const setup = prepareTotpSetup(flag(args, 'label') ?? totpAccountLabel(process.env.EXTERNAL_URL), { lightTerminal: args.includes('--light') });
+  console.error(
+    [
+      'Scan this with your authenticator app (on a light terminal background, run it again with --light):',
+      '',
+      setup.qr,
+      '',
+      `Or type the setup key: ${setup.setupKey}`,
+      `otpauth link:         ${setup.uri}`,
+      `iOS Passwords link:   ${setup.appleUri}`,
+      '',
+      'This output contains the secret. Terminal output capture (atuin, script, CI logs) keeps it — clear it there.'
+    ].join('\n')
+  );
+  if (!args.includes('--no-confirm')) {
+    const key = base32Decode(setup.secret)!;
+    const prompt = readline.createInterface({ input: process.stdin, output: process.stderr });
+    // The iterator buffers early lines, so piped input works.
+    const lines = prompt[Symbol.asyncIterator]();
+    try {
+      for (let attempt = 1; ; attempt++) {
+        process.stderr.write('Enter the code your app shows now: ');
+        const next = await lines.next();
+        if (next.done) fail('No code was entered. Nothing was set up; run totp init again in a terminal (docker exec -it …).');
+        if (verifyTotp(key, String(next.value), Date.now()) !== undefined) break;
+        if (attempt === 3) fail('That code does not match. Nothing was set up; run totp init again.');
+        console.error("That code does not match — check that the phone's clock is right, and try the next code.");
+      }
+    } finally {
+      prompt.close();
+    }
+  }
+  console.error("Add these lines to the hub's environment and restart it. Every connector then signs in once more, with a code:");
+  process.stdout.write(`TWO_FACTOR=totp\nTOTP_SECRET=${setup.secret}\n`);
+}
+
+// Before the store: setting up an authenticator needs no data volume.
+if (group === 'totp' && action === 'init') {
+  await totpInit(rest);
+  process.exit(0);
+}
 // The same limits the hub runs with, so a prune here removes exactly what the
 // hub would. `docker exec` into the hub container shares its environment.
 const store = new AuthStore(process.env.DATA_PATH ?? '/data', clientLimitsFromEnv());
