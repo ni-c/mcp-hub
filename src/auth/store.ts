@@ -182,6 +182,26 @@ export interface OidcArtifact {
  */
 const MAX_OIDC_ARTIFACTS_PER_MODEL = 5_000;
 
+/** A locked server opened for one client: for a time window, or for one call with these exact arguments. */
+export interface UnlockGrant {
+  server: string;
+  clientId: string;
+  /** The authorization it was asked from; absent means every authorization of the client. */
+  grantId?: string;
+  kind: 'window' | 'once';
+  tool?: string;
+  argsHash?: string;
+  grantedAt: number;
+  expiresAt: number;
+  by: 'page' | 'cli';
+}
+
+export interface UnlockGrantMatch {
+  server: string;
+  clientId: string;
+  grantId?: string;
+}
+
 /** The last accepted one-time-code step and the two-factor mode last run. */
 export interface SecondFactorState {
   lastTotpStep?: number;
@@ -204,6 +224,7 @@ interface PersistedState {
    *  mirroring them here would be a second schema to keep in step. */
   oidcArtifacts: Record<string, Record<string, OidcArtifact>>;
   secondFactor: SecondFactorState;
+  unlockGrants: Record<string, UnlockGrant>; // keyed by a random id
   /** The issuer the hub last ran under, so `mcp-hub-admin upstream login` can
    *  build a redirect URI without EXTERNAL_URL being set in its environment —
    *  the Dockerfile sets only CONFIG_PATH and DATA_PATH. */
@@ -488,6 +509,19 @@ export class AuthStore {
     };
   }
 
+  private static isUnlockGrant(value: unknown): value is UnlockGrant {
+    const grant = value as Partial<UnlockGrant> | null;
+    return (
+      !!grant &&
+      typeof grant === 'object' &&
+      typeof grant.server === 'string' &&
+      typeof grant.clientId === 'string' &&
+      (grant.kind === 'window' || grant.kind === 'once') &&
+      Number.isFinite(grant.grantedAt) &&
+      Number.isFinite(grant.expiresAt)
+    );
+  }
+
   private static normalizeSecondFactor(value: unknown): SecondFactorState {
     const source = (value && typeof value === 'object' ? value : {}) as Partial<SecondFactorState>;
     return {
@@ -520,6 +554,7 @@ export class AuthStore {
       upstreamLogins: bare(state.upstreamLogins),
       oidcArtifacts: bare(Object.fromEntries(Object.entries(bare(state.oidcArtifacts)).map(([model, records]) => [model, bare(records)]))),
       secondFactor: AuthStore.normalizeSecondFactor(state.secondFactor),
+      unlockGrants: bare(Object.fromEntries(Object.entries(bare(state.unlockGrants)).filter(([, grant]) => AuthStore.isUnlockGrant(grant)))),
       ...(typeof state.externalUrl === 'string' ? { externalUrl: state.externalUrl } : {})
     };
   }
@@ -575,6 +610,9 @@ export class AuthStore {
     }
     for (const [id, record] of Object.entries(this.state.apiTokens)) {
       if (record.expiresAt < now) delete this.state.apiTokens[id];
+    }
+    for (const [id, grant] of Object.entries(this.state.unlockGrants)) {
+      if (grant.expiresAt <= Date.now()) delete this.state.unlockGrants[id];
     }
     // A marker that can no longer reject anything is just a row that never
     // goes away; this is otherwise the one map with no upper bound.
@@ -635,6 +673,63 @@ export class AuthStore {
       });
     }
     return previous;
+  }
+
+  // --- Unlocked servers ----------------------------------------------------
+
+  /** Live grants, without those a later client revocation overrides. */
+  unlockGrants(now = Date.now()): Array<UnlockGrant & { id: string }> {
+    this.reloadIfChanged();
+    return Object.entries(this.state.unlockGrants)
+      .filter(([, grant]) => grant.expiresAt > now && !this.revokedSince(grant))
+      .map(([id, grant]) => ({ ...grant, id }));
+  }
+
+  addUnlockGrant(grant: UnlockGrant): string {
+    const id = crypto.randomBytes(12).toString('base64url');
+    this.mutate(() => {
+      this.state.unlockGrants[id] = { ...grant };
+    });
+    return id;
+  }
+
+  /** Spends a matching once-grant; true for exactly one of any number of concurrent identical calls. */
+  takeOnceGrant(match: UnlockGrantMatch & { tool: string; argsHash: string }, now = Date.now()): string | undefined {
+    return this.mutate(() => {
+      for (const [id, grant] of Object.entries(this.state.unlockGrants)) {
+        if (grant.kind !== 'once' || grant.expiresAt <= now || this.revokedSince(grant)) continue;
+        if (!AuthStore.grantMatches(grant, match) || grant.tool !== match.tool || grant.argsHash !== match.argsHash) continue;
+        delete this.state.unlockGrants[id];
+        return id;
+      }
+      return undefined;
+    });
+  }
+
+  /** Ends grants; every field given must match, and a client-wide grant counts for each of its authorizations. */
+  revokeUnlockGrants(filter: { server?: string; clientId?: string; grantId?: string; id?: string }): number {
+    return this.mutate(() => {
+      let ended = 0;
+      for (const [id, grant] of Object.entries(this.state.unlockGrants)) {
+        if (filter.id !== undefined && id !== filter.id) continue;
+        if (filter.server !== undefined && grant.server !== filter.server) continue;
+        if (filter.clientId !== undefined && grant.clientId !== filter.clientId) continue;
+        if (filter.grantId !== undefined && grant.grantId !== undefined && grant.grantId !== filter.grantId) continue;
+        delete this.state.unlockGrants[id];
+        ended++;
+      }
+      return ended;
+    });
+  }
+
+  static grantMatches(grant: UnlockGrant, match: UnlockGrantMatch): boolean {
+    if (!match.clientId || grant.server !== match.server || grant.clientId !== match.clientId) return false;
+    return grant.grantId === undefined || grant.grantId === match.grantId;
+  }
+
+  private revokedSince(grant: UnlockGrant): boolean {
+    const cutoff = this.state.revokedBefore[grant.clientId];
+    return cutoff !== undefined && grant.grantedAt < cutoff;
   }
 
   // --- Upstream OAuth ------------------------------------------------------
