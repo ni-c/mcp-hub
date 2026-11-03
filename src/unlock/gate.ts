@@ -1,5 +1,5 @@
-import { ProtocolError, ProtocolErrorCode } from '@modelcontextprotocol/server';
-import type { AuthInfo, CallToolResult, InputRequiredResult, ServerContext } from '@modelcontextprotocol/server';
+import { CLIENT_CAPABILITIES_META_KEY, ProtocolError, ProtocolErrorCode, inputRequired } from '@modelcontextprotocol/server';
+import type { AuthInfo, CallToolResult, ClientCapabilities, InputRequiredResult, ServerContext } from '@modelcontextprotocol/server';
 
 import { AuthStore } from '../auth/store.js';
 import type { UnlockGrant } from '../auth/store.js';
@@ -38,13 +38,18 @@ export interface UnlockGateOptions {
   /** Seals the hub's resume state; a resumed call continues the one that was admitted. */
   secret: string;
   clientName?: (clientId: string) => string | undefined;
-  /** Shapes the answer for a caller; the text link unless replaced. */
-  answer?: (request: UnlockRequest, ctx: ServerContext, text: string) => CallToolResult | InputRequiredResult;
   /** Told when a grant was spent or ended, so expiry handling can look again. */
   poke?: () => void;
 }
 
 const locked = (text: string): CallToolResult => ({ isError: true, content: [{ type: 'text', text }] });
+
+/** Only a caller that declared URL-mode elicitation in this request's 2026 envelope is shown the page through its client. */
+export function declaresUrlElicitation(ctx: ServerContext): boolean {
+  const envelope = ctx.mcpReq.envelope as Record<string, unknown> | undefined;
+  const elicitation = (envelope?.[CLIENT_CAPABILITIES_META_KEY] as ClientCapabilities | undefined)?.elicitation as Record<string, unknown> | undefined;
+  return typeof elicitation === 'object' && elicitation !== null && elicitation.url !== undefined;
+}
 
 /** Decides, per call, whether a locked server's tool may run for this caller. Any failure counts as locked. */
 export class UnlockGate {
@@ -161,6 +166,18 @@ export class UnlockGate {
       `Server "${server}" is locked: "${tool}" needs a person to unlock it first. ` +
       `Ask the user to open this link and unlock it, then call the tool again:\n${this.link(request)}\n` +
       `The page shows the matching code ${request.code}.`;
-    return { admit: false, answer: fresh && this.options.answer ? this.options.answer(request, ctx, text) : locked(text) };
+    if (!fresh || !declaresUrlElicitation(ctx)) return { admit: false, answer: locked(text) };
+    const host = new URL(this.options.externalUrl).host;
+    return {
+      admit: false,
+      answer: inputRequired({
+        inputRequests: {
+          [UNLOCK_INPUT_KEY]: inputRequired.elicitUrl({
+            url: this.link(request),
+            message: `mcp-hub at ${host} asks you to unlock server "${server}" before "${tool}" runs. The page shows the code ${request.code}.`
+          })
+        }
+      })
+    };
   }
 }
