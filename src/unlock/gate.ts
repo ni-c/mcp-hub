@@ -94,6 +94,41 @@ export class UnlockGate {
     );
   }
 
+  /** Ends the caller's own unlocks of a server: its authorization's, and the client-wide ones. */
+  endUnlocks(server: string, caller: Caller): number {
+    const ended = this.options.store.revokeUnlockGrants({ server, clientId: caller.clientId, ...(caller.grantId !== undefined ? { grantId: caller.grantId } : {}) });
+    if (ended > 0) {
+      console.log(`mcp-hub: [${server}] ${ended} unlock(s) ended by the client that held them`);
+      this.options.poke?.();
+    }
+    return ended;
+  }
+
+  /** An ask without a call, for request_unlock: no "only this call", same caps and cooldown. */
+  requestAhead(managed: ManagedServer, ctx: ServerContext): { status: 'pending' | 'denied'; request?: UnlockRequest; message: string } {
+    const caller = callerOf(ctx);
+    if (!caller.clientId) return { status: 'denied', message: 'This connection cannot unlock anything.' };
+    if (!this.options.canUnlock()) return { status: 'denied', message: 'This hub has no usable operator sign-in, so nothing can be unlocked from a page.' };
+    const opened = this.options.runtime.open({
+      server: managed.name,
+      clientId: caller.clientId,
+      ...(caller.grantId !== undefined ? { grantId: caller.grantId } : {}),
+      ...(this.options.clientName?.(caller.clientId) !== undefined ? { clientName: this.options.clientName(caller.clientId) } : {}),
+      door: '/hub'
+    });
+    if ('refused' in opened) {
+      return opened.refused === 'denied'
+        ? { status: 'denied', request: opened.request, message: 'The user denied this a moment ago. Do not ask again yet.' }
+        : { status: 'denied', message: `Too many unlock requests are open. Ask the user to unlock it at ${this.overviewLink()}.` };
+    }
+    if (opened.fresh) console.log(`mcp-hub: [${managed.name}] unlock requested ahead of a call by client ${JSON.stringify(caller.clientId)}, code ${opened.request.code}`);
+    return {
+      status: 'pending',
+      request: opened.request,
+      message: `Ask the user to open the link and unlock "${managed.name}", then call its tools. The page shows the code ${opened.request.code}.`
+    };
+  }
+
   checkToolCall(input: { managed: ManagedServer; ctx: ServerContext; via: ForwardRoute; door: string; tool: string; args: unknown }): GateVerdict {
     try {
       return this.decide(input);
