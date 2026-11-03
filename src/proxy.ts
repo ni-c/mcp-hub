@@ -7,6 +7,9 @@ import type { ManagedServer } from './supervisor.js';
 import { ABSOLUTE_CALL_OPTIONS, assertForwardedResultSize } from './mcp-limits.js';
 import { filterTools, loggableToolName, toolAllowed } from './tool-filter.js';
 import { forwardToolCall } from './forward.js';
+import { callerFromAuth, callerOf } from './unlock/gate.js';
+import type { UnlockGate } from './unlock/gate.js';
+import { locksTool, locksWholeServer } from './unlock/policy.js';
 import type { RouteChannel } from './subscriptions.js';
 import {
   KEEPALIVE_MS,
@@ -101,7 +104,13 @@ function advertisedCapabilities(capabilities: ServerCapabilities | undefined, er
  * transport means no server-side session state at all — claude.ai reconnects
  * every few minutes without ever closing sessions, so anything stateful leaks.
  */
-function buildProxyServer(managed: ManagedServer, secret: string, era: Era): Server {
+/** A locked tool's name must be one the server lists, so a case or alias variant cannot slip past the lock. */
+export function unknownToLockedServer(managed: ManagedServer, tool: string): boolean {
+  if (!managed.config.unlock || (managed.tools.length === 0 && !managed.hasSnapshot)) return false;
+  return !managed.tools.some(t => t.name === tool);
+}
+
+function buildProxyServer(managed: ManagedServer, secret: string, era: Era, gate?: UnlockGate): Server {
   const server = new Server(
     { name: managed.serverInfo?.name ?? managed.name, version: managed.serverInfo?.version ?? '0.0.0' },
     { capabilities: advertisedCapabilities(managed.capabilities, era, subscriptionsAllowed(managed.config)) }
@@ -140,6 +149,16 @@ function buildProxyServer(managed: ManagedServer, secret: string, era: Era): Ser
     managed.markUsed();
     return forwardLive(request, resultSchema, options);
   };
+  // A whole-locked server lists no resources or prompts and serves none until the caller holds an unlock.
+  const lockedFor = (ctx: Parameters<UnlockGate['assertOpen']>[1]): boolean =>
+    locksWholeServer(managed.config.unlock) && !(gate?.openForEverything(managed, callerOf(ctx)) ?? false);
+  const guarded = <S extends ClientResultSchema>(request: { method: string; params?: unknown }, ctx: Parameters<UnlockGate['assertOpen']>[1], resultSchema: S) => {
+    if (lockedFor(ctx)) {
+      if (gate) gate.assertOpen(managed, ctx);
+      throw new ProtocolError(ProtocolErrorCode.InvalidRequest, `Server "${managed.name}" is locked`);
+    }
+    return use(request, resultSchema);
+  };
   const caps = managed.capabilities ?? {};
   if (caps.tools) {
     // tools/list is part of every client's session handshake — a client with
@@ -162,14 +181,21 @@ function buildProxyServer(managed: ManagedServer, secret: string, era: Era): Ser
       // cannot start one. The message is the neutral one a server gives for a
       // tool it does not have; announcing what was hidden would be a
       // disclosure in itself.
-      if (!toolAllowed(managed.config, req.params.name)) {
+      if (!toolAllowed(managed.config, req.params.name) || unknownToLockedServer(managed, req.params.name)) {
         const logged = loggableToolName(req.params.name);
-        console.warn(`[${managed.name}] refused tools/call "${logged}": not permitted by allowTools/denyTools`);
+        console.warn(`[${managed.name}] refused tools/call "${logged}": not permitted by allowTools/denyTools, or not a tool of this locked server`);
         throw new ProtocolError(ProtocolErrorCode.MethodNotFound, `Unknown tool: ${req.params.name}`);
+      }
+      let admitted = false;
+      if (locksTool(managed.config.unlock, req.params.name)) {
+        if (!gate) return { isError: true, content: [{ type: 'text' as const, text: `Server "${managed.name}" is locked.` }] };
+        const verdict = gate.checkToolCall({ managed, ctx, via: 'server', door: `/${managed.name}/mcp`, tool: req.params.name, args: req.params.arguments });
+        if (!verdict.admit) return verdict.answer;
+        admitted = true;
       }
       // The caller's params go on unchanged: a gateway that rewrote them would
       // be inventing a contract the child never agreed to.
-      const result = await forwardToolCall({ managed, tool: req.params.name, params: req.params, ctx, secret, via: 'server' });
+      const result = await forwardToolCall({ managed, tool: req.params.name, params: req.params, ctx, secret, via: 'server', admitted });
       // A question for the person is not a tool result and has no schema to be
       // projected against.
       if (isInputRequiredResult(result)) return result;
@@ -194,16 +220,18 @@ function buildProxyServer(managed: ManagedServer, secret: string, era: Era): Ser
     });
   }
   if (caps.resources) {
-    server.setRequestHandler('resources/list', req => use(req, ListResourcesResultSchema));
-    server.setRequestHandler('resources/templates/list', req => use(req, ListResourceTemplatesResultSchema));
-    server.setRequestHandler('resources/read', req => use(req, ReadResourceResultSchema));
+    server.setRequestHandler('resources/list', (req, ctx) => (lockedFor(ctx) ? { resources: [] } : use(req, ListResourcesResultSchema)));
+    server.setRequestHandler('resources/templates/list', (req, ctx) =>
+      lockedFor(ctx) ? { resourceTemplates: [] } : use(req, ListResourceTemplatesResultSchema)
+    );
+    server.setRequestHandler('resources/read', (req, ctx) => guarded(req, ctx, ReadResourceResultSchema));
   }
   if (caps.prompts) {
-    server.setRequestHandler('prompts/list', req => use(req, ListPromptsResultSchema));
-    server.setRequestHandler('prompts/get', req => use(req, GetPromptResultSchema));
+    server.setRequestHandler('prompts/list', (req, ctx) => (lockedFor(ctx) ? { prompts: [] } : use(req, ListPromptsResultSchema)));
+    server.setRequestHandler('prompts/get', (req, ctx) => guarded(req, ctx, GetPromptResultSchema));
   }
   if (caps.completions) {
-    server.setRequestHandler('completion/complete', req => use(req, CompleteResultSchema));
+    server.setRequestHandler('completion/complete', (req, ctx) => guarded(req, ctx, CompleteResultSchema));
   }
   return server;
 }
@@ -252,7 +280,7 @@ async function handleLegacyRequest(buildServer: () => Server, req: Request, res:
  */
 export interface McpRoute extends RouteChannel {
   handler: McpHttpHandler;
-  allowSubscriptions: () => boolean;
+  allowSubscriptions: (req?: Request) => boolean;
   buildLegacyServer: () => Server;
 }
 
@@ -263,7 +291,7 @@ export interface RouteOptions {
    * Whether this route may take subscription leases at all. A thunk rather than
    * a boolean because a config reload can flip it under a live route.
    */
-  allowSubscriptions?: () => boolean;
+  allowSubscriptions?: (req?: Request) => boolean;
   /** Names this route in the log line for a failed modern-era request. */
   label: string;
 }
@@ -336,7 +364,7 @@ function beginListen(route: McpRoute, req: Request, res: Response): boolean {
   // A server whose operator switched subscriptions off advertises nothing and
   // is asked for nothing, so the stream stays open and silent rather than
   // taking a lease that would make the hub subscribe upstream on its behalf.
-  const lease = route.allowSubscriptions() ? route.registry.acquire(filter) : undefined;
+  const lease = route.allowSubscriptions(req) ? route.registry.acquire(filter) : undefined;
   let done = false;
   const release = () => {
     if (done) return;
@@ -372,19 +400,21 @@ export async function handleMcpRequest(route: McpRoute, req: Request, res: Respo
  * server. Held here rather than constructed per request because the handler
  * inside owns open subscription streams.
  */
-function routeFor(managed: ManagedServer, secret: string): McpRoute {
+function routeFor(managed: ManagedServer, secret: string, gate?: UnlockGate): McpRoute {
   if (!managed.channel) {
-    managed.channel = createRoute(era => buildProxyServer(managed, secret, era), {
+    managed.channel = createRoute(era => buildProxyServer(managed, secret, era, gate), {
       label: `/${managed.name}`,
       onDemandChange: () => managed.reconcileSubscriptions(),
-      allowSubscriptions: () => subscriptionsAllowed(managed.config)
+      allowSubscriptions: req =>
+        subscriptionsAllowed(managed.config) &&
+        (!locksWholeServer(managed.config.unlock) || (gate?.openForEverything(managed, callerFromAuth(req?.auth)) ?? false))
     });
   }
   return managed.channel as McpRoute;
 }
 
 /** Express handler for /<name> and /<name>/mcp. */
-export function serverRequestHandler(managed: ManagedServer, secret: string) {
+export function serverRequestHandler(managed: ManagedServer, secret: string, gate?: UnlockGate) {
   return async (req: Request, res: Response): Promise<void> => {
     if (managed.state !== 'up' || !managed.client) {
       if (!managed.onDemand) {
@@ -411,6 +441,6 @@ export function serverRequestHandler(managed: ManagedServer, secret: string) {
     // from the cached capabilities — they survive the nap — and delivery
     // resumes when something actually wakes it. Waking on subscribe would undo
     // on-demand for every server anyone ever watched.
-    await handleMcpRequest(routeFor(managed, secret), req, res);
+    await handleMcpRequest(routeFor(managed, secret, gate), req, res);
   };
 }

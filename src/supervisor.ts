@@ -26,6 +26,7 @@ import { boundedRedirectFetch } from './upstream/redirects.js';
 import { ToolCache } from './tool-cache.js';
 import type { ToolCacheEntry } from './tool-cache.js';
 import { filterTools, hasToolFilter, unmatchedPatterns } from './tool-filter.js';
+import { unmatchedUnlockPatterns } from './unlock/policy.js';
 import type { RouteChannel, SubscriptionRegistry } from './subscriptions.js';
 import { subscriptionsAllowed } from './subscriptions.js';
 import { logSafe } from './auth/text.js';
@@ -668,6 +669,9 @@ export class ManagedServer {
    * the tool names are known before anything starts.
    */
   private reportToolFilter(upstream: Tool[]): void {
+    for (const pattern of unmatchedUnlockPatterns(this.config.unlock, this.tools)) {
+      console.warn(`[${this.name}] unlock: no tool matches "${pattern}" — a typo here leaves that tool unlocked`);
+    }
     if (!hasToolFilter(this.config)) return;
     this.toolsHidden = upstream.length - this.tools.length;
     this.filterUnmatched = unmatchedPatterns(this.config, upstream);

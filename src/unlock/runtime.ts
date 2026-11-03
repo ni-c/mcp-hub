@@ -17,8 +17,10 @@ export interface UnlockRequestInput {
   /** `/hub` or the server's own path. */
   door: string;
   tool?: string;
-  /** The canonical JSON of the arguments, exactly what argsHash covers. */
+  /** The canonical JSON of the arguments, exactly what argsHash covers, cut at the page's limit. */
   args?: string;
+  /** False when `args` was cut; such a call cannot be unlocked for "only this call". */
+  argsComplete?: boolean;
   argsHash?: string;
 }
 

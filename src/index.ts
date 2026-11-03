@@ -28,6 +28,10 @@ import { ClientRequestGate } from './limits.js';
 import { runStdio } from './stdio.js';
 import { isMainModule } from './main-module.js';
 import { CONFIG_POLL_INTERVAL_MS, IDLE_TIMEOUT_MS } from './timings.js';
+import { UnlockGate } from './unlock/gate.js';
+import { describeLock } from './unlock/policy.js';
+import { UnlockRuntime } from './unlock/runtime.js';
+import type { HubConfig } from './config.js';
 
 export interface HubOptions {
   externalUrl: string;
@@ -152,7 +156,17 @@ export async function createHub(options: HubOptions) {
   // open subscription streams. /hub carries tools and nothing else, so the only
   // change worth relaying is a child's tool list moving; the supervisor
   // publishes those here.
-  const hubRoute = createRoute(era => buildHubServer(supervisor, store.cookieSecret, era).server, {
+  const unlockRuntime = new UnlockRuntime();
+  const unlockGate = new UnlockGate({
+    store,
+    runtime: unlockRuntime,
+    externalUrl,
+    canUnlock: () => factors.enabled,
+    secret: store.cookieSecret,
+    clientName: clientId => store.getApproval(clientId)?.clientName
+  });
+  announceLocks(config);
+  const hubRoute = createRoute(era => buildHubServer(supervisor, store.cookieSecret, era, unlockGate).server, {
     label: '/hub',
     // Every child, because the aggregate's tool list spans all of them.
     onDemandChange: () => supervisor.reconcileAll()
@@ -167,10 +181,13 @@ export async function createHub(options: HubOptions) {
   const watcher = new ConfigWatcher(options.configPath, config, process.env, CONFIG_POLL_INTERVAL_MS, parseOptions);
   watcher.on('change', (next, diff) => {
     warnMutableDockerImages(next);
+    announceLocks(next);
     console.log(`mcp-hub: config changed (added: ${diff.added.join(',') || '-'} removed: ${diff.removed.join(',') || '-'} changed: ${diff.changed.join(',') || '-'}${diff.retuned ? ` unlock settings: ${diff.retuned.join(',')}` : ''})`);
     void supervisor.applyDiff(next, diff);
   });
-  watcher.on('error', error => console.error(`mcp-hub: ignoring broken config update: ${(error as Error).message}`));
+  watcher.on('error', error =>
+    console.error(`mcp-hub: ignoring broken config update, the previous configuration and its unlock settings stay in force: ${(error as Error).message}`)
+  );
   watcher.start();
 
   // Both mechanisms are on by default: CIMD is what the MCP specification now
@@ -344,7 +361,7 @@ export async function createHub(options: HubOptions) {
       next(); // fall through to 404
       return;
     }
-    await serverRequestHandler(managed, store.cookieSecret)(req, res);
+    await serverRequestHandler(managed, store.cookieSecret, unlockGate)(req, res);
   };
 
   for (const route of ['/:name', '/:name/mcp']) {
@@ -373,7 +390,12 @@ export async function createHub(options: HubOptions) {
     res.status(500).json({ jsonrpc: '2.0', error: { code: -32603, message: 'Internal error' }, id: null });
   });
 
-  return { app, supervisor, watcher, verifier, store, upstreamAuth, stopMaintenance };
+  return { app, supervisor, watcher, verifier, store, upstreamAuth, stopMaintenance, unlockGate, unlockRuntime };
+}
+
+function announceLocks(config: HubConfig): void {
+  const locked = [...config].filter(([, server]) => server.unlock).map(([name, server]) => `${name} (${describeLock(server.unlock!)})`);
+  if (locked.length > 0) console.log(`mcp-hub: locked until unlocked: ${locked.join('; ')}`);
 }
 
 function announceTwoFactorMode(factors: OperatorFactors, previous: TwoFactorMode | undefined): void {

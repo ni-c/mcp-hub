@@ -1,5 +1,8 @@
 import type { InputRequests } from '@modelcontextprotocol/server';
 
+/** Reserved for the hub's own unlock question; mirrored in unlock/gate.ts. */
+export const UNLOCK_INPUT_KEY = 'mcp-hub-unlock';
+
 import { booleanEnv, jsonSize, positiveIntegerEnv } from './mcp-limits.js';
 import { readSignedPayload, signPayload } from './auth/signed-token.js';
 
@@ -240,7 +243,7 @@ export function sanitiseInputRequests(requests: InputRequests | undefined, serve
 
   for (const [key, request] of Object.entries(requests ?? {})) {
     const method = (request as { method?: unknown }).method;
-    if (method !== ELICIT_METHOD) {
+    if (method !== ELICIT_METHOD || key === UNLOCK_INPUT_KEY) {
       dropped.push(key);
       continue;
     }

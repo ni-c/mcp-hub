@@ -6,9 +6,11 @@ import { withInputRequired } from '@modelcontextprotocol/client';
 import type { ManagedServer } from './supervisor.js';
 import { ABSOLUTE_CALL_OPTIONS, assertForwardedResultSize } from './mcp-limits.js';
 import { loggableToolName } from './tool-filter.js';
+import { locksTool } from './unlock/policy.js';
 import {
   REFUSAL_REASON,
   STATE_TTL_MS,
+  UNLOCK_INPUT_KEY,
   decidePassthrough,
   openRequestState,
   sanitiseInputRequests,
@@ -45,6 +47,13 @@ import {
 const REFUSALS_LOGGED = new Set<string>();
 const MAX_REFUSALS_REMEMBERED = 500;
 
+/** The answers meant for the child, without the hub's own unlock answer. */
+function childResponses(responses: Record<string, unknown> | undefined): { inputResponses: Record<string, unknown> } | undefined {
+  if (!responses) return undefined;
+  const rest = Object.fromEntries(Object.entries(responses).filter(([key]) => key !== UNLOCK_INPUT_KEY));
+  return Object.keys(rest).length > 0 ? { inputResponses: rest } : undefined;
+}
+
 export function noteRefusal(server: string, clientId: string, refusal: PassthroughRefusal): void {
   // The client id comes from open dynamic registration, so it is a stranger's
   // text on its way into a file that LOG_FILE mirrors and fail2ban reads. Same
@@ -75,6 +84,8 @@ export interface ForwardToolCall {
   /** Signs the request state. `AuthStore.cookieSecret` behind HTTP. */
   secret: string;
   via: ForwardRoute;
+  /** Set by the caller once the unlock gate let this call through; a locked tool without it is refused. */
+  admitted?: boolean;
 }
 
 /**
@@ -103,8 +114,10 @@ export async function forwardToolCall({
   params,
   ctx,
   secret,
-  via
+  via,
+  admitted
 }: ForwardToolCall): Promise<CallToolResult | InputRequiredResult> {
+  if (!admitted && locksTool(managed.config.unlock, tool)) throw new Error(`Server "${managed.name}" is locked`);
   // Before condition 3 is even readable: the era is negotiated by the child's
   // client, and an on-demand child that is asleep has none. Waking after the
   // decision made the first call following a nap take the fallback and the
@@ -177,7 +190,7 @@ export async function forwardToolCall({
       // hub's own connection would otherwise attach.
       [CLIENT_CAPABILITIES_META_KEY]: { elicitation: declaredElicitation }
     },
-    ...(ctx.mcpReq.inputResponses ? { inputResponses: ctx.mcpReq.inputResponses } : {}),
+    ...childResponses(ctx.mcpReq.inputResponses),
     ...(upstreamState !== undefined ? { requestState: upstreamState } : {})
   };
 

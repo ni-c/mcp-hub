@@ -86,7 +86,8 @@ export class OidcTokenVerifier {
       clientId,
       scopes: scope ? scope.split(' ') : [],
       ...(typeof payload.exp === 'number' ? { expiresAt: payload.exp } : {}),
-      ...(resource ? { resource } : {})
+      ...(resource ? { resource } : {}),
+      ...(typeof payload.grantId === 'string' ? { extra: { grantId: payload.grantId } } : {})
     };
   }
 

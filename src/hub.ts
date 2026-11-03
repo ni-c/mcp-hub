@@ -7,7 +7,10 @@ import { forwardToolCall } from './forward.js';
 import { loggableToolName, toolAllowed } from './tool-filter.js';
 import { booleanEnv } from './mcp-limits.js';
 import { REFUSAL_REASON, decidePassthrough } from './elicitation.js';
-import { REVISION, type Era } from './proxy.js';
+import { REVISION, unknownToLockedServer, type Era } from './proxy.js';
+import { callerOf } from './unlock/gate.js';
+import type { UnlockGate } from './unlock/gate.js';
+import { locksTool, locksWholeServer } from './unlock/policy.js';
 import { MAX_CHILD_DESCRIPTION_CHARS, MAX_CHILD_ERROR_CHARS, MAX_CHILD_TITLE_CHARS, childText } from './child-text.js';
 
 /**
@@ -221,7 +224,7 @@ const requireExposed = (managed: ManagedServer): CallToolResult | undefined => {
  * ever run) blocks on the start — there is nothing truthful to answer from.
  * Always-running servers pass through untouched.
  */
-const prepare = async (managed: ManagedServer): Promise<CallToolResult | undefined> => {
+const prepare = async (managed: ManagedServer, warm = true): Promise<CallToolResult | undefined> => {
   if (!managed.onDemand) return undefined;
   if (!managed.hasSnapshot) {
     try {
@@ -229,7 +232,7 @@ const prepare = async (managed: ManagedServer): Promise<CallToolResult | undefin
     } catch (error) {
       return toolError(`Server "${managed.name}" failed to start: ${reason(error)}`);
     }
-  } else if (managed.state === 'sleeping') {
+  } else if (managed.state === 'sleeping' && warm) {
     void managed.wake().catch(() => {});
   }
   return undefined;
@@ -244,8 +247,11 @@ const prepare = async (managed: ManagedServer): Promise<CallToolResult | undefin
  * only thing that varies here is `describe_connection`, which would otherwise
  * have to guess the one fact it exists to report.
  */
-export function buildHubServer(supervisor: Supervisor, secret: string, era: Era): McpServer {
+export function buildHubServer(supervisor: Supervisor, secret: string, era: Era, gate?: UnlockGate): McpServer {
   const hub = new McpServer({ name: 'mcp-hub', version: VERSION });
+  // Without a gate (stdio) nothing can unlock, so a whole-locked server stays shut.
+  const shutFor = (managed: ManagedServer, ctx: Parameters<typeof callerOf>[0]): boolean =>
+    locksWholeServer(managed.config.unlock) && !(gate?.openForEverything(managed, callerOf(ctx)) ?? false);
 
   const findServer = (name: string) => supervisor.get(name);
 
@@ -283,13 +289,13 @@ export function buildHubServer(supervisor: Supervisor, secret: string, era: Era)
       outputSchema: listToolsOutput,
       annotations: READS
     },
-    async ({ server }) => {
+    async ({ server }, ctx) => {
       const managed = findServer(server);
       if (!managed) return toolError(`Unknown server "${server}". Use list_servers to see available servers.`);
       const hidden = requireExposed(managed);
       if (hidden) return hidden;
       if (!managed.onDemand && managed.state !== 'up') return toolError(`Server "${server}" is ${managed.state}.`);
-      const failed = await prepare(managed);
+      const failed = await prepare(managed, !shutFor(managed, ctx));
       if (failed) return failed;
       return structured({
         server: managed.name,
@@ -322,7 +328,7 @@ export function buildHubServer(supervisor: Supervisor, secret: string, era: Era)
       outputSchema: getToolSchemaOutput,
       annotations: READS
     },
-    async ({ server, tool }) => {
+    async ({ server, tool }, ctx) => {
       const managed = findServer(server);
       if (!managed) return toolError(`Unknown server "${server}". Use list_servers to see available servers.`);
       const hidden = requireExposed(managed);
@@ -332,7 +338,7 @@ export function buildHubServer(supervisor: Supervisor, secret: string, era: Era)
       // would fail anyway.
       const filtered = requireAllowedTool(managed, tool, server);
       if (filtered) return filtered;
-      const failed = await prepare(managed);
+      const failed = await prepare(managed, !shutFor(managed, ctx));
       if (failed) return failed;
       const found = managed.tools.find(t => t.name === tool);
       if (!found) return toolError(`Unknown tool "${tool}" on server "${server}". Use list_tools to see available tools.`);
@@ -392,6 +398,14 @@ export function buildHubServer(supervisor: Supervisor, secret: string, era: Era)
       // start a sleeping server.
       const filtered = requireAllowedTool(managed, tool, server);
       if (filtered) return filtered;
+      if (unknownToLockedServer(managed, tool)) return toolError(`Unknown tool "${tool}" on server "${server}". Use list_tools to see available tools.`);
+      let admitted = false;
+      if (locksTool(managed.config.unlock, tool)) {
+        if (!gate) return toolError(`Server "${server}" is locked, and a hub running over stdio cannot unlock it.`);
+        const verdict = gate.checkToolCall({ managed, ctx, via: 'hub', door: '/hub', tool, args });
+        if (!verdict.admit) return verdict.answer;
+        admitted = true;
+      }
       // The wake stays here rather than being left to the forward, which would
       // do it too: this endpoint answers with tool results, and "failed to
       // start" is a different thing for a caller to read than "tool call
@@ -416,7 +430,8 @@ export function buildHubServer(supervisor: Supervisor, secret: string, era: Era)
           params: { name: tool, arguments: (args ?? {}) as Record<string, unknown> },
           ctx,
           secret,
-          via: 'hub'
+          via: 'hub',
+          admitted
         });
       } catch (error) {
         // Aggregate semantics: every failure here is a tool result, never a
@@ -436,10 +451,11 @@ export function buildHubServer(supervisor: Supervisor, secret: string, era: Era)
       outputSchema: wakeServerOutput,
       annotations: LIFECYCLE
     },
-    async ({ server }) => {
+    async ({ server }, ctx) => {
       const managed = findServer(server);
       if (!managed) return toolError(`Unknown server "${server}". Use list_servers to see available servers.`);
       if (!managed.onDemand) return toolError(`Server "${server}" is always running.`);
+      if (shutFor(managed, ctx)) return toolError(`Server "${server}" is locked. Call one of its tools to get an unlock link for the user.`);
       try {
         await managed.wake();
       } catch (error) {

@@ -1,0 +1,166 @@
+import { ProtocolError, ProtocolErrorCode } from '@modelcontextprotocol/server';
+import type { AuthInfo, CallToolResult, InputRequiredResult, ServerContext } from '@modelcontextprotocol/server';
+
+import { AuthStore } from '../auth/store.js';
+import type { UnlockGrant } from '../auth/store.js';
+import { openRequestState, UNLOCK_INPUT_KEY, type ForwardRoute } from '../elicitation.js';
+import type { ManagedServer } from '../supervisor.js';
+import { ARGS_DISPLAY_LIMIT, argsHash, canonicalArgs, fitsOnPage } from './args.js';
+import { describeLock, locksTool, locksWholeServer } from './policy.js';
+import type { UnlockRequest } from './runtime.js';
+import { UnlockRuntime } from './runtime.js';
+
+export { UNLOCK_INPUT_KEY } from '../elicitation.js';
+
+export interface Caller {
+  clientId: string;
+  /** The authorization the token belongs to; absent for admin API tokens. */
+  grantId?: string;
+}
+
+export function callerFromAuth(auth: AuthInfo | undefined): Caller {
+  const grantId = auth?.extra?.grantId;
+  return { clientId: auth?.clientId ?? '', ...(typeof grantId === 'string' ? { grantId } : {}) };
+}
+
+export function callerOf(ctx: ServerContext): Caller {
+  return callerFromAuth(ctx.http?.authInfo);
+}
+
+export type GateVerdict = { admit: true } | { admit: false; answer: CallToolResult | InputRequiredResult };
+
+export interface UnlockGateOptions {
+  store: AuthStore;
+  runtime: UnlockRuntime;
+  externalUrl: string;
+  /** False when no page can unlock anything: the operator factors are unusable. */
+  canUnlock: () => boolean;
+  /** Seals the hub's resume state; a resumed call continues the one that was admitted. */
+  secret: string;
+  clientName?: (clientId: string) => string | undefined;
+  /** Shapes the answer for a caller; the text link unless replaced. */
+  answer?: (request: UnlockRequest, ctx: ServerContext, text: string) => CallToolResult | InputRequiredResult;
+  /** Told when a grant was spent or ended, so expiry handling can look again. */
+  poke?: () => void;
+}
+
+const locked = (text: string): CallToolResult => ({ isError: true, content: [{ type: 'text', text }] });
+
+/** Decides, per call, whether a locked server's tool may run for this caller. Any failure counts as locked. */
+export class UnlockGate {
+  constructor(private readonly options: UnlockGateOptions) {}
+
+  get runtime(): UnlockRuntime {
+    return this.options.runtime;
+  }
+
+  link(request: UnlockRequest): string {
+    return new URL(`/unlock/r/${request.id}`, this.options.externalUrl).href;
+  }
+
+  overviewLink(): string {
+    return new URL('/unlock', this.options.externalUrl).href;
+  }
+
+  /** The live window this caller holds on this server, or undefined. */
+  windowFor(server: string, caller: Caller, now = Date.now()): UnlockGrant | undefined {
+    if (!caller.clientId) return undefined;
+    return this.options.store
+      .unlockGrants(now)
+      .filter(grant => grant.kind === 'window' && AuthStore.grantMatches(grant, { server, ...caller }))
+      .toSorted((a, b) => b.expiresAt - a.expiresAt)[0];
+  }
+
+  /** Whether everything this server serves is open to the caller: no lock, a tool-list lock, or a live window. */
+  openForEverything(managed: ManagedServer, caller: Caller): boolean {
+    try {
+      return !locksWholeServer(managed.config.unlock) || this.windowFor(managed.name, caller) !== undefined;
+    } catch {
+      return false;
+    }
+  }
+
+  /** For resources, prompts and completion of a whole-locked server; never opens a request. */
+  assertOpen(managed: ManagedServer, ctx: ServerContext): void {
+    if (this.openForEverything(managed, callerOf(ctx))) return;
+    throw new ProtocolError(
+      ProtocolErrorCode.InvalidRequest,
+      `Server "${managed.name}" is locked. Call one of its tools to get an unlock link, or open ${this.overviewLink()}.`
+    );
+  }
+
+  checkToolCall(input: { managed: ManagedServer; ctx: ServerContext; via: ForwardRoute; door: string; tool: string; args: unknown }): GateVerdict {
+    try {
+      return this.decide(input);
+    } catch (error) {
+      console.error(`mcp-hub: [${input.managed.name}] unlock check failed, refusing the call: ${(error as Error).message}`);
+      return { admit: false, answer: locked(`Server "${input.managed.name}" is locked, and the hub could not check its unlocks. Try again later.`) };
+    }
+  }
+
+  private decide({ managed, ctx, via, door, tool, args }: { managed: ManagedServer; ctx: ServerContext; via: ForwardRoute; door: string; tool: string; args: unknown }): GateVerdict {
+    const policy = managed.config.unlock;
+    if (!locksTool(policy, tool)) return { admit: true };
+    const server = managed.name;
+    const caller = callerOf(ctx);
+    if (!caller.clientId) return { admit: false, answer: locked(`Server "${server}" is locked, and this connection cannot unlock it.`) };
+    if (this.windowFor(server, caller)) return { admit: true };
+
+    const presented = ctx.mcpReq.requestState<string>();
+    if (typeof presented === 'string' && presented.length > 0 && openRequestState(presented, this.options.secret, { server, tool, clientId: caller.clientId, via })) {
+      return { admit: true };
+    }
+
+    const canonical = canonicalArgs(args);
+    const hash = argsHash(canonical);
+    if (this.options.store.takeOnceGrant({ server, ...caller, tool, argsHash: hash })) {
+      console.log(`mcp-hub: [${server}] single-call unlock spent for client ${JSON.stringify(caller.clientId)}`);
+      this.options.poke?.();
+      return { admit: true };
+    }
+
+    const response = (ctx.mcpReq.inputResponses as Record<string, { action?: string } | undefined> | undefined)?.[UNLOCK_INPUT_KEY];
+    if (response?.action === 'decline' || response?.action === 'cancel') {
+      return { admit: false, answer: locked(`The user declined to unlock server "${server}". Do not ask again right away.`) };
+    }
+
+    if (!this.options.canUnlock()) {
+      return {
+        admit: false,
+        answer: locked(
+          `Server "${server}" is locked, and this hub has no usable operator sign-in to unlock it from a page. ` +
+            `The operator can grant access on the host with: mcp-hub-admin unlock grant ${server} <minutes> --client ${caller.clientId}`
+        )
+      };
+    }
+
+    const opened = this.options.runtime.open({
+      server,
+      clientId: caller.clientId,
+      ...(caller.grantId !== undefined ? { grantId: caller.grantId } : {}),
+      ...(this.options.clientName?.(caller.clientId) !== undefined ? { clientName: this.options.clientName(caller.clientId) } : {}),
+      door,
+      tool,
+      args: fitsOnPage(canonical) ? canonical : canonical.slice(0, ARGS_DISPLAY_LIMIT),
+      argsComplete: fitsOnPage(canonical),
+      argsHash: hash
+    });
+    if ('refused' in opened) {
+      return {
+        admit: false,
+        answer: locked(
+          opened.refused === 'denied'
+            ? `The user denied unlocking server "${server}" for this call. Do not ask again for the next two minutes.`
+            : `Server "${server}" is locked, and too many unlock requests are open already. Ask the user to unlock it at ${this.overviewLink()}.`
+        )
+      };
+    }
+    const { request, fresh } = opened;
+    if (fresh) console.log(`mcp-hub: [${server}] unlock requested for ${describeLock(policy!)} by client ${JSON.stringify(caller.clientId)}, code ${request.code}`);
+    const text =
+      `Server "${server}" is locked: "${tool}" needs a person to unlock it first. ` +
+      `Ask the user to open this link and unlock it, then call the tool again:\n${this.link(request)}\n` +
+      `The page shows the matching code ${request.code}.`;
+    return { admit: false, answer: fresh && this.options.answer ? this.options.answer(request, ctx, text) : locked(text) };
+  }
+}
