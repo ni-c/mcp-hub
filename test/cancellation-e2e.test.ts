@@ -386,7 +386,9 @@ describe('progress travels back', () => {
   it('drops what arrives faster than four a second', async () => {
     const client = await connect('/cancel/mcp', 'auto');
     const seen: number[] = [];
-    await client.request(toolCall('report_progress', { count: 5, intervalMs: 0 }), CallToolResultSchema, {
+    // 20 ms apart, so every message reaches the hub on its own: the SDK client runs progress
+    // handlers a microtask late, and a progress that shares a chunk with the result is lost.
+    await client.request(toolCall('report_progress', { count: 5, intervalMs: 20 }), CallToolResultSchema, {
       onprogress: progress => seen.push(progress.progress)
     });
     expect(seen).toEqual([1]);
