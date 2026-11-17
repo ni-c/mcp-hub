@@ -7,9 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- #region changelog -->
 
-## [Unreleased]
+## [0.13.0] - 2026-11-17
 
 ### Security
+
+- `hono` 4.13.18 (was 4.13.13, GHSA-46wx-v44x-9hh2, GHSA-4m76-xfj5-7975,
+  GHSA-h7mg-cq63-vhpq, GHSA-4h7h-rv7c-7m2v, all medium, and
+  GHSA-3gg2-335m-rxc6, low) and `@hono/node-server` 2.1.8 (was 2.1.5,
+  GHSA-qv5m-9pm6-hqp3 and GHSA-jpvv-r467-5p4w, medium), both pulled in by
+  `@modelcontextprotocol/node`.
 
 - **Invisible characters no longer travel in a child's text.** What a child
   writes reaches the person and the model through the hub — elicitation
