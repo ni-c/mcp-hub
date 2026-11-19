@@ -156,7 +156,7 @@ export function buildOidcProvider(store: AuthStore, options: OidcProviderOptions
        */
       clientIdMetadataDocument: {
         enabled: options.cimd !== undefined,
-        ack: 'draft-02',
+        ack: 'draft-03',
         allowFetch: () => false
       },
       // On by default in oidc-provider. The resource server never checks a
