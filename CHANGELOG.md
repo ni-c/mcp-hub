@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- #region changelog -->
 
+## [0.13.1] - 2026-11-19
+
+### Changed
+
+- `oidc-provider` 9.15.0 (was 9.13.3). It moves the experimental OAuth Client
+  ID Metadata Document feature from draft-02 to draft-03, and the provider
+  refuses to start while the configuration acknowledges an older draft, so the
+  hub now acknowledges `draft-03`. Draft-03 only tightens validation: a client
+  ID URL needs a path other than `/`, shared-secret methods are refused in
+  `token_endpoint_auth_methods_supported` as well, and a `client_id` equal to
+  the issuer is rejected. The hub fetches and checks metadata documents itself,
+  so nothing it accepted before is affected.
+- `jose` 6.2.17 (was 6.2.16).
+
 ## [0.13.0] - 2026-11-17
 
 ### Security
