@@ -70,6 +70,29 @@ function eraHasPing(client: Client): boolean {
 }
 
 /**
+ * Whether a rejected ping still proves the peer answered.
+ *
+ * A numeric JSON-RPC error code, or a "Method not found" message, is a
+ * protocol reply: the transport carried a request and the server produced a
+ * response. That is the opposite of a dead connection. The SDK's transport
+ * and timeout failures use a string `code` (`ECONNRESET`, `REQUEST_TIMEOUT`)
+ * or none, and those still mean the child is gone.
+ *
+ * Under 2025-era revisions the receiver MUST answer `ping` with an empty
+ * result, so a -32601 is not spec-conformant. It is still evidence the
+ * process is up. Treating it as death restarts a healthy server forever,
+ * with the backoff climbing — the same class of incident `eraHasPing`
+ * already prevents for the 2026-07-28 revision, which removed `ping`.
+ */
+function isAlivePingReply(error: unknown): boolean {
+  if (error === null || typeof error !== 'object') return false;
+  const code = 'code' in error ? (error as { code: unknown }).code : undefined;
+  if (typeof code === 'number' && Number.isInteger(code)) return true;
+  const message = error instanceof Error ? error.message : '';
+  return /method not found/i.test(message);
+}
+
+/**
  * Remote upstreams get their configured headers on EVERY request via a fetch
  * wrapper — requestInit alone does not cover the SSE stream GET.
  *
@@ -135,6 +158,8 @@ export interface ManagedServerOptions {
   maxUnusedRestarts?: number;
   /** Test hook: initial restart backoff. */
   backoffInitialMs?: number;
+  /** Test hook: keepalive ping interval. `0` disables the probe. */
+  pingIntervalMs?: number;
   /** Outbound OAuth for a remote server that needs it. Injected here rather
    *  than built in buildTransport(), which runs on every single start. */
   auth?: UpstreamAuth;
@@ -254,6 +279,12 @@ export class ManagedServer {
   private startedAt = 0;
   private restartTimer?: NodeJS.Timeout;
   private pingTimer?: NodeJS.Timeout;
+  /**
+   * Set when a ping comes back as a JSON-RPC error (typically -32601). The
+   * child answered, so it is alive; asking again every interval would only
+   * repeat a method it does not have.
+   */
+  private pingUnsupported = false;
   private stopping = false;
   /** Failed restarts since the server was last up or used; a start that
    *  reaches 'up' and markUsed() reset it, wake() does not. */
@@ -491,6 +522,7 @@ export class ManagedServer {
       return;
     }
     this.client = client;
+    this.pingUnsupported = false;
     this.serverInfo = client.getServerVersion();
     this.capabilities = client.getServerCapabilities();
     this.state = 'up';
@@ -529,8 +561,7 @@ export class ManagedServer {
     // same gap: whatever changed while the child was away is invisible to them
     // too. One re-read tells them so.
     if (this.options.aggregateWantsTools?.() === true) this.options.onUpstreamEvent?.({ kind: 'tools_list_changed' });
-    this.pingTimer = setInterval(() => void this.checkAlive(), PING_INTERVAL_MS);
-    this.pingTimer.unref();
+    this.armPingTimer();
   }
 
   /** One change event to this route's listeners and to the /hub aggregate. */
@@ -700,6 +731,17 @@ export class ManagedServer {
     }
   }
 
+  /**
+   * Start the keepalive probe, or do nothing when the interval is `0`.
+   * An interval of 0 would otherwise busy-loop `setInterval`.
+   */
+  private armPingTimer(): void {
+    const intervalMs = this.options.pingIntervalMs ?? PING_INTERVAL_MS;
+    if (intervalMs <= 0) return;
+    this.pingTimer = setInterval(() => void this.checkAlive(), intervalMs);
+    this.pingTimer.unref();
+  }
+
   private async checkAlive(): Promise<void> {
     // The ping usually fails *because* the connection went away, in which case
     // transport.onclose -> onExit has already set this.client to undefined by
@@ -726,10 +768,17 @@ export class ManagedServer {
     // Sending some other request as a substitute heartbeat would be worse: it
     // would be a call the operator never asked for, against a server that
     // charges for it or logs it, every interval, forever.
-    if (!eraHasPing(client)) return;
+    if (!eraHasPing(client) || this.pingUnsupported) return;
     try {
       await client.ping({ timeout: PING_TIMEOUT_MS });
     } catch (error) {
+      // A JSON-RPC error is a reply, not a missing peer. Remember it so the
+      // next interval does not keep asking a method the child does not have.
+      if (isAlivePingReply(error)) {
+        this.pingUnsupported = true;
+        console.error(`[${this.name}] ping not supported, leaving server up: ${logSafe((error as Error).message, 500)}`);
+        return;
+      }
       console.error(`[${this.name}] ping failed, restarting: ${logSafe((error as Error).message, 500)}`);
       // close() triggers transport.onclose -> onExit -> restart with backoff.
       // Already-closed transports reject here; onExit has then run regardless.

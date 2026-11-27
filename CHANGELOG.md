@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- #region changelog -->
 
+## [Unreleased]
+
+### Fixed
+
+- **A JSON-RPC error on the keepalive `ping` no longer restarts a healthy
+  child.** A 2025-era HTTP server that answers `ping` with `-32601 Method not
+  found` (or any other JSON-RPC error) was closed and entered the restart
+  backoff, even though the reply proves the peer is alive. The supervisor now
+  leaves that server `up` and stops probing it. Timeouts and transport failures
+  still restart the child. `MCP_PING_INTERVAL_MS=0` disables the probe.
+
 ## [0.13.1] - 2026-11-19
 
 ### Changed

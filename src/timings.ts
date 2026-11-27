@@ -33,8 +33,8 @@ export const BACKOFF_MAX_MS = positiveIntegerEnv('MCP_BACKOFF_MAX_MS', 5 * 60_00
 /** How long a child must have stayed up before its next crash counts as the first one again. */
 export const BACKOFF_RESET_AFTER_MS = positiveIntegerEnv('MCP_BACKOFF_RESET_AFTER_MS', 5 * 60_000);
 
-/** How often a running child is pinged to find out it has gone quietly. */
-export const PING_INTERVAL_MS = positiveIntegerEnv('MCP_PING_INTERVAL_MS', 60_000);
+/** How often a running child is pinged to find out it has gone quietly. `0` disables the probe. */
+export const PING_INTERVAL_MS = nonNegativeIntegerEnv('MCP_PING_INTERVAL_MS', 60_000);
 
 /** How long that ping may take before the child counts as gone. */
 export const PING_TIMEOUT_MS = positiveIntegerEnv('MCP_PING_TIMEOUT_MS', 30_000);
