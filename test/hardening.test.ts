@@ -112,6 +112,143 @@ describe('ManagedServer restart reporting', () => {
     await server.stop();
   });
 
+  it('leaves a child up when ping comes back as JSON-RPC method not found', async () => {
+    // 2025-era revisions require the receiver to answer ping with an empty
+    // result, so a -32601 is not conformant. It is still a protocol reply,
+    // which means the transport and the process are alive. Closing the
+    // connection and climbing the restart backoff treats a healthy HTTP
+    // server as dead — forever, every interval.
+    const server = new ManagedServer('partial', { kind: 'stdio', command: '/bin/false', args: [], env: {}, hub: true });
+    server.state = 'up';
+    let pings = 0;
+    let closes = 0;
+    const methodNotFound = Object.assign(new Error('Method not found: ping'), { code: -32601 });
+    server.client = {
+      getNegotiatedProtocolVersion: () => '2025-06-18',
+      ping: async () => {
+        pings += 1;
+        throw methodNotFound;
+      },
+      close: async () => {
+        closes += 1;
+      }
+    } as unknown as NonNullable<ManagedServer['client']>;
+
+    await expect(server['checkAlive']()).resolves.toBeUndefined();
+    expect(pings).toBe(1);
+    expect(closes).toBe(0);
+    expect(server.state).toBe('up');
+
+    // The next interval must not keep asking a method the child does not have.
+    await expect(server['checkAlive']()).resolves.toBeUndefined();
+    expect(pings).toBe(1);
+    expect(server.state).toBe('up');
+
+    await server.stop();
+  });
+
+  it('also treats a method-not-found message without a numeric code as alive', async () => {
+    const server = new ManagedServer('partial-msg', { kind: 'stdio', command: '/bin/false', args: [], env: {}, hub: true });
+    server.state = 'up';
+    let closes = 0;
+    server.client = {
+      getNegotiatedProtocolVersion: () => '2025-03-26',
+      ping: async () => {
+        throw new Error('Method not found: ping');
+      },
+      close: async () => {
+        closes += 1;
+      }
+    } as unknown as NonNullable<ManagedServer['client']>;
+
+    await expect(server['checkAlive']()).resolves.toBeUndefined();
+    expect(closes).toBe(0);
+    expect(server.state).toBe('up');
+
+    await server.stop();
+  });
+
+  it('leaves a child up when ping comes back as any JSON-RPC error', async () => {
+    const server = new ManagedServer('invalid', { kind: 'stdio', command: '/bin/false', args: [], env: {}, hub: true });
+    server.state = 'up';
+    let closes = 0;
+    server.client = {
+      getNegotiatedProtocolVersion: () => '2025-11-25',
+      ping: async () => {
+        throw Object.assign(new Error('Invalid params'), { code: -32602 });
+      },
+      close: async () => {
+        closes += 1;
+      }
+    } as unknown as NonNullable<ManagedServer['client']>;
+
+    await expect(server['checkAlive']()).resolves.toBeUndefined();
+    expect(closes).toBe(0);
+    expect(server.state).toBe('up');
+
+    await server.stop();
+  });
+
+  it('still restarts when ping fails at the transport', async () => {
+    const server = new ManagedServer('gone', { kind: 'stdio', command: '/bin/false', args: [], env: {}, hub: true });
+    server.state = 'up';
+    let closes = 0;
+    server.client = {
+      getNegotiatedProtocolVersion: () => '2025-11-25',
+      ping: async () => {
+        throw Object.assign(new Error('fetch failed'), { code: 'ECONNRESET' });
+      },
+      close: async () => {
+        closes += 1;
+        server['onExit']('connection closed');
+      }
+    } as unknown as NonNullable<ManagedServer['client']>;
+
+    await expect(server['checkAlive']()).resolves.toBeUndefined();
+    expect(closes).toBe(1);
+    expect(server.state).toBe('down');
+
+    await server.stop();
+  });
+
+  it('still restarts when ping times out', async () => {
+    // The SDK reports a timeout as SdkError with string code REQUEST_TIMEOUT,
+    // not as a JSON-RPC error. That must keep meaning "the child is gone".
+    const server = new ManagedServer('slow', { kind: 'stdio', command: '/bin/false', args: [], env: {}, hub: true });
+    server.state = 'up';
+    let closes = 0;
+    server.client = {
+      getNegotiatedProtocolVersion: () => '2025-11-25',
+      ping: async () => {
+        throw Object.assign(new Error('Request timed out'), { code: 'REQUEST_TIMEOUT' });
+      },
+      close: async () => {
+        closes += 1;
+        server['onExit']('connection closed');
+      }
+    } as unknown as NonNullable<ManagedServer['client']>;
+
+    await expect(server['checkAlive']()).resolves.toBeUndefined();
+    expect(closes).toBe(1);
+    expect(server.state).toBe('down');
+
+    await server.stop();
+  });
+
+  it('does not arm a ping timer when the interval is 0', async () => {
+    const server = new ManagedServer('quiet', { kind: 'stdio', command: '/bin/false', args: [], env: {}, hub: true }, { pingIntervalMs: 0 });
+    server['armPingTimer']();
+    expect(server['pingTimer']).toBeUndefined();
+    await server.stop();
+  });
+
+  it('arms a ping timer when the interval is positive', async () => {
+    const server = new ManagedServer('watched', { kind: 'stdio', command: '/bin/false', args: [], env: {}, hub: true }, { pingIntervalMs: 60_000 });
+    server['armPingTimer']();
+    expect(server['pingTimer']).toBeDefined();
+    await server.stop();
+  });
+
   it('does not reject when the client goes away during stop()', async () => {
     const server = new ManagedServer('racy-stop', { kind: 'stdio', command: '/bin/false', args: [], env: {}, hub: true });
     server.state = 'up';

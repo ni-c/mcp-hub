@@ -59,8 +59,9 @@ describe('timings', () => {
     it('accepts zero only where zero has a meaning', () => {
       process.env.MCP_TIMINGS_PROBE = '0';
       try {
-        // A ping interval of 0 would busy-loop; an unused-restart budget of 0
-        // means "do not retry", which is a thing an operator may want.
+        // A ping interval of 0 now means "do not probe" (nonNegativeIntegerEnv);
+        // an unused-restart budget of 0 means "do not retry". A positive-only
+        // parser still rejects 0 so a typo cannot start a busy loop.
         expect(positiveIntegerEnv('MCP_TIMINGS_PROBE', 42)).toBe(42);
         expect(nonNegativeIntegerEnv('MCP_TIMINGS_PROBE', 42)).toBe(0);
       } finally {

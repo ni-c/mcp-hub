@@ -234,7 +234,8 @@ per client session, so both eras reach a person.
 </figure>
 
 The numbers, and the environment variable that moves each one (they exist for
-tests that cannot wait a minute; a deployment has no reason to touch them):
+tests that cannot wait a minute; a deployment has no reason to touch most of
+them, except `MCP_PING_INTERVAL_MS=0` to turn the keepalive probe off):
 
 | | | |
 |---|---|---|
@@ -244,8 +245,11 @@ tests that cannot wait a minute; a deployment has no reason to touch them):
 | Maximum backoff | 5 min | `MCP_BACKOFF_MAX_MS` |
 | Backoff reset | after 5 min of uptime | `MCP_BACKOFF_RESET_AFTER_MS` |
 
-A ping failure is treated as death: the client is closed, which triggers the
-same restart path an exit would. There is no separate "unhealthy but running"
+A ping that times out or fails at the transport is treated as death: the
+client is closed, which triggers the same restart path an exit would. A
+JSON-RPC error reply — in particular `-32601 Method not found` from a server
+that does not implement `ping` — is not: the peer answered, so it is left
+`up` and not pinged again. There is no separate "unhealthy but running"
 state to reason about.
 
 While a server is not `up`, its path answers a JSON-RPC error with HTTP `503`
